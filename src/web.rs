@@ -320,6 +320,8 @@ const INDEX_HTML: &str = r#"<!doctype html>
 
   <script>
     const pendingPauseKeys = new Set();
+    const optimisticPausedStates = new Map();
+    let latestPrs = [];
 
     function fmtTime(value) {
       if (!value) return "-";
@@ -343,9 +345,13 @@ const INDEX_HTML: &str = r#"<!doctype html>
       return "pill good";
     }
 
+    function effectivePaused(pr) {
+      return optimisticPausedStates.has(pr.key) ? optimisticPausedStates.get(pr.key) : pr.is_paused;
+    }
+
     function rowClass(pr) {
       const classes = ["pr-row"];
-      if (pr.is_paused) classes.push("paused-row");
+      if (effectivePaused(pr)) classes.push("paused-row");
       if (pr.status === "running") classes.push("running-row");
       return classes.join(" ");
     }
@@ -365,8 +371,9 @@ const INDEX_HTML: &str = r#"<!doctype html>
       if (!pr.can_toggle_pause) return "-";
 
       const pending = pendingPauseKeys.has(pr.key);
-      const nextPaused = !pr.is_paused;
-      const label = pending ? "Updating..." : (pr.is_paused ? "Resume" : "Pause");
+      const isPaused = effectivePaused(pr);
+      const nextPaused = !isPaused;
+      const label = pending ? "Updating..." : (isPaused ? "Resume" : "Pause");
       return `
         <button
           class="action-button"
@@ -381,7 +388,8 @@ const INDEX_HTML: &str = r#"<!doctype html>
     async function togglePause(encodedKey, paused) {
       const key = decodeURIComponent(encodedKey);
       pendingPauseKeys.add(key);
-      refresh().catch(() => {});
+      optimisticPausedStates.set(key, paused);
+      renderPrs(latestPrs);
 
       try {
         const response = await fetch("/api/prs/pause", {
@@ -396,7 +404,16 @@ const INDEX_HTML: &str = r#"<!doctype html>
           const message = await response.text();
           throw new Error(message || `HTTP ${response.status}`);
         }
+
+        const payload = await response.json();
+        latestPrs = latestPrs.map((pr) => pr.key === key ? payload.pr : pr);
+        optimisticPausedStates.delete(key);
+        pendingPauseKeys.delete(key);
+        renderPrs(latestPrs);
       } catch (error) {
+        optimisticPausedStates.delete(key);
+        pendingPauseKeys.delete(key);
+        renderPrs(latestPrs);
         window.alert(`Failed to update watch state: ${error.message}`);
       } finally {
         pendingPauseKeys.delete(key);
@@ -404,22 +421,8 @@ const INDEX_HTML: &str = r#"<!doctype html>
       }
     }
 
-    async function refresh() {
-      const [healthRes, prsRes] = await Promise.all([
-        fetch("/api/health"),
-        fetch("/api/prs")
-      ]);
-
-      const health = await healthRes.json();
-      const prsPayload = await prsRes.json();
-
-      document.getElementById("health-status").textContent = health.ok ? "Healthy" : "Attention needed";
-      document.getElementById("health-count").textContent = String(health.tracked_prs);
-      document.getElementById("health-running").textContent = String(health.running_prs);
-      document.getElementById("health-poll").textContent = fmtTime(health.last_poll_finished_at);
-
+    function renderPrs(prs) {
       const tbody = document.getElementById("prs-table");
-      const prs = prsPayload.prs || [];
       if (!prs.length) {
         tbody.innerHTML = '<tr><td colspan="7" class="empty">No pull requests are currently being tracked.</td></tr>';
         return;
@@ -440,6 +443,23 @@ const INDEX_HTML: &str = r#"<!doctype html>
           <td data-label="Action">${renderAction(pr)}</td>
         </tr>
       `).join("");
+    }
+
+    async function refresh() {
+      const [healthRes, prsRes] = await Promise.all([
+        fetch("/api/health"),
+        fetch("/api/prs")
+      ]);
+
+      const health = await healthRes.json();
+      const prsPayload = await prsRes.json();
+
+      document.getElementById("health-status").textContent = health.ok ? "Healthy" : "Attention needed";
+      document.getElementById("health-count").textContent = String(health.tracked_prs);
+      document.getElementById("health-running").textContent = String(health.running_prs);
+      document.getElementById("health-poll").textContent = fmtTime(health.last_poll_finished_at);
+      latestPrs = prsPayload.prs || [];
+      renderPrs(latestPrs);
     }
 
     refresh().catch((error) => {
