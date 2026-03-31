@@ -62,7 +62,8 @@ impl AttentionReason {
 pub enum TrackingStatus {
     Draft,
     Paused,
-    Watching,
+    WaitingReview,
+    WaitingMerge,
     NeedsAttention,
     Running,
     RetryScheduled,
@@ -76,7 +77,8 @@ impl TrackingStatus {
         match self {
             Self::Draft => "draft",
             Self::Paused => "paused",
-            Self::Watching => "watching",
+            Self::WaitingReview => "waiting review",
+            Self::WaitingMerge => "waiting merge",
             Self::NeedsAttention => "needs attention",
             Self::Running => "running",
             Self::RetryScheduled => "retrying",
@@ -107,6 +109,7 @@ pub struct PullRequest {
     pub ci_status: CiStatus,
     pub ci_updated_at: Option<DateTime<Utc>>,
     pub review_decision: ReviewDecision,
+    pub approval_count: usize,
     pub review_comment_count: usize,
     pub issue_comment_count: usize,
     pub latest_reviewer_activity_at: Option<DateTime<Utc>>,

@@ -163,9 +163,9 @@ impl Supervisor {
                 EventLevel::Info,
                 Some(pr_key.to_owned()),
                 if paused {
-                    format!("paused watching for {pr_key}")
+                    format!("paused review tracking for {pr_key}")
                 } else {
-                    format!("resumed watching for {pr_key}")
+                    format!("resumed review tracking for {pr_key}")
                 },
             );
         }
@@ -475,9 +475,20 @@ fn derive_status(
         } else {
             TrackingStatus::NeedsAttention
         }
+    } else if is_waiting_merge(pr) {
+        TrackingStatus::WaitingMerge
     } else {
-        TrackingStatus::Watching
+        TrackingStatus::WaitingReview
     }
+}
+
+fn is_waiting_merge(pr: &PullRequest) -> bool {
+    !pr.is_draft
+        && !pr.is_closed
+        && !pr.is_merged
+        && pr.approval_count > 0
+        && matches!(pr.review_decision, crate::model::ReviewDecision::Approved)
+        && matches!(pr.ci_status, crate::model::CiStatus::Success)
 }
 
 fn is_retry_scheduled(
@@ -569,6 +580,7 @@ mod tests {
             ci_status: CiStatus::Success,
             ci_updated_at: None,
             review_decision: ReviewDecision::Clean,
+            approval_count: 0,
             review_comment_count: 0,
             issue_comment_count: 0,
             latest_reviewer_activity_at: None,
@@ -703,7 +715,7 @@ mod tests {
     }
 
     #[test]
-    fn stale_execution_error_without_current_attention_returns_watching() {
+    fn stale_execution_error_without_current_attention_returns_waiting_review() {
         let pr = sample_pr();
         let persisted = PersistentPrState {
             last_run_status: Some("error".to_owned()),
@@ -716,7 +728,32 @@ mod tests {
 
         assert_eq!(
             derive_status(&pr, &persisted, None, false),
-            TrackingStatus::Watching
+            TrackingStatus::WaitingReview
+        );
+    }
+
+    #[test]
+    fn approved_green_pr_reports_waiting_merge() {
+        let mut pr = sample_pr();
+        pr.review_decision = ReviewDecision::Approved;
+        pr.approval_count = 1;
+
+        assert_eq!(
+            derive_status(&pr, &PersistentPrState::default(), None, false),
+            TrackingStatus::WaitingMerge
+        );
+    }
+
+    #[test]
+    fn approved_pr_without_green_ci_stays_waiting_review() {
+        let mut pr = sample_pr();
+        pr.review_decision = ReviewDecision::Approved;
+        pr.approval_count = 1;
+        pr.ci_status = CiStatus::Pending;
+
+        assert_eq!(
+            derive_status(&pr, &PersistentPrState::default(), None, false),
+            TrackingStatus::WaitingReview
         );
     }
 }

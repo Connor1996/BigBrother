@@ -357,6 +357,7 @@ mod tests {
             ci_status: CiStatus::Success,
             ci_updated_at: None,
             review_decision: ReviewDecision::Clean,
+            approval_count: 0,
             review_comment_count: 0,
             issue_comment_count: 0,
             latest_reviewer_activity_at: None,

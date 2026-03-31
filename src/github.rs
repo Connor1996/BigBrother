@@ -1,3 +1,5 @@
+use std::collections::HashMap;
+
 use anyhow::{anyhow, Context, Result};
 use chrono::{DateTime, Utc};
 use futures::{future::BoxFuture, stream, StreamExt, TryStreamExt};
@@ -150,6 +152,7 @@ impl GitHubClient {
             ci_status: ci_summary.status,
             ci_updated_at: ci_summary.updated_at,
             review_decision: review_summary.decision,
+            approval_count: review_summary.approval_count,
             review_comment_count: review_summary.review_comment_count,
             issue_comment_count: review_summary.issue_comment_count,
             latest_reviewer_activity_at: review_summary.latest_activity_at,
@@ -299,6 +302,7 @@ struct StatusContext {
 
 struct ReviewSummary {
     decision: ReviewDecision,
+    approval_count: usize,
     review_comment_count: usize,
     issue_comment_count: usize,
     latest_activity_at: Option<DateTime<Utc>>,
@@ -315,10 +319,33 @@ fn summarize_reviews(
     review_comments: &[ReviewComment],
     issue_comments: &[IssueComment],
 ) -> ReviewSummary {
-    let non_author_review_states = reviews
+    let non_author_reviews = reviews
         .iter()
         .filter(|review| review.user.as_ref().map(|user| user.login.as_str()) != Some(author))
         .collect::<Vec<_>>();
+    let mut latest_review_states = HashMap::new();
+
+    for (index, review) in non_author_reviews.iter().enumerate() {
+        let Some(user) = review.user.as_ref() else {
+            continue;
+        };
+
+        let candidate_order = (review.submitted_at, index);
+        let replace = latest_review_states
+            .get(user.login.as_str())
+            .map(|existing: &(Option<DateTime<Utc>>, usize, String)| {
+                candidate_order >= (existing.0, existing.1)
+            })
+            .unwrap_or(true);
+
+        if replace {
+            latest_review_states.insert(
+                user.login.as_str(),
+                (review.submitted_at, index, review.state.clone()),
+            );
+        }
+    }
+
     let review_comment_count = review_comments
         .iter()
         .filter(|comment| comment.user.as_ref().map(|user| user.login.as_str()) != Some(author))
@@ -327,8 +354,12 @@ fn summarize_reviews(
         .iter()
         .filter(|comment| comment.user.as_ref().map(|user| user.login.as_str()) != Some(author))
         .count();
+    let approval_count = latest_review_states
+        .values()
+        .filter(|(_, _, state)| state.eq_ignore_ascii_case("APPROVED"))
+        .count();
 
-    let latest_activity_at = non_author_review_states
+    let latest_activity_at = non_author_reviews
         .iter()
         .filter_map(|review| review.submitted_at)
         .chain(review_comments.iter().filter_map(|comment| {
@@ -341,21 +372,18 @@ fn summarize_reviews(
         }))
         .max();
 
-    let decision = if non_author_review_states
-        .iter()
-        .any(|review| review.state.eq_ignore_ascii_case("CHANGES_REQUESTED"))
+    let decision = if latest_review_states
+        .values()
+        .any(|(_, _, state)| state.eq_ignore_ascii_case("CHANGES_REQUESTED"))
     {
         ReviewDecision::ChangesRequested
-    } else if non_author_review_states
-        .iter()
-        .any(|review| review.state.eq_ignore_ascii_case("APPROVED"))
-    {
+    } else if approval_count > 0 {
         ReviewDecision::Approved
     } else if review_comment_count > 0
         || issue_comment_count > 0
-        || non_author_review_states
-            .iter()
-            .any(|review| review.state.eq_ignore_ascii_case("COMMENTED"))
+        || latest_review_states
+            .values()
+            .any(|(_, _, state)| state.eq_ignore_ascii_case("COMMENTED"))
     {
         ReviewDecision::Commented
     } else {
@@ -364,6 +392,7 @@ fn summarize_reviews(
 
     ReviewSummary {
         decision,
+        approval_count,
         review_comment_count,
         issue_comment_count,
         latest_activity_at,

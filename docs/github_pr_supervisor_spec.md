@@ -1,6 +1,6 @@
 # GitHub PR Supervisor Spec
 
-Status: Draft v0.1
+Status: Draft v0.2
 
 Owner: `symphony-rs` implementation track
 
@@ -18,6 +18,8 @@ Build a new Rust-based Symphony implementation that:
 3. autonomously runs an agent to address actionable feedback when it is safe to do so
 4. notifies the user when the system is blocked or needs a human decision
 5. provides a non-native GUI so the user can inspect tracked PRs and daemon activity at a glance
+6. evolves from a review-only supervisor into a lifecycle workspace with dedicated review, develop,
+   and merge surfaces
 
 This spec intentionally replaces the earlier `egui/eframe`-style UI direction. The target UI is a web application, not a native widget tree.
 
@@ -63,6 +65,25 @@ Optional later layer:
 4. `Desktop Shell`
    A thin Tauri wrapper for distribution convenience. This shell must not own business logic.
 
+### 4.1 Lifecycle-Oriented UI
+
+The long-term UI direction is not a single PR table. It should organize work by lifecycle phase,
+similar to tools that switch between materially different working modes instead of forcing one view
+to handle every job.
+
+Initial target panels:
+
+- `Review`
+  Focused on authored PRs, CI, reviewer feedback, wait states, and operator actions.
+- `Develop`
+  Focused on project-based implementation work, cross-repo code directories, resource context, and
+  task management.
+- `Merge`
+  Focused on PRs that already satisfy merge policy and are waiting for final landing.
+
+The MVP may still ship as a single lightweight page, but backend models and API responses should not
+lock the product into a forever review-only shape.
+
 ## 5. Tech Stack
 
 ## 5A. MVP Profile
@@ -81,7 +102,18 @@ MVP choices:
 - no Tauri requirement for the first working version
 - fake-provider-driven integration test required before calling the MVP done
 
-This means the long-term architecture remains `Rust backend + Web UI`, but the MVP web UI can be a minimal static page instead of a full frontend app.
+This means the long-term architecture remains `Rust backend + Web UI`, but the MVP web UI can be a
+minimal static page instead of a full frontend app.
+
+### 5B. Post-MVP Expansion Direction
+
+After the review-first MVP is working, the next architectural expansion should add:
+
+- lifecycle panel routing in the UI
+- a project model for development-phase work
+- a shared resource pool with lazy-loaded document content
+- Linear-like task primitives for planning and execution
+- Feishu CLI-backed notification hooks for review and merge wait states
 
 ### 5.1 Backend
 
@@ -120,7 +152,7 @@ The user opens the UI and sees:
 - which PRs are currently tracked
 - current CI status
 - current review state
-- whether the daemon is idle, acting, retrying, blocked, or waiting
+- whether the daemon is idle, acting, retrying, blocked, waiting for review, or waiting for merge
 - what happened most recently for each PR
 
 ### 6.2 Autonomous Repair
@@ -146,6 +178,25 @@ When the agent cannot safely continue:
 - ambiguous reviewer feedback
 
 the daemon emits a notification and marks the PR as `blocked` or `needs human`.
+
+### 6.4 Project-Centered Development
+
+Outside the review panel, the user should be able to organize work by project instead of by single
+PR. A project may span multiple local code directories across repositories and serves as the anchor
+for planning, implementation context, and related review artifacts.
+
+Each project should be able to reference:
+
+- multiple repository working directories
+- related tasks
+- related PRs
+- a resource pool of summarized external context
+
+### 6.5 Resource-Assisted Sessions
+
+Sessions should have access to curated context without eagerly loading every linked document body.
+The system should keep lightweight metadata plus summaries for resources such as Feishu docs and web
+pages, then fetch full content only when a workflow step actually needs it.
 
 ## 7. Scope
 
@@ -181,6 +232,8 @@ The MVP does not need:
 - local persistence
 - local browser-based GUI
 - notification plugin interface
+- lifecycle-aware review states
+- project/resource/task modeling needed for the develop panel
 
 ### 7.2 Out Of Scope For v0
 
@@ -212,9 +265,13 @@ Each tracked PR should normalize to a durable local record with:
 - `ci_status`
 - `ci_updated_at`
 - `review_state`
+- `approval_count`
 - `review_comment_count`
 - `issue_comment_count`
 - `latest_reviewer_activity_at`
+- `review_lifecycle_state`
+- `merge_ready`
+- `merge_blockers`
 - `attention_reason`
 - `tracking_status`
 - `paused`
@@ -238,7 +295,8 @@ Canonical statuses:
 
 - `draft`
 - `paused`
-- `watching`
+- `waiting_review`
+- `waiting_merge`
 - `needs_attention`
 - `running`
 - `retry_scheduled`
@@ -265,7 +323,31 @@ Failed runs are special:
 - the same still-actionable signal should therefore be retried on the next poll
 - if the signal clears before the next poll, the PR should fall back out of retry state instead of remaining blocked forever
 
-## 11. Auto-Repair Policy
+## 11. Review Lifecycle State Derivation
+
+In addition to attention triggers, the review panel needs a clear passive-state derivation:
+
+- `waiting_review`
+  The PR is open, not draft, not paused, not merged, not currently actionable, and does not yet
+  satisfy merge-ready policy.
+- `waiting_merge`
+  The PR is open, not draft, not paused, not merged, has at least one non-author approval, and
+  satisfies merge-ready policy for the current implementation tier.
+
+For the first implementation tier, merge-ready policy should at least require:
+
+- CI status is green
+- review decision is approved
+- PR is not draft, closed, or merged
+
+Later tiers may additionally incorporate:
+
+- branch protection requirements
+- mergeability or merge queue state
+- minimum required approvals
+- repository-specific landing policy
+
+## 12. Auto-Repair Policy
 
 Default v0 policy:
 
@@ -281,7 +363,7 @@ Default v0 policy:
 - allow up to five automatic retries after the initial failed run, then auto-pause the PR
 - resuming a paused PR resets retry bookkeeping and re-evaluates the current PR state instead of preserving the old retry lockout
 
-## 12. Workspace Model
+## 13. Workspace Model
 
 The local repository root is configurable.
 
@@ -304,7 +386,7 @@ Git transport:
 - `ssh` or `https`
 - default `ssh`
 
-## 13. Agent Execution Model
+## 14. Agent Execution Model
 
 Each run includes:
 
@@ -328,7 +410,7 @@ The agent prompt must include:
 - explicit instruction to push only to the PR branch when safe
 - explicit instruction to stop and explain blockers when unsafe
 
-## 14. Notification Model
+## 15. Notification Model
 
 Notifications are emitted when:
 
@@ -343,13 +425,70 @@ Notification sinks should be pluggable. Initial sinks:
 - local desktop notification
 - webhook-based sink
 
+Lifecycle transition notifications should also be supported for:
+
+- PR entered `waiting_review`
+- PR entered `waiting_merge`
+
 Potential later sinks:
 
+- Feishu CLI-backed sink
 - Feishu
 - Slack
 - email
 
-## 15. Persistence
+Notification deduplication should key off lifecycle signal identity so the same unchanged PR state
+does not spam the user on every poll.
+
+## 16. Project And Resource Model
+
+The develop phase needs first-class local entities beyond PRs.
+
+### 16.1 Project
+
+A project represents a unit of work that may span multiple repositories and multiple tasks.
+
+Suggested fields:
+
+- `project_id`
+- `name`
+- `status`
+- `repo_roots`
+- `linked_pr_keys`
+- `linked_task_ids`
+- `resource_pool_ids`
+
+### 16.2 Resource Pool Entry
+
+A resource pool entry is lightweight context attached to a project or session.
+
+Suggested fields:
+
+- `resource_id`
+- `kind` (`feishu_doc`, `web_link`, `local_file`, ...)
+- `title`
+- `url_or_path`
+- `summary`
+- `last_fetched_at`
+- `cached_content_ref`
+
+The summary should be loaded by default; full content should be fetched lazily.
+
+## 17. Task Model And Workflow Migration
+
+The develop panel should expose Linear-like task management while staying compatible with the
+workflow ideas in `~/Coding/symphony`.
+
+The migration intent is:
+
+- keep explicit state routing between implementation, human review, and merge
+- let projects own tasks and related resources
+- let review tracking remain linked to, but not replace, development planning
+
+The first migration should preserve the existing review-focused backend while introducing data models
+that allow develop and merge panels to be added incrementally.
+
+## 18. Persistence
 
 SQLite is the target durable store.
 
@@ -363,9 +502,9 @@ Suggested tables:
 
 The current JSON-file spike can remain as a temporary migration source, but SQLite is the target design for catch-up work.
 
-## 16. Backend API
+## 19. Backend API
 
-### 16.0 MVP API Surface
+### 19.0 MVP API Surface
 
 Minimum API surface for MVP:
 
@@ -378,7 +517,7 @@ Optional for MVP:
 
 - `GET /api/state`
 
-### 16.1 Read APIs
+### 19.1 Read APIs
 
 - `GET /api/health`
 - `GET /api/state`
@@ -388,7 +527,7 @@ Optional for MVP:
 - `GET /api/prs/:repo/:number/runs`
 - `GET /api/config/redacted`
 
-### 16.2 Live Updates
+### 19.2 Live Updates
 
 At least one of:
 
@@ -397,7 +536,7 @@ At least one of:
 
 SSE is preferred for v0 because the UI is mostly dashboard-style and low-frequency.
 
-### 16.3 Action APIs
+### 19.3 Action APIs
 
 Current prototype-compatible action API:
 
@@ -412,11 +551,11 @@ Potential richer follow-up actions:
 
 These actions are local operator actions only.
 
-## 17. Web UI
+## 20. Web UI
 
 Primary screens:
 
-### 17.0 MVP UI
+### 20.0 MVP UI
 
 The MVP UI can be a single page that shows:
 
@@ -433,7 +572,7 @@ The MVP UI does not need:
 - advanced filtering
 - broader manual controls beyond pause/resume and the minimum required for testing
 
-### 17.1 PR List
+### 20.1 PR List
 
 Columns:
 
@@ -448,7 +587,7 @@ Columns:
 - updated time
 - action
 
-### 17.2 PR Detail
+### 20.2 PR Detail
 
 Panels:
 
@@ -459,18 +598,18 @@ Panels:
 - workspace path
 - notification state
 
-### 17.3 Activity Feed
+### 20.3 Activity Feed
 
 Global chronological feed of poll cycles, state transitions, run starts, run finishes, and notification events.
 
-### 17.4 Control Bar
+### 20.4 Control Bar
 
 - daemon health
 - poll interval
 - active run count
 - next poll countdown
 
-## 18. Security And Safety
+## 21. Security And Safety
 
 - local-first only by default
 - GitHub token stored via environment variable or local config reference
@@ -481,7 +620,7 @@ Global chronological feed of poll cycles, state transitions, run starts, run fin
 - existing local checkouts must not be silently rewritten when they contain tracked local modifications
 - shell packaging must not bypass backend policy
 
-## 19. Migration Note
+## 22. Migration Note
 
 Current state in this repository is a prototype spike that already contains:
 
@@ -496,7 +635,7 @@ Current state in this repository is a prototype spike that already contains:
 
 That code should be treated as exploratory, not the final architecture. The next implementation pass should preserve reusable backend logic where practical, but move the product surface to HTTP + Web UI.
 
-## 20. Deliverables
+## 23. Deliverables
 
 Phase-complete v0 means:
 
@@ -507,13 +646,13 @@ Phase-complete v0 means:
 5. blocker cases notify the user
 6. runtime state survives restart via SQLite
 
-## 21. MVP Done Definition
+## 24. MVP Done Definition
 
 The MVP is done when all of the following are true:
 
 1. running the binary starts a local web server
 2. opening the local page shows tracked PR rows from the backend
-3. the daemon can poll a provider and derive `watching`, `needs_attention`, and `running` or `blocked`
+3. the daemon can poll a provider and derive `waiting_review`, `waiting_merge`, `needs_attention`, and `running` or `blocked`
 4. the backend can invoke a runner abstraction for one actionable PR
 5. there is at least one `cargo test` simulated integration test that:
    - uses a fake GitHub provider

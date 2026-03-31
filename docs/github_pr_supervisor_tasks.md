@@ -88,6 +88,35 @@ This section is the only task list that matters for the next implementation pass
 - [ ] that page shows live data from the backend for the fake or real provider path
 - [ ] the codebase is organized clearly enough that later work can layer SQLite and richer UI on top
 
+### 1.9 Review Lifecycle Enrichment
+
+- [ ] Split the current passive `watching` review state into:
+  - `waiting_review`
+  - `waiting_merge`
+- [ ] Define merge-ready heuristics for MVP:
+  - at least one non-author approval
+  - CI is green
+  - PR is not draft, closed, or merged
+- [ ] Surface the derived review lifecycle state through `/api/prs`
+- [ ] Update the dashboard so the review panel distinguishes:
+  - needs attention
+  - waiting for review
+  - waiting for merge
+- [ ] Add tests covering:
+  - approved but CI-pending or CI-failing PRs stay out of `waiting_merge`
+  - approved + green PRs become `waiting_merge`
+  - clean open PRs without approval show `waiting_review`
+
+### 1.10 Notification Hooks
+
+- [ ] Introduce a notification abstraction that can be called from lifecycle transitions
+- [ ] Add a Feishu CLI-backed notification sink behind config
+- [ ] Support notifying the relevant person when a PR transitions into:
+  - `waiting_review`
+  - `waiting_merge`
+- [ ] Record notification attempts in activity history and durable state
+- [ ] Prevent duplicate notifications for the same unchanged lifecycle signal
+
 ## 2. Background Decisions
 
 - [x] Decide that the long-term UI is web-based, not a native Rust widget app
@@ -218,9 +247,67 @@ These are intentionally deferred until after the MVP above lands.
 - [ ] Add notifications
 - [ ] Add SSE or WebSocket streaming
 - [ ] Add run history UI
-- [ ] Add Tauri packaging
 
-## 18. Risks To Watch
+## 18. Lifecycle Panel Migration
+
+- [ ] Reframe the UI around lifecycle panels instead of a single review dashboard
+- [ ] Start with these top-level panels:
+  - Review
+  - Develop
+  - Merge
+- [ ] Keep panel routing lightweight at first so static HTML can evolve into a richer frontend later
+- [ ] Ensure the review panel remains usable while develop/merge panels are added incrementally
+- [ ] Preserve a shared global activity feed across panels
+
+## 19. Develop Panel And Project Model
+
+- [ ] Introduce a first-class `Project` model for the develop phase
+- [ ] Allow one project to reference multiple local code directories across repositories
+- [ ] Add project metadata for:
+  - display name
+  - lifecycle status
+  - linked repositories / working directories
+  - related PRs
+  - owning tasks
+- [ ] Add API endpoints and UI scaffolding for listing projects
+- [ ] Define how a review-stage PR links back to its parent project when available
+
+## 20. Resource Pool
+
+- [ ] Introduce a `ResourcePoolEntry` model shared by projects and sessions
+- [ ] Support at minimum:
+  - Feishu doc links
+  - generic web links
+  - local document/file references
+- [ ] Store resource summaries separately from on-demand fetched content
+- [ ] Add a lazy-load path that fetches full content only when a session explicitly needs it
+- [ ] Show the project resource pool in the develop panel without eagerly loading every document body
+
+## 21. Task Management
+
+- [ ] Add Linear-like todo/task primitives for the develop phase
+- [ ] Support task fields for:
+  - title
+  - status
+  - priority
+  - parent project
+  - linked resources
+  - linked PRs
+- [ ] Define task lifecycle mapping between local states and the migrated Symphony workflow
+- [ ] Add task list and task detail UI for the develop panel
+- [ ] Support promoting a task from development work into review/merge tracking
+
+## 22. Workflow Migration From `~/Coding/symphony`
+
+- [ ] Extract the lifecycle ideas from `~/Coding/symphony` that should carry over:
+  - explicit phase/state routing
+  - human review vs merging separation
+  - project-centered work management
+- [ ] Map the existing Rust PR supervisor concepts onto those lifecycle states
+- [ ] Decide which workflow semantics live in durable app state vs external task systems
+- [ ] Document the migration path so review-first MVP code can evolve without a rewrite
+
+## 23. Risks To Watch
 
 - [ ] GitHub API rate-limit handling
 - [ ] false positives on comment-triggered reruns

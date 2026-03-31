@@ -160,8 +160,8 @@ async fn mvp_flow_tracks_prs_runs_actionable_one_and_does_not_duplicate() {
     let prs = post_run_payload["prs"].as_array().expect("prs array");
     assert_eq!(
         status_for(prs, "openai/symphony#7"),
-        Some("watching"),
-        "completed actionable PR should settle into post-run watching state",
+        Some("waiting review"),
+        "completed actionable PR should settle into waiting review after the signal is processed",
     );
     assert_eq!(
         summary_for(prs, "openai/symphony#7"),
@@ -187,7 +187,7 @@ async fn mvp_flow_tracks_prs_runs_actionable_one_and_does_not_duplicate() {
 }
 
 #[tokio::test]
-async fn pause_api_toggles_watch_state_for_a_tracked_pr() {
+async fn pause_api_toggles_review_wait_state_for_a_tracked_pr() {
     let supervisor = Arc::new(
         Supervisor::new(
             sample_config(
@@ -238,13 +238,76 @@ async fn pause_api_toggles_watch_state_for_a_tracked_pr() {
         }),
     )
     .await;
-    assert_eq!(resumed["pr"]["status"], json!("watching"));
+    assert_eq!(resumed["pr"]["status"], json!("waiting review"));
     assert_eq!(resumed["pr"]["is_paused"], json!(false));
 
     let prs_payload = get_json(supervisor, "/api/prs").await;
     let prs = prs_payload["prs"].as_array().expect("prs array");
-    assert_eq!(status_for(prs, "openai/symphony#1"), Some("watching"));
+    assert_eq!(status_for(prs, "openai/symphony#1"), Some("waiting review"));
     assert_eq!(is_paused_for(prs, "openai/symphony#1"), Some(false));
+}
+
+#[tokio::test]
+async fn approved_green_pr_is_exposed_as_waiting_merge() {
+    let supervisor = Arc::new(
+        Supervisor::new(
+            sample_config(
+                unique_temp_path("state.json"),
+                unique_temp_path("workspaces"),
+            ),
+            Arc::new(FakeGitHubProvider {
+                prs: vec![approved_green_pr()],
+            }),
+            Arc::new(FakeAgentRunner {
+                invocations: Arc::new(AtomicUsize::new(0)),
+                started: Arc::new(Semaphore::new(0)),
+                allow_finish: Arc::new(Semaphore::new(0)),
+            }),
+        )
+        .expect("supervisor should initialize"),
+    );
+
+    supervisor
+        .poll_once()
+        .await
+        .expect("poll should populate dashboard");
+
+    let prs_payload = get_json(supervisor, "/api/prs").await;
+    let prs = prs_payload["prs"].as_array().expect("prs array");
+    assert_eq!(status_for(prs, "openai/symphony#9"), Some("waiting merge"));
+}
+
+#[tokio::test]
+async fn approved_pr_with_pending_ci_stays_waiting_review() {
+    let supervisor = Arc::new(
+        Supervisor::new(
+            sample_config(
+                unique_temp_path("state.json"),
+                unique_temp_path("workspaces"),
+            ),
+            Arc::new(FakeGitHubProvider {
+                prs: vec![approved_pending_pr()],
+            }),
+            Arc::new(FakeAgentRunner {
+                invocations: Arc::new(AtomicUsize::new(0)),
+                started: Arc::new(Semaphore::new(0)),
+                allow_finish: Arc::new(Semaphore::new(0)),
+            }),
+        )
+        .expect("supervisor should initialize"),
+    );
+
+    supervisor
+        .poll_once()
+        .await
+        .expect("poll should populate dashboard");
+
+    let prs_payload = get_json(supervisor, "/api/prs").await;
+    let prs = prs_payload["prs"].as_array().expect("prs array");
+    assert_eq!(
+        status_for(prs, "openai/symphony#10"),
+        Some("waiting review")
+    );
 }
 
 #[tokio::test]
@@ -278,7 +341,7 @@ async fn paused_pr_does_not_auto_run_until_resumed() {
             pr.key.clone(),
             TrackedPr {
                 pull_request: pr.clone(),
-                status: TrackingStatus::Watching,
+                status: TrackingStatus::WaitingReview,
                 attention_reason: None,
                 persisted: PersistentPrState::default(),
                 runner: None,
@@ -599,6 +662,7 @@ fn idle_pr() -> PullRequest {
         CiStatus::Success,
         None,
         ReviewDecision::Clean,
+        0,
         None,
     )
 }
@@ -612,7 +676,36 @@ fn actionable_pr() -> PullRequest {
         CiStatus::Failure,
         Some(Utc.with_ymd_and_hms(2026, 3, 30, 18, 5, 0).unwrap()),
         ReviewDecision::Clean,
+        0,
         None,
+    )
+}
+
+fn approved_green_pr() -> PullRequest {
+    base_pr(
+        "openai/symphony#9",
+        9,
+        "Ready to land",
+        "approved-green-sha",
+        CiStatus::Success,
+        None,
+        ReviewDecision::Approved,
+        1,
+        Some(Utc.with_ymd_and_hms(2026, 3, 30, 18, 12, 0).unwrap()),
+    )
+}
+
+fn approved_pending_pr() -> PullRequest {
+    base_pr(
+        "openai/symphony#10",
+        10,
+        "Approved but checks still running",
+        "approved-pending-sha",
+        CiStatus::Pending,
+        Some(Utc.with_ymd_and_hms(2026, 3, 30, 18, 15, 0).unwrap()),
+        ReviewDecision::Approved,
+        1,
+        Some(Utc.with_ymd_and_hms(2026, 3, 30, 18, 14, 0).unwrap()),
     )
 }
 
@@ -624,6 +717,7 @@ fn base_pr(
     ci_status: CiStatus,
     ci_updated_at: Option<chrono::DateTime<Utc>>,
     review_decision: ReviewDecision,
+    approval_count: usize,
     latest_reviewer_activity_at: Option<chrono::DateTime<Utc>>,
 ) -> PullRequest {
     PullRequest {
@@ -647,6 +741,7 @@ fn base_pr(
         ci_status,
         ci_updated_at,
         review_decision,
+        approval_count,
         review_comment_count: usize::from(matches!(review_decision, ReviewDecision::Commented)),
         issue_comment_count: 0,
         latest_reviewer_activity_at,
