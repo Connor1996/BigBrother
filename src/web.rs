@@ -8,7 +8,7 @@ use std::{
 
 use anyhow::{Context, Result};
 use axum::{
-    extract::State,
+    extract::{Query, State},
     http::StatusCode,
     response::Html,
     routing::{get, post},
@@ -223,6 +223,20 @@ const INDEX_HTML: &str = r#"<!doctype html>
       opacity: 0.65;
     }
 
+    .detail-link {
+      display: inline-flex;
+      align-items: center;
+      width: fit-content;
+      color: var(--accent);
+      text-decoration: none;
+      font-size: 0.88rem;
+      border-bottom: 1px solid rgba(29, 107, 87, 0.25);
+    }
+
+    .detail-link:hover {
+      border-bottom-color: rgba(29, 107, 87, 0.8);
+    }
+
     .empty {
       padding: 24px 18px;
       color: var(--muted);
@@ -338,24 +352,11 @@ const INDEX_HTML: &str = r#"<!doctype html>
 
     function renderDetails(pr) {
       const summary = `<div class="summary">${escapeHtml(pr.latest_summary || "-")}</div>`;
-      if (pr.status !== "running") {
-        return `<div class="details-stack">${summary}</div>`;
-      }
-
-      if (pr.live_output) {
-        return `
-          <div class="details-stack">
-            ${summary}
-            <div class="output-label">Live Codex CLI Output</div>
-            <pre class="live-output">${escapeHtml(pr.live_output)}</pre>
-          </div>
-        `;
-      }
-
+      const detailLabel = pr.status === "running" ? "Open live output" : "Open details";
       return `
         <div class="details-stack">
           ${summary}
-          <div class="output-empty">Waiting for Codex CLI output...</div>
+          <a class="detail-link" href="/pr?key=${encodeURIComponent(pr.key)}">${detailLabel}</a>
         </div>
       `;
     }
@@ -450,6 +451,257 @@ const INDEX_HTML: &str = r#"<!doctype html>
 </body>
 </html>"#;
 
+const PR_DETAIL_HTML: &str = r##"<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Symphony RS Run View</title>
+  <style>
+    :root {
+      color-scheme: light;
+      --bg: #f5f1e8;
+      --panel: rgba(255, 252, 247, 0.94);
+      --ink: #1e2228;
+      --muted: #666b73;
+      --line: rgba(30, 34, 40, 0.12);
+      --accent: #1d6b57;
+      --warn: #b25d18;
+      --bad: #a53f3f;
+      --shadow: 0 20px 60px rgba(47, 40, 28, 0.08);
+    }
+
+    * { box-sizing: border-box; }
+
+    body {
+      margin: 0;
+      font-family: "Iowan Old Style", "Palatino Linotype", "Book Antiqua", serif;
+      background:
+        radial-gradient(circle at top left, rgba(255, 255, 255, 0.8), transparent 35%),
+        linear-gradient(180deg, #f9f4ea 0%, var(--bg) 100%);
+      color: var(--ink);
+    }
+
+    main {
+      max-width: 1080px;
+      margin: 0 auto;
+      padding: 32px 20px 64px;
+    }
+
+    .hero,
+    .panel {
+      background: var(--panel);
+      border: 1px solid var(--line);
+      border-radius: 22px;
+      box-shadow: var(--shadow);
+      backdrop-filter: blur(8px);
+    }
+
+    .hero {
+      padding: 28px;
+      margin-bottom: 18px;
+    }
+
+    .meta {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+      gap: 14px;
+      margin-top: 20px;
+    }
+
+    .meta-card {
+      padding: 14px 16px;
+      border-radius: 18px;
+      background: rgba(255, 255, 255, 0.65);
+      border: 1px solid rgba(30, 34, 40, 0.08);
+    }
+
+    .meta-card label {
+      display: block;
+      margin-bottom: 8px;
+      color: var(--muted);
+      font-size: 0.82rem;
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+    }
+
+    .panel {
+      padding: 24px;
+    }
+
+    .toolbar {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      gap: 12px;
+      margin-bottom: 18px;
+    }
+
+    .back-link,
+    .pr-link {
+      color: var(--accent);
+      text-decoration: none;
+      border-bottom: 1px solid rgba(29, 107, 87, 0.25);
+      width: fit-content;
+    }
+
+    .back-link:hover,
+    .pr-link:hover {
+      border-bottom-color: rgba(29, 107, 87, 0.8);
+    }
+
+    .pill {
+      display: inline-flex;
+      padding: 4px 10px;
+      border-radius: 999px;
+      font-size: 0.84rem;
+      border: 1px solid var(--line);
+      background: rgba(255, 255, 255, 0.7);
+      white-space: nowrap;
+    }
+
+    .pill.good { color: var(--accent); }
+    .pill.warn { color: var(--warn); }
+    .pill.bad { color: var(--bad); }
+
+    .summary-block {
+      margin-bottom: 18px;
+    }
+
+    .section-label {
+      display: block;
+      margin-bottom: 8px;
+      color: var(--muted);
+      font-size: 0.82rem;
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+    }
+
+    .summary-text {
+      color: var(--muted);
+      white-space: pre-wrap;
+      line-height: 1.5;
+    }
+
+    .output {
+      margin: 0;
+      min-height: 320px;
+      max-height: 70vh;
+      overflow: auto;
+      padding: 16px;
+      border-radius: 16px;
+      border: 1px solid rgba(30, 34, 40, 0.08);
+      background: rgba(30, 34, 40, 0.06);
+      color: #23303a;
+      font: 0.84rem/1.5 "SFMono-Regular", "SF Mono", ui-monospace, monospace;
+      white-space: pre-wrap;
+      word-break: break-word;
+    }
+
+    .empty {
+      color: var(--muted);
+    }
+  </style>
+</head>
+<body>
+  <main>
+    <section class="hero">
+      <a class="back-link" href="/">Back to dashboard</a>
+      <h1 id="title" style="margin: 12px 0 6px; font-size: clamp(2rem, 3vw, 3rem); letter-spacing: -0.04em;">Loading run…</h1>
+      <div id="subtitle" style="color: var(--muted); line-height: 1.55;">Fetching PR details…</div>
+      <div class="meta">
+        <div class="meta-card">
+          <label>Status</label>
+          <div id="status-pill">-</div>
+        </div>
+        <div class="meta-card">
+          <label>CI</label>
+          <div id="ci-pill">-</div>
+        </div>
+        <div class="meta-card">
+          <label>Reviews</label>
+          <div id="review-pill">-</div>
+        </div>
+        <div class="meta-card">
+          <label>Updated</label>
+          <strong id="updated-at">-</strong>
+        </div>
+      </div>
+    </section>
+
+    <section class="panel">
+      <div class="toolbar">
+        <a id="pr-link" class="pr-link" href="#" target="_blank" rel="noreferrer">Open GitHub PR</a>
+        <span id="attention-text" class="empty">Attention: -</span>
+      </div>
+      <div class="summary-block">
+        <span class="section-label">Latest Summary</span>
+        <div id="summary-text" class="summary-text">-</div>
+      </div>
+      <div>
+        <span class="section-label">Codex CLI Output</span>
+        <pre id="output" class="output">Waiting for output…</pre>
+      </div>
+    </section>
+  </main>
+
+  <script>
+    function fmtTime(value) {
+      if (!value) return "-";
+      return new Date(value).toLocaleString();
+    }
+
+    function pillClass(value) {
+      const label = String(value || "").toLowerCase();
+      if (label.includes("fail") || label.includes("block") || label.includes("conflict")) return "pill bad";
+      if (label.includes("pause")) return "pill warn";
+      if (label.includes("need") || label.includes("pending") || label.includes("comment") || label.includes("retry")) return "pill warn";
+      return "pill good";
+    }
+
+    function setPill(id, value) {
+      document.getElementById(id).innerHTML = `<span class="${pillClass(value)}">${String(value || "-")}</span>`;
+    }
+
+    async function refresh() {
+      const key = new URLSearchParams(window.location.search).get("key");
+      if (!key) {
+        document.getElementById("title").textContent = "Missing PR key";
+        document.getElementById("subtitle").textContent = "Open this page from the dashboard so the PR key is included.";
+        document.getElementById("output").textContent = "No PR key was provided.";
+        return;
+      }
+
+      const response = await fetch(`/api/pr?key=${encodeURIComponent(key)}`);
+      if (!response.ok) {
+        const message = await response.text();
+        throw new Error(message || `HTTP ${response.status}`);
+      }
+
+      const pr = await response.json();
+      document.title = `${pr.repo_full_name} #${pr.number} · Symphony RS`;
+      document.getElementById("title").textContent = `${pr.repo_full_name} #${pr.number}`;
+      document.getElementById("subtitle").textContent = pr.title;
+      document.getElementById("pr-link").href = pr.url;
+      document.getElementById("attention-text").textContent = `Attention: ${pr.attention_reason || "-"}`;
+      document.getElementById("updated-at").textContent = fmtTime(pr.updated_at);
+      document.getElementById("summary-text").textContent = pr.latest_summary || "-";
+      document.getElementById("output").textContent = pr.live_output || "No live output is available for this PR right now.";
+      setPill("status-pill", pr.status);
+      setPill("ci-pill", pr.ci_status);
+      setPill("review-pill", pr.review_status);
+    }
+
+    refresh().catch((error) => {
+      document.getElementById("title").textContent = "Failed to load run";
+      document.getElementById("subtitle").textContent = error.message;
+      document.getElementById("output").textContent = error.message;
+    });
+    setInterval(() => refresh().catch(() => {}), 1500);
+  </script>
+</body>
+</html>"##;
+
 #[derive(Debug, Serialize)]
 struct HealthResponse {
     ok: bool,
@@ -485,6 +737,11 @@ struct PullRequestSummary {
 }
 
 #[derive(Debug, Deserialize)]
+struct PrQuery {
+    key: String,
+}
+
+#[derive(Debug, Deserialize)]
 struct PauseRequest {
     key: String,
     paused: bool,
@@ -503,8 +760,10 @@ pub fn default_listen_addr() -> SocketAddr {
 pub fn router(supervisor: Arc<Supervisor>) -> Router {
     Router::new()
         .route("/", get(index))
+        .route("/pr", get(pr_detail_page))
         .route("/api/health", get(health))
         .route("/api/prs", get(list_prs))
+        .route("/api/pr", get(get_pr))
         .route("/api/prs/pause", post(set_pr_paused))
         .with_state(supervisor)
 }
@@ -528,6 +787,10 @@ pub async fn serve(
 
 async fn index() -> Html<&'static str> {
     Html(INDEX_HTML)
+}
+
+async fn pr_detail_page() -> Html<&'static str> {
+    Html(PR_DETAIL_HTML)
 }
 
 async fn health(State(supervisor): State<Arc<Supervisor>>) -> Json<HealthResponse> {
@@ -560,6 +823,21 @@ async fn list_prs(State(supervisor): State<Arc<Supervisor>>) -> Json<PullRequest
     prs.sort_by(|left, right| right.updated_at.cmp(&left.updated_at));
 
     Json(PullRequestsResponse { prs })
+}
+
+async fn get_pr(
+    State(supervisor): State<Arc<Supervisor>>,
+    Query(query): Query<PrQuery>,
+) -> Result<Json<PullRequestSummary>, (StatusCode, String)> {
+    let snapshot = supervisor.snapshot();
+    let Some(tracked) = snapshot.tracked_prs.get(&query.key) else {
+        return Err((
+            StatusCode::NOT_FOUND,
+            format!("unknown PR key: {}", query.key),
+        ));
+    };
+
+    Ok(Json(summarize_pr(tracked)))
 }
 
 async fn set_pr_paused(

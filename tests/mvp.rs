@@ -457,6 +457,13 @@ async fn running_pr_exposes_live_codex_output() {
         json!("codex: inspecting workspace\ncargo test -q\n")
     );
 
+    let detail_payload = get_json(supervisor.clone(), "/api/pr?key=openai%2Fsymphony%237").await;
+    assert_eq!(detail_payload["key"], json!("openai/symphony#7"));
+    assert_eq!(
+        detail_payload["live_output"],
+        json!("codex: inspecting workspace\ncargo test -q\n")
+    );
+
     runner.allow_finish.add_permits(1);
     poll_task
         .await
