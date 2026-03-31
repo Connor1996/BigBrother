@@ -283,6 +283,11 @@ Each tracked PR should normalize to a durable local record with:
 - `last_agent_run_started_at`
 - `last_agent_run_finished_at`
 - `last_agent_run_summary`
+- `last_processed_review_comment_at`
+- `last_processed_ci_signal_at`
+- `last_processed_ci_head_sha`
+- `last_processed_conflict_head_sha`
+- `last_processed_conflict_base_sha`
 - `last_processed_comment_at`
 - `last_processed_ci_at`
 - `last_processed_head_sha`
@@ -328,6 +333,13 @@ Failed runs are special:
 - a failed run must not consume the processed marker for the signal it was trying to fix
 - the same still-actionable signal should therefore be retried on the next poll
 - if the signal clears before the next poll, the PR should fall back out of retry state instead of remaining blocked forever
+
+Processed markers are signal-specific:
+
+- a successful review-feedback run only consumes the review-feedback marker
+- a successful CI repair run only consumes the CI-failure marker for that head SHA
+- a successful conflict-handling run only consumes the conflict marker for that `(head_sha, base_sha)` pair
+- a successful run for one signal must not silently consume any other still-actionable signal on the same PR
 
 ## 11. Review Lifecycle State Derivation
 

@@ -283,11 +283,7 @@ impl Supervisor {
                 persisted.last_run_summary = Some(outcome.summary.clone());
                 persisted.last_run_trigger = active_run.as_ref().map(|run| run.trigger);
                 if outcome.success {
-                    persisted.last_processed_comment_at = outcome.processed_comment_at;
-                    persisted.last_processed_ci_at = outcome.processed_ci_at;
-                    persisted.last_processed_head_sha = Some(outcome.processed_head_sha.clone());
-                    persisted.last_processed_base_sha = Some(request.pull_request.base_sha.clone());
-                    persisted.clear_retry_state();
+                    record_successful_run(persisted, &request, &outcome);
                 } else {
                     auto_paused = record_failed_run(persisted, &request);
                 }
@@ -422,8 +418,8 @@ pub fn determine_attention_reason(
 
     let has_new_conflict = pr.has_conflicts
         && match (
-            persisted.last_processed_head_sha.as_deref(),
-            persisted.last_processed_base_sha.as_deref(),
+            persisted.processed_conflict_head_sha(),
+            persisted.processed_conflict_base_sha(),
         ) {
             (Some(last_head_sha), Some(last_base_sha)) => {
                 last_head_sha != pr.head_sha.as_str() || last_base_sha != pr.base_sha.as_str()
@@ -437,7 +433,7 @@ pub fn determine_attention_reason(
 
     let has_new_feedback = pr
         .latest_reviewer_activity_at
-        .zip(persisted.last_processed_comment_at)
+        .zip(persisted.processed_review_comment_at())
         .map(|(latest, processed)| latest > processed)
         .unwrap_or(pr.latest_reviewer_activity_at.is_some());
 
@@ -452,12 +448,12 @@ pub fn determine_attention_reason(
     }
 
     let ci_changed = match (
-        &persisted.last_processed_head_sha,
+        persisted.processed_ci_head_sha(),
         pr.ci_updated_at,
-        persisted.last_processed_ci_at,
+        persisted.processed_ci_signal_at(),
     ) {
         (Some(last_sha), Some(latest_ci_at), Some(processed_ci_at)) => {
-            last_sha != &pr.head_sha || latest_ci_at > processed_ci_at
+            last_sha != pr.head_sha.as_str() || latest_ci_at > processed_ci_at
         }
         _ => pr.ci_updated_at.is_some(),
     };
@@ -570,6 +566,34 @@ fn record_failed_run(persisted: &mut PersistentPrState, request: &RunRequest) ->
     auto_paused
 }
 
+fn record_successful_run(
+    persisted: &mut PersistentPrState,
+    request: &RunRequest,
+    outcome: &RunOutcome,
+) {
+    match request.trigger {
+        AttentionReason::ReviewFeedback => {
+            persisted.last_processed_review_comment_at = outcome.processed_comment_at;
+            persisted.last_processed_comment_at = outcome.processed_comment_at;
+        }
+        AttentionReason::CiFailed => {
+            persisted.last_processed_ci_signal_at = outcome.processed_ci_at;
+            persisted.last_processed_ci_head_sha = Some(outcome.processed_head_sha.clone());
+            persisted.last_processed_ci_at = outcome.processed_ci_at;
+            persisted.last_processed_head_sha = Some(outcome.processed_head_sha.clone());
+        }
+        AttentionReason::MergeConflict => {
+            persisted.last_processed_conflict_head_sha = Some(outcome.processed_head_sha.clone());
+            persisted.last_processed_conflict_base_sha =
+                Some(request.pull_request.base_sha.clone());
+            persisted.last_processed_head_sha = Some(outcome.processed_head_sha.clone());
+            persisted.last_processed_base_sha = Some(request.pull_request.base_sha.clone());
+        }
+    }
+
+    persisted.clear_retry_state();
+}
+
 #[cfg(test)]
 mod tests {
     use std::{collections::HashMap, path::PathBuf};
@@ -671,12 +695,72 @@ mod tests {
         pr.ci_updated_at = Some(Utc.with_ymd_and_hms(2026, 3, 30, 18, 5, 0).unwrap());
 
         let persisted = PersistentPrState {
-            last_processed_ci_at: pr.ci_updated_at,
-            last_processed_head_sha: Some(pr.head_sha.clone()),
+            last_processed_ci_signal_at: pr.ci_updated_at,
+            last_processed_ci_head_sha: Some(pr.head_sha.clone()),
             ..PersistentPrState::default()
         };
 
         assert_eq!(determine_attention_reason(&pr, &persisted), None);
+    }
+
+    #[test]
+    fn successful_review_run_does_not_consume_failed_ci_signal() {
+        let mut pr = sample_pr();
+        pr.ci_status = CiStatus::Failure;
+        pr.ci_updated_at = Some(Utc.with_ymd_and_hms(2026, 3, 30, 18, 6, 0).unwrap());
+        pr.review_decision = ReviewDecision::ChangesRequested;
+        pr.latest_reviewer_activity_at = Some(Utc.with_ymd_and_hms(2026, 3, 30, 18, 5, 0).unwrap());
+
+        let config = sample_config();
+        let request = RunRequest {
+            pull_request: pr.clone(),
+            trigger: AttentionReason::ReviewFeedback,
+            workspace: config.workspace,
+            agent: config.agent,
+        };
+        let outcome = RunOutcome {
+            started_at: Utc::now(),
+            finished_at: Utc::now(),
+            success: true,
+            exit_code: Some(0),
+            summary: "review addressed".to_owned(),
+            processed_comment_at: pr.latest_reviewer_activity_at,
+            processed_ci_at: pr.ci_updated_at,
+            processed_head_sha: pr.head_sha.clone(),
+        };
+        let mut persisted = PersistentPrState::default();
+
+        record_successful_run(&mut persisted, &request, &outcome);
+
+        assert_eq!(
+            persisted.last_processed_review_comment_at,
+            pr.latest_reviewer_activity_at
+        );
+        assert_eq!(persisted.last_processed_ci_signal_at, None);
+        assert_eq!(
+            determine_attention_reason(&pr, &persisted),
+            Some(AttentionReason::CiFailed)
+        );
+    }
+
+    #[test]
+    fn legacy_ci_marker_from_non_ci_run_is_ignored() {
+        let mut pr = sample_pr();
+        pr.ci_status = CiStatus::Failure;
+        pr.ci_updated_at = Some(Utc.with_ymd_and_hms(2026, 3, 30, 18, 5, 0).unwrap());
+
+        let persisted = PersistentPrState {
+            last_processed_ci_at: pr.ci_updated_at,
+            last_processed_head_sha: Some(pr.head_sha.clone()),
+            last_run_status: Some("error".to_owned()),
+            last_run_trigger: Some(AttentionReason::ReviewFeedback),
+            ..PersistentPrState::default()
+        };
+
+        assert_eq!(
+            determine_attention_reason(&pr, &persisted),
+            Some(AttentionReason::CiFailed)
+        );
     }
 
     #[test]
@@ -813,8 +897,8 @@ mod tests {
         pr.has_conflicts = true;
 
         let persisted = PersistentPrState {
-            last_processed_head_sha: Some(pr.head_sha.clone()),
-            last_processed_base_sha: Some(pr.base_sha.clone()),
+            last_processed_conflict_head_sha: Some(pr.head_sha.clone()),
+            last_processed_conflict_base_sha: Some(pr.base_sha.clone()),
             ..PersistentPrState::default()
         };
 

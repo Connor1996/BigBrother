@@ -341,6 +341,72 @@ async fn conflicting_pr_is_exposed_as_conflict() {
 }
 
 #[tokio::test]
+async fn review_run_success_leaves_same_pr_ci_failure_actionable() {
+    let runner = FakeAgentRunner {
+        invocations: Arc::new(AtomicUsize::new(0)),
+        started: Arc::new(Semaphore::new(0)),
+        allow_finish: Arc::new(Semaphore::new(0)),
+    };
+    let supervisor = Arc::new(
+        Supervisor::new(
+            sample_config(
+                unique_temp_path("state.json"),
+                unique_temp_path("workspaces"),
+            ),
+            Arc::new(FakeGitHubProvider {
+                prs: vec![review_and_ci_pr()],
+            }),
+            Arc::new(runner.clone()),
+        )
+        .expect("supervisor should initialize"),
+    );
+
+    let first_poll = {
+        let supervisor = supervisor.clone();
+        tokio::spawn(async move { supervisor.poll_once().await })
+    };
+    let _started = runner
+        .started
+        .acquire()
+        .await
+        .expect("started semaphore should remain open");
+    runner.allow_finish.add_permits(1);
+    first_poll
+        .await
+        .expect("first poll task should join")
+        .expect("first poll should succeed");
+
+    let prs_payload = get_json(supervisor.clone(), "/api/prs").await;
+    let prs = prs_payload["prs"].as_array().expect("prs array");
+    assert_eq!(
+        status_for(prs, "openai/symphony#12"),
+        Some("needs attention"),
+        "the review-triggered success should not consume the unchanged failing CI signal",
+    );
+
+    let second_poll = {
+        let supervisor = supervisor.clone();
+        tokio::spawn(async move { supervisor.poll_once().await })
+    };
+    let _started = runner
+        .started
+        .acquire()
+        .await
+        .expect("started semaphore should remain open");
+    runner.allow_finish.add_permits(1);
+    second_poll
+        .await
+        .expect("second poll task should join")
+        .expect("second poll should succeed");
+
+    assert_eq!(
+        runner.invocations.load(Ordering::SeqCst),
+        2,
+        "the next poll should pick up the remaining CI failure",
+    );
+}
+
+#[tokio::test]
 async fn paused_pr_does_not_auto_run_until_resumed() {
     let runner = FakeAgentRunner {
         invocations: Arc::new(AtomicUsize::new(0)),
@@ -754,6 +820,20 @@ fn conflicting_pr() -> PullRequest {
     pr.has_conflicts = true;
     pr.mergeable_state = Some("dirty".to_owned());
     pr
+}
+
+fn review_and_ci_pr() -> PullRequest {
+    base_pr(
+        "openai/symphony#12",
+        12,
+        "Needs review updates and CI fixes",
+        "review-ci-sha",
+        CiStatus::Failure,
+        Some(Utc.with_ymd_and_hms(2026, 3, 30, 18, 20, 0).unwrap()),
+        ReviewDecision::ChangesRequested,
+        0,
+        Some(Utc.with_ymd_and_hms(2026, 3, 30, 18, 19, 0).unwrap()),
+    )
 }
 
 fn base_pr(

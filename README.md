@@ -99,6 +99,7 @@ The default prompt asks the agent to inspect GitHub feedback and CI, fix code in
 - authored PRs are discovered via the GitHub Search API
 - review feedback detection is based on reviews, inline review comments, and issue comments from people other than the PR author
 - CI attention is triggered only when a failing status/check is newer than the last processed CI signal for that PR
+- successful runs only consume the trigger they were started for; unchanged review and CI signals on the same PR stay independently actionable
 - repository resolution prefers `workspace.repo_map` when present, then falls back to `<workspace.root>/<repo-name>`
 - Symphony RS reuses existing local checkouts and refuses to operate on a tracked repo that has local tracked changes
 - the current UI is local-only and intentionally minimal

@@ -129,6 +129,12 @@ pub struct PullRequest {
 pub struct PersistentPrState {
     #[serde(default)]
     pub paused: bool,
+    pub last_processed_review_comment_at: Option<DateTime<Utc>>,
+    pub last_processed_ci_signal_at: Option<DateTime<Utc>>,
+    pub last_processed_ci_head_sha: Option<String>,
+    pub last_processed_conflict_head_sha: Option<String>,
+    pub last_processed_conflict_base_sha: Option<String>,
+    // Legacy generic markers retained so older state files can be read safely.
     pub last_processed_comment_at: Option<DateTime<Utc>>,
     pub last_processed_ci_at: Option<DateTime<Utc>>,
     pub last_processed_head_sha: Option<String>,
@@ -155,6 +161,64 @@ impl PersistentPrState {
         self.retry_base_sha = None;
         self.retry_comment_at = None;
         self.retry_ci_at = None;
+    }
+
+    pub fn processed_review_comment_at(&self) -> Option<DateTime<Utc>> {
+        self.last_processed_review_comment_at.clone().or_else(|| {
+            if self.legacy_marker_matches(AttentionReason::ReviewFeedback) {
+                self.last_processed_comment_at.clone()
+            } else {
+                None
+            }
+        })
+    }
+
+    pub fn processed_ci_signal_at(&self) -> Option<DateTime<Utc>> {
+        self.last_processed_ci_signal_at.clone().or_else(|| {
+            if self.legacy_marker_matches(AttentionReason::CiFailed) {
+                self.last_processed_ci_at.clone()
+            } else {
+                None
+            }
+        })
+    }
+
+    pub fn processed_ci_head_sha(&self) -> Option<&str> {
+        self.last_processed_ci_head_sha.as_deref().or_else(|| {
+            if self.legacy_marker_matches(AttentionReason::CiFailed) {
+                self.last_processed_head_sha.as_deref()
+            } else {
+                None
+            }
+        })
+    }
+
+    pub fn processed_conflict_head_sha(&self) -> Option<&str> {
+        self.last_processed_conflict_head_sha
+            .as_deref()
+            .or_else(|| {
+                if self.legacy_marker_matches(AttentionReason::MergeConflict) {
+                    self.last_processed_head_sha.as_deref()
+                } else {
+                    None
+                }
+            })
+    }
+
+    pub fn processed_conflict_base_sha(&self) -> Option<&str> {
+        self.last_processed_conflict_base_sha
+            .as_deref()
+            .or_else(|| {
+                if self.legacy_marker_matches(AttentionReason::MergeConflict) {
+                    self.last_processed_base_sha.as_deref()
+                } else {
+                    None
+                }
+            })
+    }
+
+    fn legacy_marker_matches(&self, trigger: AttentionReason) -> bool {
+        self.last_run_status.as_deref() == Some("success") && self.last_run_trigger == Some(trigger)
     }
 }
 

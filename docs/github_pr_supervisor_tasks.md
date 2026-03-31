@@ -148,7 +148,7 @@ This section is the only task list that matters for the next implementation pass
 - [ ] Replace JSON-file persistence with SQLite-backed durable state
 - [ ] Store tracked PR state, run history, and notification history
 - [ ] Add migration or one-time import path from the current JSON spike if worth preserving
-- [ ] Add tests for restart persistence and processed-marker correctness
+- [x] Add tests for restart persistence and processed-marker correctness
 
 ## 6. GitHub Integration
 
@@ -161,7 +161,7 @@ This section is the only task list that matters for the next implementation pass
 ## 7. Decision Engine
 
 - [ ] Centralize `attention_reason` calculation into a dedicated policy module
-- [ ] Prevent repeat triggers on unchanged CI failure or already-processed comments
+- [x] Prevent repeat triggers on unchanged CI failure or already-processed comments
 - [ ] Add configurable policy flags for which review states should trigger auto-runs
 - [ ] Add per-PR pause or mute support
 - [ ] Add retry and cooldown rules for repeated failing runs
