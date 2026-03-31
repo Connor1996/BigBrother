@@ -127,6 +127,22 @@ pub struct PersistentPrState {
     pub last_run_status: Option<String>,
     pub last_run_summary: Option<String>,
     pub last_run_trigger: Option<AttentionReason>,
+    #[serde(default)]
+    pub consecutive_failures: u32,
+    pub retry_trigger: Option<AttentionReason>,
+    pub retry_head_sha: Option<String>,
+    pub retry_comment_at: Option<DateTime<Utc>>,
+    pub retry_ci_at: Option<DateTime<Utc>>,
+}
+
+impl PersistentPrState {
+    pub fn clear_retry_state(&mut self) {
+        self.consecutive_failures = 0;
+        self.retry_trigger = None;
+        self.retry_head_sha = None;
+        self.retry_comment_at = None;
+        self.retry_ci_at = None;
+    }
 }
 
 #[derive(Debug, Clone)]

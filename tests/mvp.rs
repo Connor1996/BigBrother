@@ -78,6 +78,32 @@ impl AgentRunner for FakeAgentRunner {
     }
 }
 
+#[derive(Clone)]
+struct AlwaysFailingAgentRunner {
+    invocations: Arc<AtomicUsize>,
+}
+
+impl AgentRunner for AlwaysFailingAgentRunner {
+    fn run(&self, request: RunRequest) -> BoxFuture<'static, RunOutcome> {
+        let invocations = self.invocations.clone();
+
+        Box::pin(async move {
+            invocations.fetch_add(1, Ordering::SeqCst);
+
+            RunOutcome {
+                started_at: Utc::now(),
+                finished_at: Utc::now(),
+                success: false,
+                exit_code: Some(1),
+                summary: format!("failed {}", request.pull_request.key),
+                processed_comment_at: request.pull_request.latest_reviewer_activity_at,
+                processed_ci_at: request.pull_request.ci_updated_at,
+                processed_head_sha: request.pull_request.head_sha,
+            }
+        })
+    }
+}
+
 #[tokio::test]
 async fn mvp_flow_tracks_prs_runs_actionable_one_and_does_not_duplicate() {
     let runner = FakeAgentRunner {
@@ -360,6 +386,121 @@ async fn paused_state_survives_supervisor_restart() {
     let prs = prs_payload["prs"].as_array().expect("prs array");
     assert_eq!(status_for(prs, "openai/symphony#1"), Some("paused"));
     assert_eq!(is_paused_for(prs, "openai/symphony#1"), Some(true));
+}
+
+#[tokio::test]
+async fn failed_runs_retry_on_subsequent_polls_and_auto_pause_after_five_retries() {
+    let runner = AlwaysFailingAgentRunner {
+        invocations: Arc::new(AtomicUsize::new(0)),
+    };
+    let supervisor = Arc::new(
+        Supervisor::new(
+            sample_config(
+                unique_temp_path("state.json"),
+                unique_temp_path("workspaces"),
+            ),
+            Arc::new(FakeGitHubProvider {
+                prs: vec![actionable_pr()],
+            }),
+            Arc::new(runner.clone()),
+        )
+        .expect("supervisor should initialize"),
+    );
+
+    for expected_runs in 1..=5 {
+        supervisor
+            .poll_once()
+            .await
+            .expect("poll should succeed while retries remain");
+
+        let prs_payload = get_json(supervisor.clone(), "/api/prs").await;
+        let prs = prs_payload["prs"].as_array().expect("prs array");
+        assert_eq!(
+            status_for(prs, "openai/symphony#7"),
+            Some("retrying"),
+            "failed runs should stay retry-scheduled until the retry budget is exhausted",
+        );
+        assert_eq!(is_paused_for(prs, "openai/symphony#7"), Some(false));
+        assert_eq!(
+            runner.invocations.load(Ordering::SeqCst),
+            expected_runs,
+            "each poll should trigger one retry while retries remain",
+        );
+    }
+
+    supervisor
+        .poll_once()
+        .await
+        .expect("final retry poll should still succeed");
+
+    let prs_payload = get_json(supervisor, "/api/prs").await;
+    let prs = prs_payload["prs"].as_array().expect("prs array");
+    assert_eq!(
+        status_for(prs, "openai/symphony#7"),
+        Some("paused"),
+        "the PR should auto-pause after the fifth retry fails",
+    );
+    assert_eq!(is_paused_for(prs, "openai/symphony#7"), Some(true));
+    assert_eq!(
+        runner.invocations.load(Ordering::SeqCst),
+        6,
+        "one initial failure plus five retries should have been attempted",
+    );
+}
+
+#[tokio::test]
+async fn resume_clears_retry_state_and_rechecks_the_current_signal() {
+    let runner = AlwaysFailingAgentRunner {
+        invocations: Arc::new(AtomicUsize::new(0)),
+    };
+    let supervisor = Arc::new(
+        Supervisor::new(
+            sample_config(
+                unique_temp_path("state.json"),
+                unique_temp_path("workspaces"),
+            ),
+            Arc::new(FakeGitHubProvider {
+                prs: vec![actionable_pr()],
+            }),
+            Arc::new(runner.clone()),
+        )
+        .expect("supervisor should initialize"),
+    );
+
+    for _ in 0..6 {
+        supervisor
+            .poll_once()
+            .await
+            .expect("poll should succeed while driving toward auto-pause");
+    }
+
+    let resumed = supervisor
+        .set_pr_paused("openai/symphony#7", false)
+        .await
+        .expect("resume operation should succeed")
+        .expect("tracked PR should exist");
+    assert_eq!(
+        resumed.status,
+        TrackingStatus::NeedsAttention,
+        "resume should recalculate status from the current PR signal instead of staying paused",
+    );
+    assert!(!resumed.persisted.paused);
+    assert_eq!(resumed.persisted.consecutive_failures, 0);
+
+    supervisor
+        .poll_once()
+        .await
+        .expect("poll should succeed after resume");
+    assert_eq!(
+        runner.invocations.load(Ordering::SeqCst),
+        7,
+        "resume should allow the current actionable signal to be retried again",
+    );
+
+    let prs_payload = get_json(supervisor, "/api/prs").await;
+    let prs = prs_payload["prs"].as_array().expect("prs array");
+    assert_eq!(status_for(prs, "openai/symphony#7"), Some("retrying"));
+    assert_eq!(is_paused_for(prs, "openai/symphony#7"), Some(false));
 }
 
 async fn get_json(supervisor: Arc<Supervisor>, path: &str) -> Value {

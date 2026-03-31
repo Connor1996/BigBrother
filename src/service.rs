@@ -26,6 +26,8 @@ pub trait AgentRunner: Send + Sync {
     fn run(&self, request: RunRequest) -> BoxFuture<'static, RunOutcome>;
 }
 
+const MAX_AUTOMATIC_RETRIES: u32 = 5;
+
 #[derive(Debug, Clone)]
 struct ActiveRun {
     started_at: DateTime<Utc>,
@@ -109,34 +111,43 @@ impl Supervisor {
                 return Ok(None);
             };
 
-            let previous_paused = inner
+            let previous = inner
                 .persisted_state
                 .prs
-                .get(pr_key)
-                .map(|persisted| persisted.paused)
-                .unwrap_or(false);
-            let changed = previous_paused != paused;
+                .entry(pr_key.to_owned())
+                .or_default()
+                .clone();
+            let changed = previous.paused != paused;
 
             if changed {
-                inner
+                let persisted = inner
                     .persisted_state
                     .prs
                     .entry(pr_key.to_owned())
-                    .or_default()
-                    .paused = paused;
+                    .or_default();
+                persisted.paused = paused;
+                if !paused {
+                    persisted.clear_retry_state();
+                }
 
                 if let Err(error) = self.store.save(&inner.persisted_state) {
-                    inner
+                    *inner
                         .persisted_state
                         .prs
                         .entry(pr_key.to_owned())
-                        .or_default()
-                        .paused = previous_paused;
+                        .or_default() = previous;
                     return Err(error);
                 }
             }
 
-            tracked.persisted.paused = paused;
+            tracked.persisted = inner
+                .persisted_state
+                .prs
+                .get(pr_key)
+                .cloned()
+                .unwrap_or_default();
+            tracked.attention_reason =
+                determine_attention_reason(&tracked.pull_request, &tracked.persisted);
             tracked.status = derive_status(
                 &tracked.pull_request,
                 &tracked.persisted,
@@ -262,6 +273,7 @@ impl Supervisor {
 
             let mut inner = self.inner.lock().await;
             let active_run = inner.active_runs.remove(&pr_key);
+            let mut auto_paused = false;
             {
                 let persisted = inner.persisted_state.prs.entry(pr_key.clone()).or_default();
                 persisted.last_run_started_at = Some(outcome.started_at);
@@ -270,9 +282,14 @@ impl Supervisor {
                     Some(if outcome.success { "success" } else { "error" }.to_owned());
                 persisted.last_run_summary = Some(outcome.summary.clone());
                 persisted.last_run_trigger = active_run.as_ref().map(|run| run.trigger);
-                persisted.last_processed_comment_at = outcome.processed_comment_at;
-                persisted.last_processed_ci_at = outcome.processed_ci_at;
-                persisted.last_processed_head_sha = Some(outcome.processed_head_sha.clone());
+                if outcome.success {
+                    persisted.last_processed_comment_at = outcome.processed_comment_at;
+                    persisted.last_processed_ci_at = outcome.processed_ci_at;
+                    persisted.last_processed_head_sha = Some(outcome.processed_head_sha.clone());
+                    persisted.clear_retry_state();
+                } else {
+                    auto_paused = record_failed_run(persisted, &request);
+                }
             }
 
             self.store.save(&inner.persisted_state)?;
@@ -298,6 +315,14 @@ impl Supervisor {
                     format!("agent run failed for {pr_key}: {}", outcome.summary)
                 },
             );
+
+            if auto_paused {
+                self.push_event(
+                    EventLevel::Error,
+                    Some(pr_key.clone()),
+                    format!("auto-paused {pr_key} after {MAX_AUTOMATIC_RETRIES} retry attempts"),
+                );
+            }
         }
 
         Ok(())
@@ -444,15 +469,68 @@ fn derive_status(
         TrackingStatus::Paused
     } else if pr.is_draft {
         TrackingStatus::Draft
-    } else if attention_reason.is_some() {
-        TrackingStatus::NeedsAttention
-    } else if persisted.last_run_status.as_deref() == Some("error")
-        && persisted.last_processed_head_sha.as_deref() == Some(pr.head_sha.as_str())
-    {
-        TrackingStatus::Blocked
+    } else if let Some(reason) = attention_reason {
+        if is_retry_scheduled(pr, persisted, reason) {
+            TrackingStatus::RetryScheduled
+        } else {
+            TrackingStatus::NeedsAttention
+        }
     } else {
         TrackingStatus::Watching
     }
+}
+
+fn is_retry_scheduled(
+    pr: &PullRequest,
+    persisted: &PersistentPrState,
+    reason: AttentionReason,
+) -> bool {
+    persisted.last_run_status.as_deref() == Some("error")
+        && persisted.consecutive_failures > 0
+        && persisted.consecutive_failures <= MAX_AUTOMATIC_RETRIES
+        && retry_signal_matches(pr, persisted, reason)
+}
+
+fn retry_signal_matches(
+    pr: &PullRequest,
+    persisted: &PersistentPrState,
+    reason: AttentionReason,
+) -> bool {
+    if persisted.retry_trigger != Some(reason) {
+        return false;
+    }
+
+    if persisted.retry_head_sha.as_deref() != Some(pr.head_sha.as_str()) {
+        return false;
+    }
+
+    match reason {
+        AttentionReason::ReviewFeedback => {
+            persisted.retry_comment_at == pr.latest_reviewer_activity_at
+        }
+        AttentionReason::CiFailed => persisted.retry_ci_at == pr.ci_updated_at,
+    }
+}
+
+fn record_failed_run(persisted: &mut PersistentPrState, request: &RunRequest) -> bool {
+    persisted.consecutive_failures =
+        if retry_signal_matches(&request.pull_request, persisted, request.trigger) {
+            persisted.consecutive_failures.saturating_add(1).max(1)
+        } else {
+            1
+        };
+    persisted.retry_trigger = Some(request.trigger);
+    persisted.retry_head_sha = Some(request.pull_request.head_sha.clone());
+    persisted.retry_comment_at = request.pull_request.latest_reviewer_activity_at;
+    persisted.retry_ci_at = request.pull_request.ci_updated_at;
+
+    let retries_used = persisted.consecutive_failures.saturating_sub(1);
+    let auto_paused = retries_used >= MAX_AUTOMATIC_RETRIES;
+    if auto_paused {
+        persisted.paused = true;
+    }
+
+    auto_paused
 }
 
 #[cfg(test)]
@@ -600,6 +678,45 @@ mod tests {
         assert_eq!(
             derive_status(&pr, &persisted, Some(AttentionReason::CiFailed), true),
             TrackingStatus::Running
+        );
+    }
+
+    #[test]
+    fn failed_actionable_prs_report_retry_scheduled_until_retry_budget_is_exhausted() {
+        let mut pr = sample_pr();
+        pr.ci_status = CiStatus::Failure;
+        pr.ci_updated_at = Some(Utc.with_ymd_and_hms(2026, 3, 30, 18, 5, 0).unwrap());
+
+        let persisted = PersistentPrState {
+            last_run_status: Some("error".to_owned()),
+            consecutive_failures: 2,
+            retry_trigger: Some(AttentionReason::CiFailed),
+            retry_head_sha: Some(pr.head_sha.clone()),
+            retry_ci_at: pr.ci_updated_at,
+            ..PersistentPrState::default()
+        };
+
+        assert_eq!(
+            derive_status(&pr, &persisted, Some(AttentionReason::CiFailed), false),
+            TrackingStatus::RetryScheduled
+        );
+    }
+
+    #[test]
+    fn stale_execution_error_without_current_attention_returns_watching() {
+        let pr = sample_pr();
+        let persisted = PersistentPrState {
+            last_run_status: Some("error".to_owned()),
+            consecutive_failures: 3,
+            retry_trigger: Some(AttentionReason::CiFailed),
+            retry_head_sha: Some(pr.head_sha.clone()),
+            retry_ci_at: Some(Utc.with_ymd_and_hms(2026, 3, 30, 18, 5, 0).unwrap()),
+            ..PersistentPrState::default()
+        };
+
+        assert_eq!(
+            derive_status(&pr, &persisted, None, false),
+            TrackingStatus::Watching
         );
     }
 }

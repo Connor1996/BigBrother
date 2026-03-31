@@ -97,5 +97,9 @@ mod tests {
             .expect("fixture PR should load");
 
         assert!(!pr.paused, "missing paused field should default to false");
+        assert_eq!(
+            pr.consecutive_failures, 0,
+            "missing retry counter should default to zero",
+        );
     }
 }

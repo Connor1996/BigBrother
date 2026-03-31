@@ -275,7 +275,7 @@ const INDEX_HTML: &str = r#"<!doctype html>
       const label = String(value || "").toLowerCase();
       if (label.includes("fail") || label.includes("block")) return "pill bad";
       if (label.includes("pause")) return "pill warn";
-      if (label.includes("need") || label.includes("pending") || label.includes("comment")) return "pill warn";
+      if (label.includes("need") || label.includes("pending") || label.includes("comment") || label.includes("retry")) return "pill warn";
       return "pill good";
     }
 

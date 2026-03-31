@@ -120,7 +120,7 @@ The user opens the UI and sees:
 - which PRs are currently tracked
 - current CI status
 - current review state
-- whether the daemon is idle, acting, blocked, or waiting
+- whether the daemon is idle, acting, retrying, blocked, or waiting
 - what happened most recently for each PR
 
 ### 6.2 Autonomous Repair
@@ -132,6 +132,8 @@ When CI fails or new actionable feedback appears:
 3. daemon resolves and syncs an existing local checkout for the PR
 4. daemon runs the configured agent command with a prompt derived from PR state
 5. daemon captures result, updates state, and refreshes UI
+6. if the run fails, the daemon retries the same still-actionable signal on the next poll
+7. after five automatic retries for the same signal, the daemon auto-pauses that PR until resumed
 
 ### 6.3 Human Escalation
 
@@ -223,6 +225,11 @@ Each tracked PR should normalize to a durable local record with:
 - `last_processed_comment_at`
 - `last_processed_ci_at`
 - `last_processed_head_sha`
+- `consecutive_failure_count`
+- `retry_signal_trigger`
+- `retry_signal_head_sha`
+- `retry_signal_comment_at`
+- `retry_signal_ci_at`
 - `notification_state`
 
 ## 9. Tracking Statuses
@@ -252,6 +259,12 @@ The daemon should consider a PR actionable when at least one of these becomes tr
 
 The daemon should not re-trigger forever on the same unchanged signal. It must compare new data against persisted processed markers.
 
+Failed runs are special:
+
+- a failed run must not consume the processed marker for the signal it was trying to fix
+- the same still-actionable signal should therefore be retried on the next poll
+- if the signal clears before the next poll, the PR should fall back out of retry state instead of remaining blocked forever
+
 ## 11. Auto-Repair Policy
 
 Default v0 policy:
@@ -264,6 +277,9 @@ Default v0 policy:
 - do not auto-act on merged or closed PRs
 - do not launch more than the configured global concurrency
 - do not launch a second run for a PR that already has an active run
+- retry a failed run on the next poll while the same actionable signal is still present
+- allow up to five automatic retries after the initial failed run, then auto-pause the PR
+- resuming a paused PR resets retry bookkeeping and re-evaluates the current PR state instead of preserving the old retry lockout
 
 ## 12. Workspace Model
 
@@ -473,6 +489,7 @@ Current state in this repository is a prototype spike that already contains:
 - GitHub polling logic
 - local state handling
 - persisted per-PR pause/resume state
+- retry bookkeeping for failed runs and auto-pause after repeated retry exhaustion
 - existing-checkout resolution via `workspace.root` plus explicit `workspace.repo_map` overrides
 - agent runner skeleton
 - a minimal local web dashboard
