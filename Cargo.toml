@@ -1,0 +1,16 @@
+[package]
+name = "symphony-rs"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+anyhow = "=1.0.100"
+axum = "=0.7.9"
+chrono = { version = "=0.4.39", features = ["clock", "serde"] }
+futures = "=0.3.31"
+reqwest = { version = "=0.12.12", default-features = false, features = ["json", "rustls-tls"] }
+serde = { version = "=1.0.215", features = ["derive"] }
+serde_json = "=1.0.133"
+tokio = { version = "=1.41.1", features = ["io-util", "macros", "process", "rt-multi-thread", "signal", "sync", "time"] }
+toml = "=0.8.23"
+tower = { version = "=0.5.2", features = ["util"] }

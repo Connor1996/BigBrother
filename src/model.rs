@@ -1,0 +1,203 @@
+use std::collections::{BTreeMap, VecDeque};
+
+use chrono::{DateTime, Utc};
+use serde::{Deserialize, Serialize};
+
+pub const MAX_ACTIVITY_EVENTS: usize = 200;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum CiStatus {
+    Success,
+    Pending,
+    Failure,
+    Unknown,
+}
+
+impl CiStatus {
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Success => "green",
+            Self::Pending => "pending",
+            Self::Failure => "failing",
+            Self::Unknown => "unknown",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum ReviewDecision {
+    Clean,
+    Commented,
+    ChangesRequested,
+    Approved,
+}
+
+impl ReviewDecision {
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Clean => "clean",
+            Self::Commented => "commented",
+            Self::ChangesRequested => "changes requested",
+            Self::Approved => "approved",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum AttentionReason {
+    CiFailed,
+    ReviewFeedback,
+}
+
+impl AttentionReason {
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::CiFailed => "CI failed",
+            Self::ReviewFeedback => "new review feedback",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum TrackingStatus {
+    Draft,
+    Paused,
+    Watching,
+    NeedsAttention,
+    Running,
+    RetryScheduled,
+    Blocked,
+    Closed,
+    Merged,
+}
+
+impl TrackingStatus {
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Draft => "draft",
+            Self::Paused => "paused",
+            Self::Watching => "watching",
+            Self::NeedsAttention => "needs attention",
+            Self::Running => "running",
+            Self::RetryScheduled => "retrying",
+            Self::Blocked => "blocked",
+            Self::Closed => "closed",
+            Self::Merged => "merged",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PullRequest {
+    pub key: String,
+    pub repo_full_name: String,
+    pub number: u64,
+    pub title: String,
+    pub body: Option<String>,
+    pub url: String,
+    pub author_login: String,
+    pub labels: Vec<String>,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+    pub head_sha: String,
+    pub head_ref: String,
+    pub base_ref: String,
+    pub clone_url: String,
+    pub ssh_url: String,
+    pub ci_status: CiStatus,
+    pub ci_updated_at: Option<DateTime<Utc>>,
+    pub review_decision: ReviewDecision,
+    pub review_comment_count: usize,
+    pub issue_comment_count: usize,
+    pub latest_reviewer_activity_at: Option<DateTime<Utc>>,
+    pub is_draft: bool,
+    pub is_closed: bool,
+    pub is_merged: bool,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct PersistentPrState {
+    #[serde(default)]
+    pub paused: bool,
+    pub last_processed_comment_at: Option<DateTime<Utc>>,
+    pub last_processed_ci_at: Option<DateTime<Utc>>,
+    pub last_processed_head_sha: Option<String>,
+    pub last_run_started_at: Option<DateTime<Utc>>,
+    pub last_run_finished_at: Option<DateTime<Utc>>,
+    pub last_run_status: Option<String>,
+    pub last_run_summary: Option<String>,
+    pub last_run_trigger: Option<AttentionReason>,
+}
+
+#[derive(Debug, Clone)]
+pub struct RunnerState {
+    pub status: TrackingStatus,
+    pub started_at: DateTime<Utc>,
+    pub finished_at: Option<DateTime<Utc>>,
+    pub attempt: u32,
+    pub trigger: AttentionReason,
+    pub summary: String,
+    pub exit_code: Option<i32>,
+}
+
+#[derive(Debug, Clone)]
+pub struct TrackedPr {
+    pub pull_request: PullRequest,
+    pub status: TrackingStatus,
+    pub attention_reason: Option<AttentionReason>,
+    pub persisted: PersistentPrState,
+    pub runner: Option<RunnerState>,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub enum EventLevel {
+    Info,
+    Error,
+}
+
+impl EventLevel {
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Info => "info",
+            Self::Error => "error",
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct ActivityEvent {
+    pub timestamp: DateTime<Utc>,
+    pub level: EventLevel,
+    pub pr_key: Option<String>,
+    pub message: String,
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct DashboardState {
+    pub tracked_prs: BTreeMap<String, TrackedPr>,
+    pub activity: VecDeque<ActivityEvent>,
+    pub last_poll_started_at: Option<DateTime<Utc>>,
+    pub last_poll_finished_at: Option<DateTime<Utc>>,
+    pub next_poll_due_at: Option<DateTime<Utc>>,
+    pub last_poll_error: Option<String>,
+}
+
+impl DashboardState {
+    pub fn push_event(
+        &mut self,
+        level: EventLevel,
+        pr_key: Option<String>,
+        message: impl Into<String>,
+    ) {
+        self.activity.push_front(ActivityEvent {
+            timestamp: Utc::now(),
+            level,
+            pr_key,
+            message: message.into(),
+        });
+
+        while self.activity.len() > MAX_ACTIVITY_EVENTS {
+            self.activity.pop_back();
+        }
+    }
+}

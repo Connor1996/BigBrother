@@ -1,0 +1,30 @@
+[github]
+api_token = "$GITHUB_TOKEN"
+author = "Connor1996"
+query = "is:pr is:open archived:false author:{author}"
+max_prs = 20
+
+[daemon]
+poll_interval_secs = 60
+max_concurrent_runs = 2
+
+[workspace]
+root = ".."
+# Optional explicit overrides when the repo cannot be found as ../<repo-name>.
+# repo_map = { "tidbcloud/tidb-cse" = "../tidb-cse", "tikv/tikv" = "../tikv" }
+git_transport = "ssh"
+
+[agent]
+command = "codex"
+args = ["exec", "--model", "gpt-5.4", "-"]
+additional_instructions = """
+- Prefer using `gh` when you need to inspect the latest PR review comments or CI state.
+- Work only inside the current workspace checkout.
+- Push fixes directly to the PR head branch when validation passes.
+- If you are blocked, explain the blocker clearly in the final output.
+"""
+
+# Legacy compatibility section.
+# The current MVP serves a local web dashboard and does not use native UI refresh settings.
+[ui]
+refresh_hz = 2

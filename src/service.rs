@@ -1,0 +1,605 @@
+use std::{
+    collections::{BTreeMap, HashMap},
+    sync::{Arc, Mutex},
+};
+
+use anyhow::Result;
+use chrono::{DateTime, Utc};
+use futures::future::BoxFuture;
+use tokio::sync::Mutex as AsyncMutex;
+
+use crate::{
+    config::ResolvedConfig,
+    model::{
+        AttentionReason, DashboardState, EventLevel, PersistentPrState, PullRequest, RunnerState,
+        TrackedPr, TrackingStatus,
+    },
+    runner::{RunOutcome, RunRequest},
+    state_store::{PersistentStateFile, StateStore},
+};
+
+pub trait GitHubProvider: Send + Sync {
+    fn fetch_pull_requests(&self) -> BoxFuture<'_, Result<Vec<PullRequest>>>;
+}
+
+pub trait AgentRunner: Send + Sync {
+    fn run(&self, request: RunRequest) -> BoxFuture<'static, RunOutcome>;
+}
+
+#[derive(Debug, Clone)]
+struct ActiveRun {
+    started_at: DateTime<Utc>,
+    trigger: AttentionReason,
+}
+
+#[derive(Debug)]
+struct SupervisorInner {
+    persisted_state: PersistentStateFile,
+    active_runs: HashMap<String, ActiveRun>,
+}
+
+pub struct Supervisor {
+    config: ResolvedConfig,
+    provider: Arc<dyn GitHubProvider>,
+    runner: Arc<dyn AgentRunner>,
+    store: StateStore,
+    shared_state: Arc<Mutex<DashboardState>>,
+    inner: AsyncMutex<SupervisorInner>,
+}
+
+impl Supervisor {
+    pub fn new(
+        config: ResolvedConfig,
+        provider: Arc<dyn GitHubProvider>,
+        runner: Arc<dyn AgentRunner>,
+    ) -> Result<Self> {
+        let store = StateStore::new(&config.state_path);
+        let persisted_state = store.load()?;
+
+        Ok(Self {
+            config,
+            provider,
+            runner,
+            store,
+            shared_state: Arc::new(Mutex::new(DashboardState::default())),
+            inner: AsyncMutex::new(SupervisorInner {
+                persisted_state,
+                active_runs: HashMap::new(),
+            }),
+        })
+    }
+
+    pub fn poll_interval_secs(&self) -> u64 {
+        self.config.daemon.poll_interval_secs.max(5)
+    }
+
+    pub fn shared_state(&self) -> Arc<Mutex<DashboardState>> {
+        self.shared_state.clone()
+    }
+
+    pub fn snapshot(&self) -> DashboardState {
+        self.shared_state
+            .lock()
+            .expect("dashboard state mutex poisoned")
+            .clone()
+    }
+
+    pub fn push_event(
+        &self,
+        level: EventLevel,
+        pr_key: Option<String>,
+        message: impl Into<String>,
+    ) {
+        let mut state = self
+            .shared_state
+            .lock()
+            .expect("dashboard state mutex poisoned");
+        state.push_event(level, pr_key, message);
+    }
+
+    pub async fn set_pr_paused(&self, pr_key: &str, paused: bool) -> Result<Option<TrackedPr>> {
+        let (changed, updated) = {
+            let mut inner = self.inner.lock().await;
+            let mut state = self
+                .shared_state
+                .lock()
+                .expect("dashboard state mutex poisoned");
+
+            let Some(tracked) = state.tracked_prs.get_mut(pr_key) else {
+                return Ok(None);
+            };
+
+            let previous_paused = inner
+                .persisted_state
+                .prs
+                .get(pr_key)
+                .map(|persisted| persisted.paused)
+                .unwrap_or(false);
+            let changed = previous_paused != paused;
+
+            if changed {
+                inner
+                    .persisted_state
+                    .prs
+                    .entry(pr_key.to_owned())
+                    .or_default()
+                    .paused = paused;
+
+                if let Err(error) = self.store.save(&inner.persisted_state) {
+                    inner
+                        .persisted_state
+                        .prs
+                        .entry(pr_key.to_owned())
+                        .or_default()
+                        .paused = previous_paused;
+                    return Err(error);
+                }
+            }
+
+            tracked.persisted.paused = paused;
+            tracked.status = derive_status(
+                &tracked.pull_request,
+                &tracked.persisted,
+                tracked.attention_reason,
+                tracked.runner.is_some(),
+            );
+
+            (changed, tracked.clone())
+        };
+
+        if changed {
+            self.push_event(
+                EventLevel::Info,
+                Some(pr_key.to_owned()),
+                if paused {
+                    format!("paused watching for {pr_key}")
+                } else {
+                    format!("resumed watching for {pr_key}")
+                },
+            );
+        }
+
+        Ok(Some(updated))
+    }
+
+    pub async fn poll_once(&self) -> Result<()> {
+        {
+            let mut state = self
+                .shared_state
+                .lock()
+                .expect("dashboard state mutex poisoned");
+            state.last_poll_started_at = Some(Utc::now());
+            state.last_poll_error = None;
+        }
+
+        let result = self.poll_once_inner().await;
+        let finished_at = Utc::now();
+        let next_poll_due_at = finished_at
+            + chrono::Duration::seconds(
+                self.config.daemon.poll_interval_secs.min(i64::MAX as u64) as i64
+            );
+
+        let mut state = self
+            .shared_state
+            .lock()
+            .expect("dashboard state mutex poisoned");
+        state.last_poll_finished_at = Some(finished_at);
+        state.next_poll_due_at = Some(next_poll_due_at);
+
+        match &result {
+            Ok(()) => {
+                state.last_poll_error = None;
+            }
+            Err(error) => {
+                state.last_poll_error = Some(error.to_string());
+                state.push_event(EventLevel::Error, None, format!("poll failed: {error:#}"));
+            }
+        }
+
+        result
+    }
+
+    async fn poll_once_inner(&self) -> Result<()> {
+        let prs = self.provider.fetch_pull_requests().await?;
+
+        let selected_request = {
+            let mut inner = self.inner.lock().await;
+            refresh_dashboard(
+                &self.shared_state,
+                &prs,
+                &inner.persisted_state,
+                &inner.active_runs,
+                self.config.daemon.poll_interval_secs,
+            );
+
+            let selected = select_run_request(
+                &self.config,
+                &prs,
+                &inner.persisted_state,
+                &inner.active_runs,
+            );
+
+            if let Some((pr, trigger)) = selected {
+                let started_at = Utc::now();
+                inner.active_runs.insert(
+                    pr.key.clone(),
+                    ActiveRun {
+                        started_at,
+                        trigger,
+                    },
+                );
+                refresh_dashboard(
+                    &self.shared_state,
+                    &prs,
+                    &inner.persisted_state,
+                    &inner.active_runs,
+                    self.config.daemon.poll_interval_secs,
+                );
+                self.push_event(
+                    EventLevel::Info,
+                    Some(pr.key.clone()),
+                    format!(
+                        "starting agent run for {} because {}",
+                        pr.key,
+                        trigger.label()
+                    ),
+                );
+
+                Some(RunRequest {
+                    pull_request: pr.clone(),
+                    trigger,
+                    workspace: self.config.workspace.clone(),
+                    agent: self.config.agent.clone(),
+                })
+            } else {
+                None
+            }
+        };
+
+        if let Some(request) = selected_request {
+            let pr_key = request.pull_request.key.clone();
+            let outcome = self.runner.run(request.clone()).await;
+
+            let mut inner = self.inner.lock().await;
+            let active_run = inner.active_runs.remove(&pr_key);
+            {
+                let persisted = inner.persisted_state.prs.entry(pr_key.clone()).or_default();
+                persisted.last_run_started_at = Some(outcome.started_at);
+                persisted.last_run_finished_at = Some(outcome.finished_at);
+                persisted.last_run_status =
+                    Some(if outcome.success { "success" } else { "error" }.to_owned());
+                persisted.last_run_summary = Some(outcome.summary.clone());
+                persisted.last_run_trigger = active_run.as_ref().map(|run| run.trigger);
+                persisted.last_processed_comment_at = outcome.processed_comment_at;
+                persisted.last_processed_ci_at = outcome.processed_ci_at;
+                persisted.last_processed_head_sha = Some(outcome.processed_head_sha.clone());
+            }
+
+            self.store.save(&inner.persisted_state)?;
+
+            refresh_dashboard(
+                &self.shared_state,
+                &prs,
+                &inner.persisted_state,
+                &inner.active_runs,
+                self.config.daemon.poll_interval_secs,
+            );
+
+            self.push_event(
+                if outcome.success {
+                    EventLevel::Info
+                } else {
+                    EventLevel::Error
+                },
+                Some(pr_key.clone()),
+                if outcome.success {
+                    format!("agent run completed for {pr_key}")
+                } else {
+                    format!("agent run failed for {pr_key}: {}", outcome.summary)
+                },
+            );
+        }
+
+        Ok(())
+    }
+}
+
+fn select_run_request<'a>(
+    config: &ResolvedConfig,
+    prs: &'a [PullRequest],
+    persisted_state: &PersistentStateFile,
+    active_runs: &HashMap<String, ActiveRun>,
+) -> Option<(&'a PullRequest, AttentionReason)> {
+    if active_runs.len() >= config.daemon.max_concurrent_runs {
+        return None;
+    }
+
+    prs.iter().find_map(|pr| {
+        if active_runs.contains_key(&pr.key) {
+            return None;
+        }
+
+        let persisted = persisted_state
+            .prs
+            .get(&pr.key)
+            .cloned()
+            .unwrap_or_default();
+        if persisted.paused {
+            return None;
+        }
+        determine_attention_reason(pr, &persisted).map(|reason| (pr, reason))
+    })
+}
+
+fn refresh_dashboard(
+    shared_state: &Arc<Mutex<DashboardState>>,
+    prs: &[PullRequest],
+    persisted_state: &PersistentStateFile,
+    active_runs: &HashMap<String, ActiveRun>,
+    poll_interval_secs: u64,
+) {
+    let tracked = build_tracked_prs(prs, persisted_state, active_runs);
+
+    let mut state = shared_state.lock().expect("dashboard state mutex poisoned");
+    state.tracked_prs = tracked;
+    state.next_poll_due_at = Some(
+        Utc::now() + chrono::Duration::seconds(poll_interval_secs.min(i64::MAX as u64) as i64),
+    );
+}
+
+fn build_tracked_prs(
+    prs: &[PullRequest],
+    persisted_state: &PersistentStateFile,
+    active_runs: &HashMap<String, ActiveRun>,
+) -> BTreeMap<String, TrackedPr> {
+    let mut tracked = BTreeMap::new();
+
+    for pr in prs {
+        let persisted = persisted_state
+            .prs
+            .get(&pr.key)
+            .cloned()
+            .unwrap_or_default();
+        let attention_reason = determine_attention_reason(pr, &persisted);
+        let active_run = active_runs.get(&pr.key);
+
+        tracked.insert(
+            pr.key.clone(),
+            TrackedPr {
+                pull_request: pr.clone(),
+                status: derive_status(pr, &persisted, attention_reason, active_run.is_some()),
+                attention_reason,
+                persisted,
+                runner: active_run.map(|active| RunnerState {
+                    status: TrackingStatus::Running,
+                    started_at: active.started_at,
+                    finished_at: None,
+                    attempt: 1,
+                    trigger: active.trigger,
+                    summary: "agent run started".to_owned(),
+                    exit_code: None,
+                }),
+            },
+        );
+    }
+
+    tracked
+}
+
+pub fn determine_attention_reason(
+    pr: &PullRequest,
+    persisted: &PersistentPrState,
+) -> Option<AttentionReason> {
+    if pr.is_draft || pr.is_closed || pr.is_merged {
+        return None;
+    }
+
+    let has_new_feedback = pr
+        .latest_reviewer_activity_at
+        .zip(persisted.last_processed_comment_at)
+        .map(|(latest, processed)| latest > processed)
+        .unwrap_or(pr.latest_reviewer_activity_at.is_some());
+
+    if has_new_feedback
+        && matches!(
+            pr.review_decision,
+            crate::model::ReviewDecision::Commented
+                | crate::model::ReviewDecision::ChangesRequested
+        )
+    {
+        return Some(AttentionReason::ReviewFeedback);
+    }
+
+    let ci_changed = match (
+        &persisted.last_processed_head_sha,
+        pr.ci_updated_at,
+        persisted.last_processed_ci_at,
+    ) {
+        (Some(last_sha), Some(latest_ci_at), Some(processed_ci_at)) => {
+            last_sha != &pr.head_sha || latest_ci_at > processed_ci_at
+        }
+        _ => pr.ci_updated_at.is_some(),
+    };
+
+    if ci_changed && matches!(pr.ci_status, crate::model::CiStatus::Failure) {
+        return Some(AttentionReason::CiFailed);
+    }
+
+    None
+}
+
+fn derive_status(
+    pr: &PullRequest,
+    persisted: &PersistentPrState,
+    attention_reason: Option<AttentionReason>,
+    is_running: bool,
+) -> TrackingStatus {
+    if is_running {
+        TrackingStatus::Running
+    } else if pr.is_merged {
+        TrackingStatus::Merged
+    } else if pr.is_closed {
+        TrackingStatus::Closed
+    } else if persisted.paused {
+        TrackingStatus::Paused
+    } else if pr.is_draft {
+        TrackingStatus::Draft
+    } else if attention_reason.is_some() {
+        TrackingStatus::NeedsAttention
+    } else if persisted.last_run_status.as_deref() == Some("error")
+        && persisted.last_processed_head_sha.as_deref() == Some(pr.head_sha.as_str())
+    {
+        TrackingStatus::Blocked
+    } else {
+        TrackingStatus::Watching
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::{collections::HashMap, path::PathBuf};
+
+    use chrono::{TimeZone, Utc};
+
+    use super::*;
+    use crate::{
+        config::{
+            AgentConfig, DaemonConfig, GitTransport, ResolvedConfig, ResolvedGitHubConfig,
+            ResolvedWorkspaceConfig, UiConfig,
+        },
+        model::{CiStatus, PullRequest, ReviewDecision},
+        state_store::PersistentStateFile,
+    };
+
+    fn sample_pr() -> PullRequest {
+        PullRequest {
+            key: "openai/symphony#42".to_owned(),
+            repo_full_name: "openai/symphony".to_owned(),
+            number: 42,
+            title: "Fix poller".to_owned(),
+            body: None,
+            url: "https://github.com/openai/symphony/pull/42".to_owned(),
+            author_login: "connor".to_owned(),
+            labels: vec![],
+            created_at: Utc.with_ymd_and_hms(2026, 3, 30, 18, 0, 0).unwrap(),
+            updated_at: Utc.with_ymd_and_hms(2026, 3, 30, 18, 0, 0).unwrap(),
+            head_sha: "abc123".to_owned(),
+            head_ref: "feature".to_owned(),
+            base_ref: "main".to_owned(),
+            clone_url: "https://github.com/openai/symphony.git".to_owned(),
+            ssh_url: "git@github.com:openai/symphony.git".to_owned(),
+            ci_status: CiStatus::Success,
+            ci_updated_at: None,
+            review_decision: ReviewDecision::Clean,
+            review_comment_count: 0,
+            issue_comment_count: 0,
+            latest_reviewer_activity_at: None,
+            is_draft: false,
+            is_closed: false,
+            is_merged: false,
+        }
+    }
+
+    fn sample_config() -> ResolvedConfig {
+        ResolvedConfig {
+            github: ResolvedGitHubConfig {
+                api_token: "token".to_owned(),
+                api_base_url: "https://api.github.test".to_owned(),
+                author: Some("connor".to_owned()),
+                query: None,
+                max_prs: 5,
+            },
+            daemon: DaemonConfig {
+                poll_interval_secs: 30,
+                max_concurrent_runs: 1,
+            },
+            workspace: ResolvedWorkspaceConfig {
+                root: PathBuf::from("/tmp/workspaces"),
+                repo_map: std::collections::BTreeMap::new(),
+                git_transport: GitTransport::Https,
+            },
+            agent: AgentConfig {
+                command: "codex".to_owned(),
+                args: vec![],
+                additional_instructions: None,
+            },
+            ui: UiConfig::default(),
+            state_path: PathBuf::from("/tmp/state.json"),
+        }
+    }
+
+    #[test]
+    fn review_feedback_after_last_processed_timestamp_triggers_attention() {
+        let mut pr = sample_pr();
+        pr.review_decision = ReviewDecision::ChangesRequested;
+        pr.latest_reviewer_activity_at = Some(Utc.with_ymd_and_hms(2026, 3, 30, 18, 5, 0).unwrap());
+
+        let persisted = PersistentPrState {
+            last_processed_comment_at: Some(Utc.with_ymd_and_hms(2026, 3, 30, 18, 0, 0).unwrap()),
+            ..PersistentPrState::default()
+        };
+
+        assert_eq!(
+            determine_attention_reason(&pr, &persisted),
+            Some(AttentionReason::ReviewFeedback)
+        );
+    }
+
+    #[test]
+    fn unchanged_failing_ci_does_not_requeue_same_sha_forever() {
+        let mut pr = sample_pr();
+        pr.ci_status = CiStatus::Failure;
+        pr.ci_updated_at = Some(Utc.with_ymd_and_hms(2026, 3, 30, 18, 5, 0).unwrap());
+
+        let persisted = PersistentPrState {
+            last_processed_ci_at: pr.ci_updated_at,
+            last_processed_head_sha: Some(pr.head_sha.clone()),
+            ..PersistentPrState::default()
+        };
+
+        assert_eq!(determine_attention_reason(&pr, &persisted), None);
+    }
+
+    #[test]
+    fn paused_prs_are_not_selected_for_runs() {
+        let mut pr = sample_pr();
+        pr.ci_status = CiStatus::Failure;
+        pr.ci_updated_at = Some(Utc.with_ymd_and_hms(2026, 3, 30, 18, 5, 0).unwrap());
+
+        let persisted_state = PersistentStateFile {
+            prs: [(
+                pr.key.clone(),
+                PersistentPrState {
+                    paused: true,
+                    ..PersistentPrState::default()
+                },
+            )]
+            .into_iter()
+            .collect(),
+        };
+
+        assert!(
+            select_run_request(&sample_config(), &[pr], &persisted_state, &HashMap::new())
+                .is_none(),
+            "paused PR should never be scheduled automatically",
+        );
+    }
+
+    #[test]
+    fn paused_prs_report_paused_status() {
+        let pr = sample_pr();
+        let persisted = PersistentPrState {
+            paused: true,
+            ..PersistentPrState::default()
+        };
+
+        assert_eq!(
+            derive_status(&pr, &persisted, None, false),
+            TrackingStatus::Paused
+        );
+        assert_eq!(
+            derive_status(&pr, &persisted, Some(AttentionReason::CiFailed), true),
+            TrackingStatus::Running
+        );
+    }
+}

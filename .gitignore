@@ -1,0 +1,5 @@
+/target/
+/symphony-rs.toml
+/symphony-rs-state.json
+/workspaces/
+.DS_Store
