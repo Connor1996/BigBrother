@@ -545,6 +545,7 @@ The current JSON-file spike can remain as a temporary migration source, but SQLi
 Minimum API surface for MVP:
 
 - `GET /api/health`
+- `GET /api/activity`
 - `GET /api/prs`
 - `POST /api/prs/pause` with a JSON body containing the PR key and desired paused state
 - an equivalent local test hook for manual triggering if needed
@@ -556,6 +557,7 @@ Optional for MVP:
 ### 19.1 Read APIs
 
 - `GET /api/health`
+- `GET /api/activity`
 - `GET /api/state`
 - `GET /api/prs`
 - `GET /api/prs/:repo/:number`
@@ -642,6 +644,13 @@ Panels:
 ### 20.3 Activity Feed
 
 Global chronological feed of poll cycles, state transitions, run starts, run finishes, and notification events.
+
+The feed should make daemon progress legible even when no PR is currently running, including:
+
+- scheduled poll start events
+- targeted re-check start events
+- explicit idle/no-actionable poll summaries
+- runner-slot backpressure messages when work exists but concurrency is full
 
 ### 20.4 Control Bar
 

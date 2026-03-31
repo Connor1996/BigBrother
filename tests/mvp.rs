@@ -264,6 +264,49 @@ async fn pause_api_toggles_review_wait_state_for_a_tracked_pr() {
 }
 
 #[tokio::test]
+async fn activity_api_exposes_recent_daemon_events() {
+    let supervisor = Arc::new(
+        Supervisor::new(
+            sample_config(
+                unique_temp_path("state.json"),
+                unique_temp_path("workspaces"),
+            ),
+            Arc::new(FakeGitHubProvider {
+                prs: vec![idle_pr()],
+            }),
+            Arc::new(FakeAgentRunner {
+                invocations: Arc::new(AtomicUsize::new(0)),
+                started: Arc::new(Semaphore::new(0)),
+                allow_finish: Arc::new(Semaphore::new(1)),
+            }),
+        )
+        .expect("supervisor should initialize"),
+    );
+
+    supervisor
+        .poll_once()
+        .await
+        .expect("poll should record daemon activity");
+
+    let payload = get_json(supervisor, "/api/activity").await;
+    let events = payload["events"].as_array().expect("activity events array");
+    assert!(
+        events.iter().any(|event| {
+            event["message"] == json!("starting scheduled daemon poll")
+                && event["level"] == json!("info")
+        }),
+        "activity should include the poll-start event: {events:?}",
+    );
+    assert!(
+        events.iter().any(|event| {
+            event["message"] == json!("daemon poll found no actionable PRs among 1 tracked PRs")
+                && event["level"] == json!("info")
+        }),
+        "activity should include the idle poll summary: {events:?}",
+    );
+}
+
+#[tokio::test]
 async fn approved_green_pr_is_exposed_as_waiting_merge() {
     let supervisor = Arc::new(
         Supervisor::new(

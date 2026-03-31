@@ -206,7 +206,6 @@ impl Supervisor {
             state.last_poll_started_at = Some(Utc::now());
             state.last_poll_error = None;
         }
-
         let result = self.poll_once_inner(preferred_pr_key, allow_fallback).await;
         let finished_at = Utc::now();
         let next_poll_due_at = finished_at
@@ -258,10 +257,20 @@ impl Supervisor {
         preferred_pr_key: Option<&str>,
         allow_fallback: bool,
     ) -> Result<()> {
+        self.push_event(
+            EventLevel::Info,
+            preferred_pr_key.map(str::to_owned),
+            match preferred_pr_key {
+                Some(pr_key) => format!("starting targeted daemon check for {pr_key}"),
+                None => "starting scheduled daemon poll".to_owned(),
+            },
+        );
+
         let prs = self.provider.fetch_pull_requests().await?;
 
         let selected_request = {
             let mut inner = self.inner.lock().await;
+            let active_run_count = inner.active_runs.len();
             refresh_dashboard(
                 &self.shared_state,
                 &prs,
@@ -313,6 +322,37 @@ impl Supervisor {
                     output_updates: None,
                 })
             } else {
+                if let Some(pr_key) = preferred_pr_key {
+                    self.push_event(
+                        EventLevel::Info,
+                        Some(pr_key.to_owned()),
+                        if active_run_count >= self.config.daemon.max_concurrent_runs {
+                            format!(
+                                "immediate re-check for {pr_key} is waiting for a free runner slot"
+                            )
+                        } else {
+                            format!("immediate re-check found no actionable work for {pr_key}")
+                        },
+                    );
+                } else if active_run_count >= self.config.daemon.max_concurrent_runs {
+                    self.push_event(
+                        EventLevel::Info,
+                        None,
+                        format!(
+                            "daemon poll is waiting for a free runner slot ({active_run_count}/{} active)",
+                            self.config.daemon.max_concurrent_runs
+                        ),
+                    );
+                } else {
+                    self.push_event(
+                        EventLevel::Info,
+                        None,
+                        format!(
+                            "daemon poll found no actionable PRs among {} tracked PRs",
+                            prs.len()
+                        ),
+                    );
+                }
                 None
             }
         };

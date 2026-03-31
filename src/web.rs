@@ -18,7 +18,10 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use tokio::net::TcpListener;
 
-use crate::{model::TrackedPr, service::Supervisor};
+use crate::{
+    model::{ActivityEvent, TrackedPr},
+    service::Supervisor,
+};
 
 const INDEX_HTML: &str = r#"<!doctype html>
 <html lang="en">
@@ -111,6 +114,10 @@ const INDEX_HTML: &str = r#"<!doctype html>
 
     .panel {
       overflow: hidden;
+    }
+
+    .panel + .panel {
+      margin-top: 18px;
     }
 
     table {
@@ -242,6 +249,58 @@ const INDEX_HTML: &str = r#"<!doctype html>
       color: var(--muted);
     }
 
+    .panel-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      padding: 18px 18px 0;
+    }
+
+    .panel-title {
+      margin: 0;
+      font-size: 1rem;
+      letter-spacing: 0.02em;
+    }
+
+    .activity-feed {
+      padding: 12px 18px 18px;
+      display: grid;
+      gap: 10px;
+    }
+
+    .activity-item {
+      padding: 12px 14px;
+      border-radius: 16px;
+      border: 1px solid rgba(30, 34, 40, 0.08);
+      background: rgba(255, 255, 255, 0.62);
+    }
+
+    .activity-item.error {
+      border-color: rgba(165, 63, 63, 0.18);
+      background: rgba(165, 63, 63, 0.05);
+    }
+
+    .activity-meta {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px 10px;
+      align-items: center;
+      margin-bottom: 6px;
+      color: var(--muted);
+      font-size: 0.8rem;
+      text-transform: uppercase;
+      letter-spacing: 0.06em;
+    }
+
+    .activity-message {
+      margin: 0;
+      color: var(--ink);
+      line-height: 1.5;
+      white-space: pre-wrap;
+      word-break: break-word;
+    }
+
     @media (max-width: 900px) {
       table, thead, tbody, th, td, tr {
         display: block;
@@ -315,6 +374,16 @@ const INDEX_HTML: &str = r#"<!doctype html>
           <tr><td colspan="7" class="empty">Loading pull requests...</td></tr>
         </tbody>
       </table>
+    </section>
+
+    <section class="panel">
+      <div class="panel-header">
+        <h2 class="panel-title">Daemon Activity</h2>
+        <span id="activity-count" class="output-label">-</span>
+      </div>
+      <div id="activity-feed" class="activity-feed">
+        <div class="empty">Loading daemon activity...</div>
+      </div>
     </section>
   </main>
 
@@ -445,14 +514,37 @@ const INDEX_HTML: &str = r#"<!doctype html>
       `).join("");
     }
 
+    function renderActivity(events) {
+      const container = document.getElementById("activity-feed");
+      document.getElementById("activity-count").textContent = `${events.length} recent events`;
+
+      if (!events.length) {
+        container.innerHTML = '<div class="empty">No daemon activity has been recorded yet.</div>';
+        return;
+      }
+
+      container.innerHTML = events.map((event) => `
+        <article class="activity-item ${escapeHtml(event.level)}">
+          <div class="activity-meta">
+            <span>${escapeHtml(event.level)}</span>
+            <span>${escapeHtml(fmtTime(event.timestamp))}</span>
+            <span>${escapeHtml(event.pr_key || "global")}</span>
+          </div>
+          <p class="activity-message">${escapeHtml(event.message)}</p>
+        </article>
+      `).join("");
+    }
+
     async function refresh() {
-      const [healthRes, prsRes] = await Promise.all([
+      const [healthRes, prsRes, activityRes] = await Promise.all([
         fetch("/api/health"),
-        fetch("/api/prs")
+        fetch("/api/prs"),
+        fetch("/api/activity")
       ]);
 
       const health = await healthRes.json();
       const prsPayload = await prsRes.json();
+      const activityPayload = await activityRes.json();
 
       document.getElementById("health-status").textContent = health.ok ? "Healthy" : "Attention needed";
       document.getElementById("health-count").textContent = String(health.tracked_prs);
@@ -460,6 +552,7 @@ const INDEX_HTML: &str = r#"<!doctype html>
       document.getElementById("health-poll").textContent = fmtTime(health.last_poll_finished_at);
       latestPrs = prsPayload.prs || [];
       renderPrs(latestPrs);
+      renderActivity(activityPayload.events || []);
     }
 
     refresh().catch((error) => {
@@ -745,6 +838,19 @@ struct PullRequestsResponse {
 }
 
 #[derive(Debug, Serialize)]
+struct ActivityResponse {
+    events: Vec<ActivitySummary>,
+}
+
+#[derive(Debug, Serialize)]
+struct ActivitySummary {
+    timestamp: DateTime<Utc>,
+    level: String,
+    pr_key: Option<String>,
+    message: String,
+}
+
+#[derive(Debug, Serialize)]
 struct PullRequestSummary {
     key: String,
     repo_full_name: String,
@@ -788,6 +894,7 @@ pub fn router(supervisor: Arc<Supervisor>) -> Router {
         .route("/", get(index))
         .route("/pr", get(pr_detail_page))
         .route("/api/health", get(health))
+        .route("/api/activity", get(activity))
         .route("/api/prs", get(list_prs))
         .route("/api/pr", get(get_pr))
         .route("/api/prs/pause", post(set_pr_paused))
@@ -835,6 +942,13 @@ async fn health(State(supervisor): State<Arc<Supervisor>>) -> Json<HealthRespons
         last_poll_finished_at: snapshot.last_poll_finished_at,
         next_poll_due_at: snapshot.next_poll_due_at,
         last_poll_error: snapshot.last_poll_error,
+    })
+}
+
+async fn activity(State(supervisor): State<Arc<Supervisor>>) -> Json<ActivityResponse> {
+    let snapshot = supervisor.snapshot();
+    Json(ActivityResponse {
+        events: snapshot.activity.iter().map(summarize_activity).collect(),
     })
 }
 
@@ -919,6 +1033,15 @@ fn summarize_pr(tracked: &TrackedPr) -> PullRequestSummary {
             .as_ref()
             .map(|runner| runner.live_output.clone())
             .unwrap_or_else(|| tracked.persisted.last_run_output.clone()),
+    }
+}
+
+fn summarize_activity(event: &ActivityEvent) -> ActivitySummary {
+    ActivitySummary {
+        timestamp: event.timestamp,
+        level: event.level.label().to_owned(),
+        pr_key: event.pr_key.clone(),
+        message: event.message.clone(),
     }
 }
 
