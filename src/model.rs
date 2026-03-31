@@ -47,6 +47,7 @@ impl ReviewDecision {
 pub enum AttentionReason {
     CiFailed,
     ReviewFeedback,
+    MergeConflict,
 }
 
 impl AttentionReason {
@@ -54,6 +55,7 @@ impl AttentionReason {
         match self {
             Self::CiFailed => "CI failed",
             Self::ReviewFeedback => "new review feedback",
+            Self::MergeConflict => "merge conflict with base branch",
         }
     }
 }
@@ -62,6 +64,7 @@ impl AttentionReason {
 pub enum TrackingStatus {
     Draft,
     Paused,
+    Conflict,
     WaitingReview,
     WaitingMerge,
     NeedsAttention,
@@ -77,6 +80,7 @@ impl TrackingStatus {
         match self {
             Self::Draft => "draft",
             Self::Paused => "paused",
+            Self::Conflict => "conflict",
             Self::WaitingReview => "waiting review",
             Self::WaitingMerge => "waiting merge",
             Self::NeedsAttention => "needs attention",
@@ -103,6 +107,7 @@ pub struct PullRequest {
     pub updated_at: DateTime<Utc>,
     pub head_sha: String,
     pub head_ref: String,
+    pub base_sha: String,
     pub base_ref: String,
     pub clone_url: String,
     pub ssh_url: String,
@@ -113,6 +118,8 @@ pub struct PullRequest {
     pub review_comment_count: usize,
     pub issue_comment_count: usize,
     pub latest_reviewer_activity_at: Option<DateTime<Utc>>,
+    pub has_conflicts: bool,
+    pub mergeable_state: Option<String>,
     pub is_draft: bool,
     pub is_closed: bool,
     pub is_merged: bool,
@@ -125,6 +132,7 @@ pub struct PersistentPrState {
     pub last_processed_comment_at: Option<DateTime<Utc>>,
     pub last_processed_ci_at: Option<DateTime<Utc>>,
     pub last_processed_head_sha: Option<String>,
+    pub last_processed_base_sha: Option<String>,
     pub last_run_started_at: Option<DateTime<Utc>>,
     pub last_run_finished_at: Option<DateTime<Utc>>,
     pub last_run_status: Option<String>,
@@ -134,6 +142,7 @@ pub struct PersistentPrState {
     pub consecutive_failures: u32,
     pub retry_trigger: Option<AttentionReason>,
     pub retry_head_sha: Option<String>,
+    pub retry_base_sha: Option<String>,
     pub retry_comment_at: Option<DateTime<Utc>>,
     pub retry_ci_at: Option<DateTime<Utc>>,
 }
@@ -143,6 +152,7 @@ impl PersistentPrState {
         self.consecutive_failures = 0;
         self.retry_trigger = None;
         self.retry_head_sha = None;
+        self.retry_base_sha = None;
         self.retry_comment_at = None;
         self.retry_ci_at = None;
     }

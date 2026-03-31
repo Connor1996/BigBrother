@@ -26,10 +26,13 @@ pub fn build_prompt(pr: &PullRequest, reason: AttentionReason, extra: Option<&st
          URL: {url}\n\
          Title: {title}\n\
          Base branch: {base_ref}\n\
+         Base SHA: {base_sha}\n\
          Head branch: {head_ref}\n\
          Head SHA: {head_sha}\n\
          CI status: {ci_status}\n\
          Review status: {review_status}\n\
+         Mergeable state: {mergeable_state}\n\
+         Has conflicts: {has_conflicts}\n\
          Review comments: {review_comments}\n\
          Issue comments: {issue_comments}\n\
          Latest reviewer activity: {reviewer_activity}\n\
@@ -51,10 +54,13 @@ pub fn build_prompt(pr: &PullRequest, reason: AttentionReason, extra: Option<&st
         url = pr.url,
         title = pr.title,
         base_ref = pr.base_ref,
+        base_sha = pr.base_sha,
         head_ref = pr.head_ref,
         head_sha = pr.head_sha,
         ci_status = pr.ci_status.label(),
         review_status = pr.review_decision.label(),
+        mergeable_state = pr.mergeable_state.as_deref().unwrap_or("unknown"),
+        has_conflicts = if pr.has_conflicts { "yes" } else { "no" },
         review_comments = pr.review_comment_count,
         issue_comments = pr.issue_comment_count,
         reviewer_activity = reviewer_activity,

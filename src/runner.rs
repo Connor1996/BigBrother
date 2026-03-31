@@ -35,6 +35,28 @@ pub struct RunOutcome {
     pub processed_head_sha: String,
 }
 
+#[derive(Debug, Clone, Default)]
+struct WorkspaceSyncReport {
+    merged_base_branch: bool,
+    merge_conflicts_present: bool,
+}
+
+impl WorkspaceSyncReport {
+    fn prompt_note(&self) -> Option<&'static str> {
+        if self.merge_conflicts_present {
+            Some(
+                "- Workspace preparation already merged the latest base branch into the local PR branch and Git reported merge conflicts.\n- Start by resolving the existing conflicts in the working tree, then run validation, commit the resolution, and push if safe.",
+            )
+        } else if self.merged_base_branch {
+            Some(
+                "- Workspace preparation already merged the latest base branch into the local PR branch before this run.\n- Validate the merged result, make any required follow-up fixes, then commit and push if safe.",
+            )
+        } else {
+            None
+        }
+    }
+}
+
 #[derive(Debug, Default, Clone, Copy)]
 pub struct ShellAgentRunner;
 
@@ -76,17 +98,22 @@ pub async fn run(request: RunRequest) -> RunOutcome {
 
 async fn run_inner(request: &RunRequest) -> Result<(Option<i32>, String)> {
     let workspace_path = resolve_checkout(&request.workspace, &request.pull_request).await?;
-    sync_workspace(
+    let sync_report = sync_workspace(
         &workspace_path,
         request.workspace.git_transport,
         &request.pull_request,
     )
     .await?;
 
+    let prompt_instructions = combine_operator_instructions(
+        request.agent.additional_instructions.as_deref(),
+        sync_report.prompt_note(),
+    );
+
     let prompt = build_prompt(
         &request.pull_request,
         request.trigger,
-        request.agent.additional_instructions.as_deref(),
+        prompt_instructions.as_deref(),
     );
 
     let mut command = Command::new(&request.agent.command);
@@ -103,11 +130,39 @@ async fn run_inner(request: &RunRequest) -> Result<(Option<i32>, String)> {
     command.env("SYMPHONY_PR_URL", &request.pull_request.url);
     command.env("SYMPHONY_PR_HEAD_REF", &request.pull_request.head_ref);
     command.env("SYMPHONY_PR_BASE_REF", &request.pull_request.base_ref);
+    command.env("SYMPHONY_PR_BASE_SHA", &request.pull_request.base_sha);
     command.env("SYMPHONY_PR_HEAD_SHA", &request.pull_request.head_sha);
+    command.env(
+        "SYMPHONY_PR_HAS_CONFLICT",
+        if request.pull_request.has_conflicts {
+            "1"
+        } else {
+            "0"
+        },
+    );
+    if let Some(mergeable_state) = request.pull_request.mergeable_state.as_deref() {
+        command.env("SYMPHONY_PR_MERGEABLE_STATE", mergeable_state);
+    }
     command.env("SYMPHONY_TRIGGER", request.trigger.label());
     command.env(
         "SYMPHONY_WORKSPACE",
         workspace_path.to_string_lossy().to_string(),
+    );
+    command.env(
+        "SYMPHONY_BASE_BRANCH_MERGED",
+        if sync_report.merged_base_branch {
+            "1"
+        } else {
+            "0"
+        },
+    );
+    command.env(
+        "SYMPHONY_WORKSPACE_CONFLICTS_PRESENT",
+        if sync_report.merge_conflicts_present {
+            "1"
+        } else {
+            "0"
+        },
     );
 
     let mut child = command
@@ -182,7 +237,11 @@ async fn resolve_checkout(
     Ok(path)
 }
 
-async fn sync_workspace(workspace: &Path, transport: GitTransport, pr: &PullRequest) -> Result<()> {
+async fn sync_workspace(
+    workspace: &Path,
+    transport: GitTransport,
+    pr: &PullRequest,
+) -> Result<WorkspaceSyncReport> {
     let remote_url = match transport {
         GitTransport::Ssh => pr.ssh_url.as_str(),
         GitTransport::Https => pr.clone_url.as_str(),
@@ -219,6 +278,13 @@ async fn sync_workspace(workspace: &Path, transport: GitTransport, pr: &PullRequ
     .context("failed to fetch head branch")?;
     run_command(
         "git",
+        &["fetch", remote_name, &pr.base_ref],
+        Some(workspace),
+    )
+    .await
+    .context("failed to fetch base branch")?;
+    run_command(
+        "git",
         &[
             "checkout",
             "-B",
@@ -242,7 +308,7 @@ async fn sync_workspace(workspace: &Path, transport: GitTransport, pr: &PullRequ
     .await
     .context("failed to set PR branch upstream")?;
 
-    Ok(())
+    merge_base_branch(workspace, remote_name, pr).await
 }
 
 async fn run_command(program: &str, args: &[&str], cwd: Option<&Path>) -> Result<()> {
@@ -297,6 +363,79 @@ async fn run_command_output(
         .with_context(|| format!("failed running {program}"))
 }
 
+async fn merge_base_branch(
+    workspace: &Path,
+    remote_name: &str,
+    pr: &PullRequest,
+) -> Result<WorkspaceSyncReport> {
+    if pr.base_ref == pr.head_ref {
+        return Ok(WorkspaceSyncReport::default());
+    }
+
+    let merge_target = format!("{remote_name}/{}", pr.base_ref);
+    let output = run_command_output(
+        "git",
+        &["merge", "--no-edit", "--no-ff", &merge_target],
+        Some(workspace),
+    )
+    .await
+    .context("failed to run git merge for base branch")?;
+    let summary = summarize_command_result(&output);
+
+    if output.status.success() {
+        return Ok(WorkspaceSyncReport {
+            merged_base_branch: !is_merge_already_up_to_date(&summary),
+            merge_conflicts_present: false,
+        });
+    }
+
+    if has_unmerged_paths(workspace).await? {
+        return Ok(WorkspaceSyncReport {
+            merged_base_branch: true,
+            merge_conflicts_present: true,
+        });
+    }
+
+    Err(anyhow!(
+        "failed to merge base branch {merge_target}: {summary}"
+    ))
+}
+
+async fn has_unmerged_paths(workspace: &Path) -> Result<bool> {
+    let output = run_command_capture(
+        "git",
+        &["diff", "--name-only", "--diff-filter=U"],
+        Some(workspace),
+    )
+    .await
+    .context("failed to detect unmerged paths")?;
+
+    Ok(!output.trim().is_empty())
+}
+
+fn summarize_command_result(output: &std::process::Output) -> String {
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    summarize_output(&stdout, &stderr)
+}
+
+fn is_merge_already_up_to_date(summary: &str) -> bool {
+    let normalized = summary.to_ascii_lowercase();
+    normalized.contains("already up to date")
+}
+
+fn combine_operator_instructions(base: Option<&str>, extra: Option<&str>) -> Option<String> {
+    match (
+        base.map(str::trim).filter(|value| !value.is_empty()),
+        extra.map(str::trim).filter(|value| !value.is_empty()),
+    ) {
+        (Some(base), Some(extra)) => Some(format!("{base}\n{extra}")),
+        (Some(base), None) => Some(base.to_owned()),
+        (None, Some(extra)) => Some(extra.to_owned()),
+        (None, None) => None,
+    }
+}
+
 fn repo_dir_name(repo_full_name: &str) -> &str {
     repo_full_name
         .rsplit('/')
@@ -325,6 +464,7 @@ fn summarize_output(stdout: &str, stderr: &str) -> String {
 mod tests {
     use std::{
         collections::BTreeMap,
+        fs,
         sync::atomic::{AtomicUsize, Ordering},
         time::{SystemTime, UNIX_EPOCH},
     };
@@ -351,6 +491,7 @@ mod tests {
             updated_at: Utc::now(),
             head_sha: "abc123".to_owned(),
             head_ref: "feature/test".to_owned(),
+            base_sha: "def456".to_owned(),
             base_ref: "main".to_owned(),
             clone_url: format!("https://github.com/{repo_full_name}.git"),
             ssh_url: format!("git@github.com:{repo_full_name}.git"),
@@ -361,6 +502,8 @@ mod tests {
             review_comment_count: 0,
             issue_comment_count: 0,
             latest_reviewer_activity_at: None,
+            has_conflicts: false,
+            mergeable_state: Some("clean".to_owned()),
             is_draft: false,
             is_closed: false,
             is_merged: false,
@@ -399,6 +542,134 @@ mod tests {
         run_command("git", &["config", "user.name", "Symphony RS"], Some(path))
             .await
             .expect("git user should configure");
+        run_command("git", &["branch", "-M", "main"], Some(path))
+            .await
+            .expect("default branch should be main");
+    }
+
+    async fn commit_all(path: &Path, message: &str) {
+        run_command("git", &["add", "."], Some(path))
+            .await
+            .expect("git add should succeed");
+        run_command("git", &["commit", "-m", message], Some(path))
+            .await
+            .expect("git commit should succeed");
+    }
+
+    async fn init_bare_repo(path: &Path) {
+        let bare = path.to_str().expect("path should be utf-8");
+        run_command("git", &["init", "--bare", bare], None)
+            .await
+            .expect("bare repo should initialize");
+    }
+
+    async fn clone_repo(remote: &Path, path: &Path) {
+        let remote = remote.to_str().expect("remote path should be utf-8");
+        let path = path.to_str().expect("clone path should be utf-8");
+        run_command("git", &["clone", remote, path], None)
+            .await
+            .expect("repo should clone");
+    }
+
+    async fn prepare_workspace_scenario(
+        with_conflict: bool,
+    ) -> (ResolvedWorkspaceConfig, PullRequest) {
+        let remote = unique_temp_path("remote.git");
+        let seed = unique_temp_path("seed");
+        let root = unique_temp_path("root");
+        let workspace_repo = root.join("symphony");
+
+        init_bare_repo(&remote).await;
+        init_git_repo(&seed).await;
+        fs::write(seed.join("shared.txt"), "base\n").expect("seed file should write");
+        commit_all(&seed, "initial").await;
+
+        let remote_str = remote.to_str().expect("remote path should be utf-8");
+        run_command("git", &["remote", "add", "origin", remote_str], Some(&seed))
+            .await
+            .expect("origin remote should add");
+        run_command("git", &["push", "-u", "origin", "main"], Some(&seed))
+            .await
+            .expect("main should push");
+        run_command(
+            "git",
+            &["symbolic-ref", "HEAD", "refs/heads/main"],
+            Some(&remote),
+        )
+        .await
+        .expect("bare HEAD should point at main");
+
+        run_command("git", &["checkout", "-b", "feature/test"], Some(&seed))
+            .await
+            .expect("feature branch should create");
+        if with_conflict {
+            fs::write(seed.join("shared.txt"), "feature change\n")
+                .expect("feature edit should write");
+        } else {
+            fs::write(seed.join("feature.txt"), "feature change\n")
+                .expect("feature file should write");
+        }
+        commit_all(&seed, "feature change").await;
+        run_command(
+            "git",
+            &["push", "-u", "origin", "feature/test"],
+            Some(&seed),
+        )
+        .await
+        .expect("feature branch should push");
+
+        run_command("git", &["checkout", "main"], Some(&seed))
+            .await
+            .expect("main should check out");
+        if with_conflict {
+            fs::write(seed.join("shared.txt"), "main change\n").expect("main edit should write");
+        } else {
+            fs::write(seed.join("base.txt"), "main change\n").expect("base file should write");
+        }
+        commit_all(&seed, "main change").await;
+        run_command("git", &["push", "origin", "main"], Some(&seed))
+            .await
+            .expect("main should push again");
+
+        std::fs::create_dir_all(&root).expect("workspace root should exist");
+        clone_repo(&remote, &workspace_repo).await;
+        run_command(
+            "git",
+            &["config", "user.email", "symphony-rs@example.com"],
+            Some(&workspace_repo),
+        )
+        .await
+        .expect("workspace email should configure");
+        run_command(
+            "git",
+            &["config", "user.name", "Symphony RS"],
+            Some(&workspace_repo),
+        )
+        .await
+        .expect("workspace user should configure");
+
+        let base_sha = run_command_capture("git", &["rev-parse", "main"], Some(&seed))
+            .await
+            .expect("base sha should resolve");
+        let head_sha = run_command_capture("git", &["rev-parse", "feature/test"], Some(&seed))
+            .await
+            .expect("head sha should resolve");
+
+        let mut pr = sample_pr("openai/symphony");
+        pr.clone_url = remote_str.to_owned();
+        pr.ssh_url = remote_str.to_owned();
+        pr.head_ref = "feature/test".to_owned();
+        pr.base_ref = "main".to_owned();
+        pr.head_sha = head_sha;
+        pr.base_sha = base_sha;
+        pr.has_conflicts = with_conflict;
+        pr.mergeable_state = Some(if with_conflict {
+            "dirty".to_owned()
+        } else {
+            "clean".to_owned()
+        });
+
+        (sample_workspace(root), pr)
     }
 
     #[tokio::test]
@@ -477,6 +748,64 @@ mod tests {
         assert!(
             error.to_string().contains("tracked changes"),
             "error should explain that dirty repositories are rejected",
+        );
+    }
+
+    #[tokio::test]
+    async fn sync_workspace_merges_base_branch_when_merge_is_clean() {
+        let (workspace, pr) = prepare_workspace_scenario(false).await;
+        let repo = workspace.root.join("symphony");
+
+        let report = sync_workspace(&repo, workspace.git_transport, &pr)
+            .await
+            .expect("clean merge should succeed");
+
+        assert!(report.merged_base_branch, "base branch should be merged");
+        assert!(
+            !report.merge_conflicts_present,
+            "clean merge should not leave conflicts behind"
+        );
+        assert!(
+            repo.join("base.txt").exists(),
+            "workspace should contain the file introduced on main after the merge"
+        );
+        assert!(
+            !has_unmerged_paths(&repo)
+                .await
+                .expect("unmerged path detection should work"),
+            "clean merge should leave no unmerged paths",
+        );
+    }
+
+    #[tokio::test]
+    async fn sync_workspace_keeps_conflict_markers_for_agent_resolution() {
+        let (workspace, pr) = prepare_workspace_scenario(true).await;
+        let repo = workspace.root.join("symphony");
+
+        let report = sync_workspace(&repo, workspace.git_transport, &pr)
+            .await
+            .expect("conflicted merge should still return a sync report");
+
+        assert!(
+            report.merged_base_branch,
+            "merge attempt should have happened"
+        );
+        assert!(
+            report.merge_conflicts_present,
+            "conflicted merge should be reported back to the runner"
+        );
+        assert!(
+            has_unmerged_paths(&repo)
+                .await
+                .expect("unmerged path detection should work"),
+            "workspace should keep the unmerged files for the agent",
+        );
+
+        let conflict_contents =
+            fs::read_to_string(repo.join("shared.txt")).expect("conflicted file should exist");
+        assert!(
+            conflict_contents.contains("<<<<<<<"),
+            "conflicted file should include Git conflict markers",
         );
     }
 }

@@ -153,6 +153,7 @@ The user opens the UI and sees:
 - current CI status
 - current review state
 - whether the daemon is idle, acting, retrying, blocked, waiting for review, or waiting for merge
+- whether a PR is currently blocked by merge conflicts with the base branch
 - what happened most recently for each PR
 
 ### 6.2 Autonomous Repair
@@ -272,6 +273,9 @@ Each tracked PR should normalize to a durable local record with:
 - `review_lifecycle_state`
 - `merge_ready`
 - `merge_blockers`
+- `base_sha`
+- `has_conflicts`
+- `mergeable_state`
 - `attention_reason`
 - `tracking_status`
 - `paused`
@@ -295,6 +299,7 @@ Canonical statuses:
 
 - `draft`
 - `paused`
+- `conflict`
 - `waiting_review`
 - `waiting_merge`
 - `needs_attention`
@@ -314,6 +319,7 @@ The daemon should consider a PR actionable when at least one of these becomes tr
 3. a non-author reviewer leaves a new top-level PR comment
 4. a review transitions to `changes_requested`
 5. policy explicitly allows acting on `commented` reviews
+6. the PR can no longer merge cleanly with the latest base branch
 
 The daemon should not re-trigger forever on the same unchanged signal. It must compare new data against persisted processed markers.
 
@@ -330,6 +336,9 @@ In addition to attention triggers, the review panel needs a clear passive-state 
 - `waiting_review`
   The PR is open, not draft, not paused, not merged, not currently actionable, and does not yet
   satisfy merge-ready policy.
+- `conflict`
+  The PR is open and has a detected merge conflict against the current base branch snapshot. This
+  state should override passive wait states and surface clearly in the review panel.
 - `waiting_merge`
   The PR is open, not draft, not paused, not merged, has at least one non-author approval, and
   satisfies merge-ready policy for the current implementation tier.
@@ -339,6 +348,7 @@ For the first implementation tier, merge-ready policy should at least require:
 - CI status is green
 - review decision is approved
 - PR is not draft, closed, or merged
+- no merge conflict is currently detected
 
 Later tiers may additionally incorporate:
 
@@ -378,6 +388,11 @@ Rules:
 - resolved checkout paths must point to an existing local git repository
 - automatically discovered paths must stay under `workspace.root`
 - the daemon must sync the tracked PR branch before each run
+- the daemon must also fetch the latest base branch before each run
+- the daemon should attempt to merge the fetched base branch into the checked-out PR branch before
+  launching the agent
+- if that merge produces conflicts, the daemon should keep the conflicted merge state in the
+  workspace so the agent can resolve it, instead of failing immediately
 - the daemon must not create a brand-new clone as part of the normal PR execution path
 - the daemon should refuse to reuse a checkout with tracked local modifications
 
@@ -393,6 +408,7 @@ Each run includes:
 - trigger reason
 - PR context
 - workspace path
+- workspace sync / base-merge result
 - agent command
 - timeout
 - stdout and stderr capture
@@ -405,7 +421,10 @@ The agent prompt must include:
 - trigger reason
 - CI and review summary
 - current base and head refs
+- current base and head SHAs
 - current head SHA
+- whether the base branch was auto-merged into the workspace before the run
+- whether merge conflicts are already present in the working tree
 - explicit instruction to work only in the synced workspace
 - explicit instruction to push only to the PR branch when safe
 - explicit instruction to stop and explain blockers when unsafe

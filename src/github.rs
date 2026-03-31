@@ -146,6 +146,7 @@ impl GitHubClient {
             updated_at: detail.updated_at,
             head_sha: detail.head.sha,
             head_ref: detail.head.reference,
+            base_sha: detail.base.sha,
             base_ref: detail.base.reference,
             clone_url: head_repo.clone_url,
             ssh_url: head_repo.ssh_url,
@@ -156,6 +157,13 @@ impl GitHubClient {
             review_comment_count: review_summary.review_comment_count,
             issue_comment_count: review_summary.issue_comment_count,
             latest_reviewer_activity_at: review_summary.latest_activity_at,
+            has_conflicts: detail.mergeable == Some(false)
+                || detail
+                    .mergeable_state
+                    .as_deref()
+                    .map(|value| value.eq_ignore_ascii_case("dirty"))
+                    .unwrap_or(false),
+            mergeable_state: detail.mergeable_state,
             is_draft: detail.draft,
             is_closed: detail.state.eq_ignore_ascii_case("closed") && detail.merged_at.is_none(),
             is_merged: detail.merged_at.is_some(),
@@ -225,6 +233,8 @@ struct PullDetail {
     state: String,
     draft: bool,
     merged_at: Option<DateTime<Utc>>,
+    mergeable: Option<bool>,
+    mergeable_state: Option<String>,
     head: GitReference,
     base: GitReference,
 }

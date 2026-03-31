@@ -200,7 +200,7 @@ async fn pause_api_toggles_review_wait_state_for_a_tracked_pr() {
             Arc::new(FakeAgentRunner {
                 invocations: Arc::new(AtomicUsize::new(0)),
                 started: Arc::new(Semaphore::new(0)),
-                allow_finish: Arc::new(Semaphore::new(0)),
+                allow_finish: Arc::new(Semaphore::new(1)),
             }),
         )
         .expect("supervisor should initialize"),
@@ -261,7 +261,7 @@ async fn approved_green_pr_is_exposed_as_waiting_merge() {
             Arc::new(FakeAgentRunner {
                 invocations: Arc::new(AtomicUsize::new(0)),
                 started: Arc::new(Semaphore::new(0)),
-                allow_finish: Arc::new(Semaphore::new(0)),
+                allow_finish: Arc::new(Semaphore::new(1)),
             }),
         )
         .expect("supervisor should initialize"),
@@ -291,7 +291,7 @@ async fn approved_pr_with_pending_ci_stays_waiting_review() {
             Arc::new(FakeAgentRunner {
                 invocations: Arc::new(AtomicUsize::new(0)),
                 started: Arc::new(Semaphore::new(0)),
-                allow_finish: Arc::new(Semaphore::new(0)),
+                allow_finish: Arc::new(Semaphore::new(1)),
             }),
         )
         .expect("supervisor should initialize"),
@@ -308,6 +308,36 @@ async fn approved_pr_with_pending_ci_stays_waiting_review() {
         status_for(prs, "openai/symphony#10"),
         Some("waiting review")
     );
+}
+
+#[tokio::test]
+async fn conflicting_pr_is_exposed_as_conflict() {
+    let supervisor = Arc::new(
+        Supervisor::new(
+            sample_config(
+                unique_temp_path("state.json"),
+                unique_temp_path("workspaces"),
+            ),
+            Arc::new(FakeGitHubProvider {
+                prs: vec![conflicting_pr()],
+            }),
+            Arc::new(FakeAgentRunner {
+                invocations: Arc::new(AtomicUsize::new(0)),
+                started: Arc::new(Semaphore::new(0)),
+                allow_finish: Arc::new(Semaphore::new(1)),
+            }),
+        )
+        .expect("supervisor should initialize"),
+    );
+
+    supervisor
+        .poll_once()
+        .await
+        .expect("poll should populate dashboard");
+
+    let prs_payload = get_json(supervisor, "/api/prs").await;
+    let prs = prs_payload["prs"].as_array().expect("prs array");
+    assert_eq!(status_for(prs, "openai/symphony#11"), Some("conflict"));
 }
 
 #[tokio::test]
@@ -709,6 +739,23 @@ fn approved_pending_pr() -> PullRequest {
     )
 }
 
+fn conflicting_pr() -> PullRequest {
+    let mut pr = base_pr(
+        "openai/symphony#11",
+        11,
+        "Needs base branch merge",
+        "conflict-sha",
+        CiStatus::Success,
+        None,
+        ReviewDecision::Clean,
+        0,
+        None,
+    );
+    pr.has_conflicts = true;
+    pr.mergeable_state = Some("dirty".to_owned());
+    pr
+}
+
 fn base_pr(
     key: &str,
     number: u64,
@@ -735,6 +782,7 @@ fn base_pr(
             .unwrap(),
         head_sha: head_sha.to_owned(),
         head_ref: format!("feature/{number}"),
+        base_sha: format!("base-sha-{number}"),
         base_ref: "main".to_owned(),
         clone_url: "https://github.com/openai/symphony.git".to_owned(),
         ssh_url: "git@github.com:openai/symphony.git".to_owned(),
@@ -745,6 +793,8 @@ fn base_pr(
         review_comment_count: usize::from(matches!(review_decision, ReviewDecision::Commented)),
         issue_comment_count: 0,
         latest_reviewer_activity_at,
+        has_conflicts: false,
+        mergeable_state: Some("clean".to_owned()),
         is_draft: false,
         is_closed: false,
         is_merged: false,

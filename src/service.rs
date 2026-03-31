@@ -286,6 +286,7 @@ impl Supervisor {
                     persisted.last_processed_comment_at = outcome.processed_comment_at;
                     persisted.last_processed_ci_at = outcome.processed_ci_at;
                     persisted.last_processed_head_sha = Some(outcome.processed_head_sha.clone());
+                    persisted.last_processed_base_sha = Some(request.pull_request.base_sha.clone());
                     persisted.clear_retry_state();
                 } else {
                     auto_paused = record_failed_run(persisted, &request);
@@ -419,6 +420,21 @@ pub fn determine_attention_reason(
         return None;
     }
 
+    let has_new_conflict = pr.has_conflicts
+        && match (
+            persisted.last_processed_head_sha.as_deref(),
+            persisted.last_processed_base_sha.as_deref(),
+        ) {
+            (Some(last_head_sha), Some(last_base_sha)) => {
+                last_head_sha != pr.head_sha.as_str() || last_base_sha != pr.base_sha.as_str()
+            }
+            _ => true,
+        };
+
+    if has_new_conflict {
+        return Some(AttentionReason::MergeConflict);
+    }
+
     let has_new_feedback = pr
         .latest_reviewer_activity_at
         .zip(persisted.last_processed_comment_at)
@@ -473,8 +489,13 @@ fn derive_status(
         if is_retry_scheduled(pr, persisted, reason) {
             TrackingStatus::RetryScheduled
         } else {
-            TrackingStatus::NeedsAttention
+            match reason {
+                AttentionReason::MergeConflict => TrackingStatus::Conflict,
+                _ => TrackingStatus::NeedsAttention,
+            }
         }
+    } else if pr.has_conflicts {
+        TrackingStatus::Conflict
     } else if is_waiting_merge(pr) {
         TrackingStatus::WaitingMerge
     } else {
@@ -486,6 +507,7 @@ fn is_waiting_merge(pr: &PullRequest) -> bool {
     !pr.is_draft
         && !pr.is_closed
         && !pr.is_merged
+        && !pr.has_conflicts
         && pr.approval_count > 0
         && matches!(pr.review_decision, crate::model::ReviewDecision::Approved)
         && matches!(pr.ci_status, crate::model::CiStatus::Success)
@@ -516,6 +538,9 @@ fn retry_signal_matches(
     }
 
     match reason {
+        AttentionReason::MergeConflict => {
+            persisted.retry_base_sha.as_deref() == Some(pr.base_sha.as_str())
+        }
         AttentionReason::ReviewFeedback => {
             persisted.retry_comment_at == pr.latest_reviewer_activity_at
         }
@@ -532,6 +557,7 @@ fn record_failed_run(persisted: &mut PersistentPrState, request: &RunRequest) ->
         };
     persisted.retry_trigger = Some(request.trigger);
     persisted.retry_head_sha = Some(request.pull_request.head_sha.clone());
+    persisted.retry_base_sha = Some(request.pull_request.base_sha.clone());
     persisted.retry_comment_at = request.pull_request.latest_reviewer_activity_at;
     persisted.retry_ci_at = request.pull_request.ci_updated_at;
 
@@ -574,6 +600,7 @@ mod tests {
             updated_at: Utc.with_ymd_and_hms(2026, 3, 30, 18, 0, 0).unwrap(),
             head_sha: "abc123".to_owned(),
             head_ref: "feature".to_owned(),
+            base_sha: "def456".to_owned(),
             base_ref: "main".to_owned(),
             clone_url: "https://github.com/openai/symphony.git".to_owned(),
             ssh_url: "git@github.com:openai/symphony.git".to_owned(),
@@ -584,6 +611,8 @@ mod tests {
             review_comment_count: 0,
             issue_comment_count: 0,
             latest_reviewer_activity_at: None,
+            has_conflicts: false,
+            mergeable_state: Some("clean".to_owned()),
             is_draft: false,
             is_closed: false,
             is_merged: false,
@@ -754,6 +783,45 @@ mod tests {
         assert_eq!(
             derive_status(&pr, &PersistentPrState::default(), None, false),
             TrackingStatus::WaitingReview
+        );
+    }
+
+    #[test]
+    fn merge_conflict_triggers_conflict_status() {
+        let mut pr = sample_pr();
+        pr.has_conflicts = true;
+        pr.mergeable_state = Some("dirty".to_owned());
+
+        assert_eq!(
+            determine_attention_reason(&pr, &PersistentPrState::default()),
+            Some(AttentionReason::MergeConflict)
+        );
+        assert_eq!(
+            derive_status(
+                &pr,
+                &PersistentPrState::default(),
+                Some(AttentionReason::MergeConflict),
+                false,
+            ),
+            TrackingStatus::Conflict
+        );
+    }
+
+    #[test]
+    fn processed_conflict_for_same_head_and_base_does_not_retrigger() {
+        let mut pr = sample_pr();
+        pr.has_conflicts = true;
+
+        let persisted = PersistentPrState {
+            last_processed_head_sha: Some(pr.head_sha.clone()),
+            last_processed_base_sha: Some(pr.base_sha.clone()),
+            ..PersistentPrState::default()
+        };
+
+        assert_eq!(determine_attention_reason(&pr, &persisted), None);
+        assert_eq!(
+            derive_status(&pr, &persisted, None, false),
+            TrackingStatus::Conflict
         );
     }
 }

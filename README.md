@@ -26,7 +26,9 @@ The planned product direction is:
 
 For each open PR authored by you, Symphony RS polls GitHub and computes a live status:
 
-- `watching`: nothing actionable right now
+- `waiting review`: nothing actionable right now, still waiting on human review
+- `waiting merge`: approved and green, waiting to be merged
+- `conflict`: the PR does not currently merge cleanly with the latest base branch
 - `needs attention`: new reviewer feedback or a newly failing CI signal
 - `running`: the local agent command is currently working on the PR
 - `blocked`: the last agent run failed
@@ -84,9 +86,11 @@ When Symphony RS detects a PR that needs attention, it:
 
 1. resolves an existing local repository checkout for the PR
 2. syncs the PR head branch into that checkout
-3. builds an execution prompt from the PR context and trigger reason
-4. pipes that prompt to the configured agent command
-5. updates the UI and persisted state with the result
+3. fetches and attempts to merge the latest base branch into the local PR branch
+4. if that base-branch merge conflicts, leaves the conflict state in the workspace for the agent to resolve
+5. builds an execution prompt from the PR context and trigger reason
+6. pipes that prompt to the configured agent command
+7. updates the UI and persisted state with the result
 
 The default prompt asks the agent to inspect GitHub feedback and CI, fix code in-place, run targeted validation, and push back to the PR branch if it can.
 

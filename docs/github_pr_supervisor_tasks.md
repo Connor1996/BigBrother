@@ -93,19 +93,23 @@ This section is the only task list that matters for the next implementation pass
 - [ ] Split the current passive `watching` review state into:
   - `waiting_review`
   - `waiting_merge`
+- [ ] Surface an explicit `conflict` state when the PR cannot merge cleanly with the latest base branch
 - [ ] Define merge-ready heuristics for MVP:
   - at least one non-author approval
   - CI is green
   - PR is not draft, closed, or merged
+  - PR has no detected merge conflict
 - [ ] Surface the derived review lifecycle state through `/api/prs`
 - [ ] Update the dashboard so the review panel distinguishes:
   - needs attention
   - waiting for review
   - waiting for merge
+  - conflict
 - [ ] Add tests covering:
   - approved but CI-pending or CI-failing PRs stay out of `waiting_merge`
   - approved + green PRs become `waiting_merge`
   - clean open PRs without approval show `waiting_review`
+  - merge conflicts override passive wait states and show `conflict`
 
 ### 1.10 Notification Hooks
 
@@ -168,6 +172,9 @@ This section is the only task list that matters for the next implementation pass
 - [ ] Validate workspace paths stay under configured root
 - [ ] Support SSH and HTTPS Git transports cleanly
 - [ ] Improve workspace sync logic for clone, fetch, checkout, reset, and branch divergence cases
+- [ ] Fetch the current base branch for each PR during workspace sync
+- [ ] Auto-merge the latest base branch into the checked-out PR branch before invoking the agent
+- [ ] If the base-branch merge reports conflicts, preserve the conflict state in the workspace and let the agent resolve it instead of failing fast
 - [ ] Add tests for safe path handling and branch sync behavior
 
 ## 9. Agent Runner
