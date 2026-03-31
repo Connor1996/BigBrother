@@ -384,7 +384,8 @@ Default v0 policy:
 - do not launch a second run for a PR that already has an active run
 - retry a failed run on the next poll while the same actionable signal is still present
 - allow up to five automatic retries after the initial failed run, then auto-pause the PR
-- resuming a paused PR resets retry bookkeeping and re-evaluates the current PR state instead of preserving the old retry lockout
+- resuming a paused PR resets retry bookkeeping and triggers an immediate targeted re-check for that PR instead of waiting for the next daemon poll
+- the immediate resume re-check should prefer the resumed PR over unrelated actionable PRs, while still respecting the configured global concurrency
 
 ## 13. Workspace Model
 
@@ -576,6 +577,7 @@ SSE is preferred for v0 because the UI is mostly dashboard-style and low-frequen
 Current prototype-compatible action API:
 
 - `POST /api/prs/pause` with `{ "key": "<repo>#<number>", "paused": true|false }`
+  When `paused` is `false`, the backend should queue an immediate background re-check for that PR.
 
 Potential richer follow-up actions:
 

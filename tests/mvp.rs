@@ -30,6 +30,7 @@ use symphony_rs::{
     web,
 };
 use tokio::sync::Semaphore;
+use tokio::time::{timeout, Duration};
 use tower::util::ServiceExt;
 
 static TEMP_PATH_COUNTER: AtomicUsize = AtomicUsize::new(0);
@@ -89,14 +90,17 @@ impl AgentRunner for FakeAgentRunner {
 #[derive(Clone)]
 struct AlwaysFailingAgentRunner {
     invocations: Arc<AtomicUsize>,
+    started: Arc<Semaphore>,
 }
 
 impl AgentRunner for AlwaysFailingAgentRunner {
     fn run(&self, request: RunRequest) -> BoxFuture<'static, RunOutcome> {
         let invocations = self.invocations.clone();
+        let started = self.started.clone();
 
         Box::pin(async move {
             invocations.fetch_add(1, Ordering::SeqCst);
+            started.add_permits(1);
             if let Some(output_updates) = request.output_updates.as_ref() {
                 let _ = output_updates.send("codex: run failed before fix\n".to_owned());
             }
@@ -632,14 +636,11 @@ async fn paused_pr_does_not_auto_run_until_resumed() {
     assert_eq!(resumed.status, TrackingStatus::NeedsAttention);
     assert!(!resumed.persisted.paused);
 
-    supervisor
-        .poll_once()
-        .await
-        .expect("poll should succeed after resume");
+    wait_for_runner_start(&runner.started).await;
     assert_eq!(
         runner.invocations.load(Ordering::SeqCst),
         1,
-        "resumed actionable PR should trigger the runner again",
+        "resumed actionable PR should trigger the runner immediately",
     );
 }
 
@@ -712,6 +713,7 @@ async fn paused_state_survives_supervisor_restart() {
 async fn failed_runs_retry_on_subsequent_polls_and_auto_pause_after_five_retries() {
     let runner = AlwaysFailingAgentRunner {
         invocations: Arc::new(AtomicUsize::new(0)),
+        started: Arc::new(Semaphore::new(0)),
     };
     let supervisor = Arc::new(
         Supervisor::new(
@@ -772,6 +774,7 @@ async fn failed_runs_retry_on_subsequent_polls_and_auto_pause_after_five_retries
 async fn resume_clears_retry_state_and_rechecks_the_current_signal() {
     let runner = AlwaysFailingAgentRunner {
         invocations: Arc::new(AtomicUsize::new(0)),
+        started: Arc::new(Semaphore::new(0)),
     };
     let supervisor = Arc::new(
         Supervisor::new(
@@ -807,14 +810,12 @@ async fn resume_clears_retry_state_and_rechecks_the_current_signal() {
     assert!(!resumed.persisted.paused);
     assert_eq!(resumed.persisted.consecutive_failures, 0);
 
-    supervisor
-        .poll_once()
-        .await
-        .expect("poll should succeed after resume");
+    wait_for_runner_start(&runner.started).await;
+    wait_for_invocations(&runner.invocations, 7).await;
     assert_eq!(
         runner.invocations.load(Ordering::SeqCst),
         7,
-        "resume should allow the current actionable signal to be retried again",
+        "resume should immediately recheck the current actionable signal",
     );
 
     let prs_payload = get_json(supervisor, "/api/prs").await;
@@ -862,6 +863,27 @@ async fn request_json(supervisor: Arc<Supervisor>, request: Request<Body>) -> Va
         .await
         .expect("body should collect");
     serde_json::from_slice(&bytes).expect("response should be JSON")
+}
+
+async fn wait_for_runner_start(started: &Arc<Semaphore>) {
+    let _ = timeout(Duration::from_secs(2), started.clone().acquire_owned())
+        .await
+        .expect("runner should start promptly after resume")
+        .expect("start semaphore should remain open");
+}
+
+async fn wait_for_invocations(invocations: &Arc<AtomicUsize>, expected: usize) {
+    timeout(Duration::from_secs(2), async {
+        loop {
+            if invocations.load(Ordering::SeqCst) >= expected {
+                break;
+            }
+
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("runner invocation count should reach the expected value");
 }
 
 fn status_for<'a>(prs: &'a [Value], key: &str) -> Option<&'a str> {

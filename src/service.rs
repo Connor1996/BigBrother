@@ -48,6 +48,7 @@ pub struct Supervisor {
     store: StateStore,
     shared_state: Arc<Mutex<DashboardState>>,
     inner: AsyncMutex<SupervisorInner>,
+    poll_lock: AsyncMutex<()>,
 }
 
 impl Supervisor {
@@ -69,6 +70,7 @@ impl Supervisor {
                 persisted_state,
                 active_runs: HashMap::new(),
             }),
+            poll_lock: AsyncMutex::new(()),
         })
     }
 
@@ -100,7 +102,11 @@ impl Supervisor {
         state.push_event(level, pr_key, message);
     }
 
-    pub async fn set_pr_paused(&self, pr_key: &str, paused: bool) -> Result<Option<TrackedPr>> {
+    pub async fn set_pr_paused(
+        self: &Arc<Self>,
+        pr_key: &str,
+        paused: bool,
+    ) -> Result<Option<TrackedPr>> {
         let (changed, updated) = {
             let mut inner = self.inner.lock().await;
             let mut state = self
@@ -171,10 +177,27 @@ impl Supervisor {
             );
         }
 
+        if changed && !paused {
+            self.schedule_immediate_check(pr_key.to_owned());
+        }
+
         Ok(Some(updated))
     }
 
     pub async fn poll_once(&self) -> Result<()> {
+        self.poll_once_with_selection(None, true).await
+    }
+
+    async fn poll_once_for_pr(&self, pr_key: &str) -> Result<()> {
+        self.poll_once_with_selection(Some(pr_key), false).await
+    }
+
+    async fn poll_once_with_selection(
+        &self,
+        preferred_pr_key: Option<&str>,
+        allow_fallback: bool,
+    ) -> Result<()> {
+        let _poll_guard = self.poll_lock.lock().await;
         {
             let mut state = self
                 .shared_state
@@ -184,7 +207,7 @@ impl Supervisor {
             state.last_poll_error = None;
         }
 
-        let result = self.poll_once_inner().await;
+        let result = self.poll_once_inner(preferred_pr_key, allow_fallback).await;
         let finished_at = Utc::now();
         let next_poll_due_at = finished_at
             + chrono::Duration::seconds(
@@ -211,7 +234,30 @@ impl Supervisor {
         result
     }
 
-    async fn poll_once_inner(&self) -> Result<()> {
+    fn schedule_immediate_check(self: &Arc<Self>, pr_key: String) {
+        let supervisor = Arc::clone(self);
+        tokio::spawn(async move {
+            supervisor.push_event(
+                EventLevel::Info,
+                Some(pr_key.clone()),
+                format!("triggering immediate check for {pr_key} after resume"),
+            );
+
+            if let Err(error) = supervisor.poll_once_for_pr(&pr_key).await {
+                supervisor.push_event(
+                    EventLevel::Error,
+                    Some(pr_key.clone()),
+                    format!("immediate check failed for {pr_key}: {error:#}"),
+                );
+            }
+        });
+    }
+
+    async fn poll_once_inner(
+        &self,
+        preferred_pr_key: Option<&str>,
+        allow_fallback: bool,
+    ) -> Result<()> {
         let prs = self.provider.fetch_pull_requests().await?;
 
         let selected_request = {
@@ -229,6 +275,8 @@ impl Supervisor {
                 &prs,
                 &inner.persisted_state,
                 &inner.active_runs,
+                preferred_pr_key,
+                allow_fallback,
             );
 
             if let Some((pr, trigger)) = selected {
@@ -353,26 +401,50 @@ fn select_run_request<'a>(
     prs: &'a [PullRequest],
     persisted_state: &PersistentStateFile,
     active_runs: &HashMap<String, ActiveRun>,
+    preferred_pr_key: Option<&str>,
+    allow_fallback: bool,
 ) -> Option<(&'a PullRequest, AttentionReason)> {
     if active_runs.len() >= config.daemon.max_concurrent_runs {
         return None;
     }
 
-    prs.iter().find_map(|pr| {
-        if active_runs.contains_key(&pr.key) {
-            return None;
+    if let Some(pr_key) = preferred_pr_key {
+        if let Some(selected) = prs
+            .iter()
+            .find(|pr| pr.key == pr_key)
+            .and_then(|pr| selectable_run_request(pr, persisted_state, active_runs))
+        {
+            return Some(selected);
         }
 
-        let persisted = persisted_state
-            .prs
-            .get(&pr.key)
-            .cloned()
-            .unwrap_or_default();
-        if persisted.paused {
+        if !allow_fallback {
             return None;
         }
-        determine_attention_reason(pr, &persisted).map(|reason| (pr, reason))
-    })
+    }
+
+    prs.iter()
+        .find_map(|pr| selectable_run_request(pr, persisted_state, active_runs))
+}
+
+fn selectable_run_request<'a>(
+    pr: &'a PullRequest,
+    persisted_state: &PersistentStateFile,
+    active_runs: &HashMap<String, ActiveRun>,
+) -> Option<(&'a PullRequest, AttentionReason)> {
+    if active_runs.contains_key(&pr.key) {
+        return None;
+    }
+
+    let persisted = persisted_state
+        .prs
+        .get(&pr.key)
+        .cloned()
+        .unwrap_or_default();
+    if persisted.paused {
+        return None;
+    }
+
+    determine_attention_reason(pr, &persisted).map(|reason| (pr, reason))
 }
 
 fn refresh_dashboard(
@@ -832,8 +904,15 @@ mod tests {
         };
 
         assert!(
-            select_run_request(&sample_config(), &[pr], &persisted_state, &HashMap::new())
-                .is_none(),
+            select_run_request(
+                &sample_config(),
+                &[pr],
+                &persisted_state,
+                &HashMap::new(),
+                None,
+                true,
+            )
+            .is_none(),
             "paused PR should never be scheduled automatically",
         );
     }
@@ -854,6 +933,35 @@ mod tests {
             derive_status(&pr, &persisted, Some(AttentionReason::CiFailed), true),
             TrackingStatus::Running
         );
+    }
+
+    #[test]
+    fn preferred_pr_is_selected_first_for_targeted_rechecks() {
+        let mut first = sample_pr();
+        first.key = "openai/symphony#1".to_owned();
+        first.number = 1;
+        first.ci_status = CiStatus::Failure;
+        first.ci_updated_at = Some(Utc.with_ymd_and_hms(2026, 3, 30, 18, 5, 0).unwrap());
+
+        let mut second = sample_pr();
+        second.key = "openai/symphony#2".to_owned();
+        second.number = 2;
+        second.ci_status = CiStatus::Failure;
+        second.ci_updated_at = Some(Utc.with_ymd_and_hms(2026, 3, 30, 18, 6, 0).unwrap());
+
+        let prs = [first.clone(), second.clone()];
+        let selected = select_run_request(
+            &sample_config(),
+            &prs,
+            &PersistentStateFile::default(),
+            &HashMap::new(),
+            Some(&second.key),
+            false,
+        )
+        .expect("the preferred actionable PR should be selected");
+
+        assert_eq!(selected.0.key, second.key);
+        assert_eq!(selected.1, AttentionReason::CiFailed);
     }
 
     #[test]
