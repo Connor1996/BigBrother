@@ -307,6 +307,47 @@ async fn activity_api_exposes_recent_daemon_events() {
 }
 
 #[tokio::test]
+async fn dashboard_html_exposes_top_right_pr_and_activity_tabs() {
+    let supervisor = Arc::new(
+        Supervisor::new(
+            sample_config(
+                unique_temp_path("state.json"),
+                unique_temp_path("workspaces"),
+            ),
+            Arc::new(FakeGitHubProvider { prs: vec![] }),
+            Arc::new(FakeAgentRunner {
+                invocations: Arc::new(AtomicUsize::new(0)),
+                started: Arc::new(Semaphore::new(0)),
+                allow_finish: Arc::new(Semaphore::new(0)),
+            }),
+        )
+        .expect("supervisor should initialize"),
+    );
+
+    let html = request_text(
+        supervisor,
+        Request::builder()
+            .uri("/")
+            .body(Body::empty())
+            .expect("request should build"),
+    )
+    .await;
+
+    assert!(
+        html.contains(r#"id="tab-prs""#) && html.contains(r#"data-view="prs""#),
+        "dashboard should expose the PRs tab, got: {html}",
+    );
+    assert!(
+        html.contains(r#"id="tab-activity""#) && html.contains(r#"data-view="activity""#),
+        "dashboard should expose the Activity tab, got: {html}",
+    );
+    assert!(
+        html.contains(r#"id="view-activity""#),
+        "dashboard should render the activity view container behind the tab switch, got: {html}",
+    );
+}
+
+#[tokio::test]
 async fn approved_green_pr_is_exposed_as_waiting_merge() {
     let supervisor = Arc::new(
         Supervisor::new(
@@ -906,6 +947,23 @@ async fn request_json(supervisor: Arc<Supervisor>, request: Request<Body>) -> Va
         .await
         .expect("body should collect");
     serde_json::from_slice(&bytes).expect("response should be JSON")
+}
+
+async fn request_text(supervisor: Arc<Supervisor>, request: Request<Body>) -> String {
+    let response = web::router(supervisor)
+        .oneshot(request)
+        .await
+        .expect("route should respond");
+    assert!(
+        response.status().is_success(),
+        "request should succeed with 2xx status, got {}",
+        response.status()
+    );
+
+    let bytes = to_bytes(response.into_body(), usize::MAX)
+        .await
+        .expect("body should collect");
+    String::from_utf8(bytes.to_vec()).expect("response should be UTF-8")
 }
 
 async fn wait_for_runner_start(started: &Arc<Semaphore>) {
