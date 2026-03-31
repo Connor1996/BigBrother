@@ -230,6 +230,7 @@ pub struct RunnerState {
     pub attempt: u32,
     pub trigger: AttentionReason,
     pub summary: String,
+    pub live_output: Option<String>,
     pub exit_code: Option<i32>,
 }
 

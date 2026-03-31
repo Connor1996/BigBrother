@@ -118,6 +118,19 @@ const INDEX_HTML: &str = r#"<!doctype html>
       border-collapse: collapse;
     }
 
+    .pr-row td {
+      transition: background 160ms ease, color 160ms ease;
+    }
+
+    .pr-row.paused-row td {
+      background: rgba(30, 34, 40, 0.09);
+      color: rgba(30, 34, 40, 0.76);
+    }
+
+    .pr-row.running-row td {
+      background: rgba(29, 107, 87, 0.05);
+    }
+
     th, td {
       text-align: left;
       padding: 14px 16px;
@@ -156,9 +169,37 @@ const INDEX_HTML: &str = r#"<!doctype html>
     .pill.bad { color: var(--bad); }
 
     .summary {
-      max-width: 30ch;
+      max-width: 34ch;
       color: var(--muted);
       white-space: pre-wrap;
+    }
+
+    .details-stack {
+      display: grid;
+      gap: 8px;
+    }
+
+    .output-label,
+    .output-empty {
+      font-size: 0.74rem;
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+      color: var(--muted);
+    }
+
+    .live-output {
+      margin: 0;
+      padding: 12px;
+      border-radius: 14px;
+      border: 1px solid rgba(30, 34, 40, 0.08);
+      background: rgba(30, 34, 40, 0.06);
+      color: #23303a;
+      font: 0.78rem/1.45 "SFMono-Regular", "SF Mono", ui-monospace, monospace;
+      max-width: min(68ch, 100%);
+      max-height: 220px;
+      overflow: auto;
+      white-space: pre-wrap;
+      word-break: break-word;
     }
 
     .action-button {
@@ -252,7 +293,7 @@ const INDEX_HTML: &str = r#"<!doctype html>
             <th>CI</th>
             <th>Reviews</th>
             <th>Attention</th>
-            <th>Latest Summary</th>
+            <th>Details</th>
             <th>Action</th>
           </tr>
         </thead>
@@ -271,12 +312,52 @@ const INDEX_HTML: &str = r#"<!doctype html>
       return new Date(value).toLocaleString();
     }
 
+    function escapeHtml(value) {
+      return String(value ?? "")
+        .replaceAll("&", "&amp;")
+        .replaceAll("<", "&lt;")
+        .replaceAll(">", "&gt;")
+        .replaceAll('"', "&quot;")
+        .replaceAll("'", "&#39;");
+    }
+
     function pillClass(value) {
       const label = String(value || "").toLowerCase();
       if (label.includes("fail") || label.includes("block") || label.includes("conflict")) return "pill bad";
       if (label.includes("pause")) return "pill warn";
       if (label.includes("need") || label.includes("pending") || label.includes("comment") || label.includes("retry")) return "pill warn";
       return "pill good";
+    }
+
+    function rowClass(pr) {
+      const classes = ["pr-row"];
+      if (pr.is_paused) classes.push("paused-row");
+      if (pr.status === "running") classes.push("running-row");
+      return classes.join(" ");
+    }
+
+    function renderDetails(pr) {
+      const summary = `<div class="summary">${escapeHtml(pr.latest_summary || "-")}</div>`;
+      if (pr.status !== "running") {
+        return `<div class="details-stack">${summary}</div>`;
+      }
+
+      if (pr.live_output) {
+        return `
+          <div class="details-stack">
+            ${summary}
+            <div class="output-label">Live Codex CLI Output</div>
+            <pre class="live-output">${escapeHtml(pr.live_output)}</pre>
+          </div>
+        `;
+      }
+
+      return `
+        <div class="details-stack">
+          ${summary}
+          <div class="output-empty">Waiting for Codex CLI output...</div>
+        </div>
+      `;
     }
 
     function renderAction(pr) {
@@ -344,17 +425,17 @@ const INDEX_HTML: &str = r#"<!doctype html>
       }
 
       tbody.innerHTML = prs.map((pr) => `
-        <tr>
+        <tr class="${rowClass(pr)}">
           <td data-label="PR">
-            <a href="${pr.url}" target="_blank" rel="noreferrer">${pr.repo_full_name} #${pr.number}</a>
-            <div>${pr.title}</div>
-            <div style="color: var(--muted); font-size: 0.9rem;">Updated ${fmtTime(pr.updated_at)}</div>
+            <a href="${pr.url}" target="_blank" rel="noreferrer">${escapeHtml(pr.repo_full_name)} #${pr.number}</a>
+            <div>${escapeHtml(pr.title)}</div>
+            <div style="color: var(--muted); font-size: 0.9rem;">Updated ${escapeHtml(fmtTime(pr.updated_at))}</div>
           </td>
-          <td data-label="Status"><span class="${pillClass(pr.status)}">${pr.status}</span></td>
-          <td data-label="CI"><span class="${pillClass(pr.ci_status)}">${pr.ci_status}</span></td>
-          <td data-label="Reviews"><span class="${pillClass(pr.review_status)}">${pr.review_status}</span></td>
-          <td data-label="Attention">${pr.attention_reason || "-"}</td>
-          <td data-label="Latest Summary"><div class="summary">${pr.latest_summary || "-"}</div></td>
+          <td data-label="Status"><span class="${pillClass(pr.status)}">${escapeHtml(pr.status)}</span></td>
+          <td data-label="CI"><span class="${pillClass(pr.ci_status)}">${escapeHtml(pr.ci_status)}</span></td>
+          <td data-label="Reviews"><span class="${pillClass(pr.review_status)}">${escapeHtml(pr.review_status)}</span></td>
+          <td data-label="Attention">${escapeHtml(pr.attention_reason || "-")}</td>
+          <td data-label="Details">${renderDetails(pr)}</td>
           <td data-label="Action">${renderAction(pr)}</td>
         </tr>
       `).join("");
@@ -364,7 +445,7 @@ const INDEX_HTML: &str = r#"<!doctype html>
       document.getElementById("prs-table").innerHTML =
         `<tr><td colspan="7" class="empty">Failed to load dashboard: ${error.message}</td></tr>`;
     });
-    setInterval(() => refresh().catch(() => {}), 3000);
+    setInterval(() => refresh().catch(() => {}), 1500);
   </script>
 </body>
 </html>"#;
@@ -400,6 +481,7 @@ struct PullRequestSummary {
     attention_reason: Option<String>,
     updated_at: DateTime<Utc>,
     latest_summary: Option<String>,
+    live_output: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -528,6 +610,10 @@ fn summarize_pr(tracked: &TrackedPr) -> PullRequestSummary {
             .as_ref()
             .map(|runner| runner.summary.clone())
             .or_else(|| tracked.persisted.last_run_summary.clone()),
+        live_output: tracked
+            .runner
+            .as_ref()
+            .and_then(|runner| runner.live_output.clone()),
     }
 }
 

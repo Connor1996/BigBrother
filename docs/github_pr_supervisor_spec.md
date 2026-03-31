@@ -155,6 +155,7 @@ The user opens the UI and sees:
 - whether the daemon is idle, acting, retrying, blocked, waiting for review, or waiting for merge
 - whether a PR is currently blocked by merge conflicts with the base branch
 - what happened most recently for each PR
+- recent live agent output for any PR that is currently running
 
 ### 6.2 Autonomous Repair
 
@@ -594,12 +595,14 @@ The MVP UI can be a single page that shows:
 - last poll time
 - current tracked PR rows
 - each PR’s status, CI state, review state, and latest action summary
+- recent live Codex CLI output for currently running rows
 - a row-level pause/resume control for each tracked PR
+- a visually subdued treatment for paused rows so they read as intentionally muted rather than inactive by accident
 
 The MVP UI does not need:
 
 - split panes
-- live streaming updates
+- SSE or WebSocket delivery for live updates
 - advanced filtering
 - broader manual controls beyond pause/resume and the minimum required for testing
 

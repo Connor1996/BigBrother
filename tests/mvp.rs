@@ -59,6 +59,10 @@ impl AgentRunner for FakeAgentRunner {
         Box::pin(async move {
             invocations.fetch_add(1, Ordering::SeqCst);
             started.add_permits(1);
+            if let Some(output_updates) = request.output_updates.as_ref() {
+                let _ =
+                    output_updates.send("codex: inspecting workspace\ncargo test -q\n".to_owned());
+            }
             let _permit = allow_finish
                 .acquire()
                 .await
@@ -89,6 +93,9 @@ impl AgentRunner for AlwaysFailingAgentRunner {
 
         Box::pin(async move {
             invocations.fetch_add(1, Ordering::SeqCst);
+            if let Some(output_updates) = request.output_updates.as_ref() {
+                let _ = output_updates.send("codex: run failed before fix\n".to_owned());
+            }
 
             RunOutcome {
                 started_at: Utc::now(),
@@ -404,6 +411,57 @@ async fn review_run_success_leaves_same_pr_ci_failure_actionable() {
         2,
         "the next poll should pick up the remaining CI failure",
     );
+}
+
+#[tokio::test]
+async fn running_pr_exposes_live_codex_output() {
+    let runner = FakeAgentRunner {
+        invocations: Arc::new(AtomicUsize::new(0)),
+        started: Arc::new(Semaphore::new(0)),
+        allow_finish: Arc::new(Semaphore::new(0)),
+    };
+    let supervisor = Arc::new(
+        Supervisor::new(
+            sample_config(
+                unique_temp_path("state.json"),
+                unique_temp_path("workspaces"),
+            ),
+            Arc::new(FakeGitHubProvider {
+                prs: vec![actionable_pr()],
+            }),
+            Arc::new(runner.clone()),
+        )
+        .expect("supervisor should initialize"),
+    );
+
+    let poll_task = {
+        let supervisor = supervisor.clone();
+        tokio::spawn(async move { supervisor.poll_once().await })
+    };
+
+    let _started = runner
+        .started
+        .acquire()
+        .await
+        .expect("started semaphore should remain open");
+
+    let running_payload = get_json(supervisor.clone(), "/api/prs").await;
+    let prs = running_payload["prs"].as_array().expect("prs array");
+    let running_pr = prs
+        .iter()
+        .find(|pr| pr["key"] == json!("openai/symphony#7"))
+        .expect("running PR should be visible");
+    assert_eq!(running_pr["status"], json!("running"));
+    assert_eq!(
+        running_pr["live_output"],
+        json!("codex: inspecting workspace\ncargo test -q\n")
+    );
+
+    runner.allow_finish.add_permits(1);
+    poll_task
+        .await
+        .expect("poll task should join")
+        .expect("poll should succeed");
 }
 
 #[tokio::test]

@@ -1,12 +1,16 @@
 use std::{
     path::{Path, PathBuf},
-    process::Stdio,
+    process::{ExitStatus, Stdio},
 };
 
 use anyhow::{anyhow, Context, Result};
 use chrono::{DateTime, Utc};
 use futures::future::BoxFuture;
-use tokio::{io::AsyncWriteExt, process::Command};
+use tokio::{
+    io::{AsyncRead, AsyncReadExt, AsyncWriteExt},
+    process::Command,
+    sync::mpsc::UnboundedSender,
+};
 
 use crate::{
     config::{AgentConfig, GitTransport, ResolvedWorkspaceConfig},
@@ -21,6 +25,7 @@ pub struct RunRequest {
     pub trigger: AttentionReason,
     pub workspace: ResolvedWorkspaceConfig,
     pub agent: AgentConfig,
+    pub output_updates: Option<UnboundedSender<String>>,
 }
 
 #[derive(Debug, Clone)]
@@ -179,16 +184,20 @@ async fn run_inner(request: &RunRequest) -> Result<(Option<i32>, String)> {
         .context("failed writing prompt to agent stdin")?;
     stdin.shutdown().await.ok();
 
-    let output = child
-        .wait_with_output()
-        .await
-        .context("failed waiting for agent process")?;
+    let stdout = child
+        .stdout
+        .take()
+        .ok_or_else(|| anyhow!("agent stdout was not available"))?;
+    let stderr = child
+        .stderr
+        .take()
+        .ok_or_else(|| anyhow!("agent stderr was not available"))?;
 
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    let stderr = String::from_utf8_lossy(&output.stderr);
+    let (status, stdout, stderr) =
+        collect_process_output(child, stdout, stderr, request.output_updates.clone()).await?;
     let summary = summarize_output(&stdout, &stderr);
 
-    Ok((output.status.code(), summary))
+    Ok((status.code(), summary))
 }
 
 async fn resolve_checkout(
@@ -458,6 +467,86 @@ fn summarize_output(stdout: &str, stderr: &str) -> String {
     let lines = combined.lines().collect::<Vec<_>>();
     let tail = lines.iter().rev().take(12).copied().collect::<Vec<_>>();
     tail.into_iter().rev().collect::<Vec<_>>().join("\n")
+}
+
+#[derive(Debug, Clone, Copy)]
+enum OutputStream {
+    Stdout,
+    Stderr,
+}
+
+#[derive(Debug)]
+struct OutputChunk {
+    stream: OutputStream,
+    text: String,
+}
+
+async fn collect_process_output(
+    mut child: tokio::process::Child,
+    stdout: impl AsyncRead + Unpin + Send + 'static,
+    stderr: impl AsyncRead + Unpin + Send + 'static,
+    output_updates: Option<UnboundedSender<String>>,
+) -> Result<(ExitStatus, String, String)> {
+    let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<OutputChunk>();
+    let stdout_task = tokio::spawn(read_output_stream(stdout, OutputStream::Stdout, tx.clone()));
+    let stderr_task = tokio::spawn(read_output_stream(stderr, OutputStream::Stderr, tx));
+
+    let mut stdout_text = String::new();
+    let mut stderr_text = String::new();
+
+    while let Some(chunk) = rx.recv().await {
+        if let Some(output_updates) = output_updates.as_ref() {
+            let _ = output_updates.send(chunk.text.clone());
+        }
+
+        match chunk.stream {
+            OutputStream::Stdout => stdout_text.push_str(&chunk.text),
+            OutputStream::Stderr => stderr_text.push_str(&chunk.text),
+        }
+    }
+
+    stdout_task.await.context("stdout reader task panicked")??;
+    stderr_task.await.context("stderr reader task panicked")??;
+
+    let status = child
+        .wait()
+        .await
+        .context("failed waiting for agent process")?;
+
+    Ok((status, stdout_text, stderr_text))
+}
+
+async fn read_output_stream(
+    mut reader: impl AsyncRead + Unpin,
+    stream: OutputStream,
+    tx: tokio::sync::mpsc::UnboundedSender<OutputChunk>,
+) -> Result<()> {
+    let mut buffer = [0_u8; 4096];
+
+    loop {
+        let bytes_read = reader
+            .read(&mut buffer)
+            .await
+            .context("failed reading agent output stream")?;
+        if bytes_read == 0 {
+            break;
+        }
+
+        if tx
+            .send(OutputChunk {
+                stream: match stream {
+                    OutputStream::Stdout => OutputStream::Stdout,
+                    OutputStream::Stderr => OutputStream::Stderr,
+                },
+                text: String::from_utf8_lossy(&buffer[..bytes_read]).into_owned(),
+            })
+            .is_err()
+        {
+            break;
+        }
+    }
+
+    Ok(())
 }
 
 #[cfg(test)]

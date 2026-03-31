@@ -6,7 +6,7 @@ use std::{
 use anyhow::Result;
 use chrono::{DateTime, Utc};
 use futures::future::BoxFuture;
-use tokio::sync::Mutex as AsyncMutex;
+use tokio::sync::{mpsc, Mutex as AsyncMutex};
 
 use crate::{
     config::ResolvedConfig,
@@ -27,6 +27,7 @@ pub trait AgentRunner: Send + Sync {
 }
 
 const MAX_AUTOMATIC_RETRIES: u32 = 5;
+const MAX_LIVE_OUTPUT_CHARS: usize = 16_000;
 
 #[derive(Debug, Clone)]
 struct ActiveRun {
@@ -261,6 +262,7 @@ impl Supervisor {
                     trigger,
                     workspace: self.config.workspace.clone(),
                     agent: self.config.agent.clone(),
+                    output_updates: None,
                 })
             } else {
                 None
@@ -269,7 +271,26 @@ impl Supervisor {
 
         if let Some(request) = selected_request {
             let pr_key = request.pull_request.key.clone();
-            let outcome = self.runner.run(request.clone()).await;
+            let (output_tx, mut output_rx) = mpsc::unbounded_channel::<String>();
+            let mut runner_request = request.clone();
+            runner_request.output_updates = Some(output_tx);
+            let output_pr_key = pr_key.clone();
+            let shared_state = self.shared_state.clone();
+            let output_forwarder = tokio::spawn(async move {
+                let mut buffered_output = String::new();
+                while let Some(chunk) = output_rx.recv().await {
+                    append_live_output(&mut buffered_output, &chunk);
+                    let mut state = shared_state.lock().expect("dashboard state mutex poisoned");
+                    if let Some(tracked) = state.tracked_prs.get_mut(&output_pr_key) {
+                        if let Some(runner) = tracked.runner.as_mut() {
+                            runner.live_output = Some(buffered_output.clone());
+                        }
+                    }
+                }
+            });
+
+            let outcome = self.runner.run(runner_request).await;
+            output_forwarder.await.ok();
 
             let mut inner = self.inner.lock().await;
             let active_run = inner.active_runs.remove(&pr_key);
@@ -398,7 +419,8 @@ fn build_tracked_prs(
                     finished_at: None,
                     attempt: 1,
                     trigger: active.trigger,
-                    summary: "agent run started".to_owned(),
+                    summary: "waiting for Codex CLI output...".to_owned(),
+                    live_output: None,
                     exit_code: None,
                 }),
             },
@@ -594,6 +616,20 @@ fn record_successful_run(
     persisted.clear_retry_state();
 }
 
+fn append_live_output(buffer: &mut String, chunk: &str) {
+    buffer.push_str(chunk);
+
+    let total_chars = buffer.chars().count();
+    if total_chars <= MAX_LIVE_OUTPUT_CHARS {
+        return;
+    }
+
+    let trim_chars = total_chars - MAX_LIVE_OUTPUT_CHARS;
+    if let Some((trim_at, _)) = buffer.char_indices().nth(trim_chars) {
+        buffer.drain(..trim_at);
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::{collections::HashMap, path::PathBuf};
@@ -717,6 +753,7 @@ mod tests {
             trigger: AttentionReason::ReviewFeedback,
             workspace: config.workspace,
             agent: config.agent,
+            output_updates: None,
         };
         let outcome = RunOutcome {
             started_at: Utc::now(),
