@@ -44,11 +44,16 @@ pub struct RunOutcome {
 struct WorkspaceSyncReport {
     merged_base_branch: bool,
     merge_conflicts_present: bool,
+    resumed_conflict_workspace: bool,
 }
 
 impl WorkspaceSyncReport {
     fn prompt_note(&self) -> Option<&'static str> {
-        if self.merge_conflicts_present {
+        if self.resumed_conflict_workspace {
+            Some(
+                "- Workspace preparation detected an unresolved merge-conflict workspace from a previous run for this same PR.\n- Continue from the existing conflict markers in the working tree, then run validation, commit the resolution, and push if safe.",
+            )
+        } else if self.merge_conflicts_present {
             Some(
                 "- Workspace preparation already merged the latest base branch into the local PR branch and Git reported merge conflicts.\n- Start by resolving the existing conflicts in the working tree, then run validation, commit the resolution, and push if safe.",
             )
@@ -102,13 +107,22 @@ pub async fn run(request: RunRequest) -> RunOutcome {
 }
 
 async fn run_inner(request: &RunRequest) -> Result<(Option<i32>, String)> {
-    let workspace_path = resolve_checkout(&request.workspace, &request.pull_request).await?;
-    let sync_report = sync_workspace(
-        &workspace_path,
-        request.workspace.git_transport,
-        &request.pull_request,
-    )
-    .await?;
+    let checkout = resolve_checkout(&request.workspace, &request.pull_request).await?;
+    let workspace_path = checkout.path;
+    let sync_report = if checkout.resumed_conflict_workspace {
+        WorkspaceSyncReport {
+            merged_base_branch: true,
+            merge_conflicts_present: true,
+            resumed_conflict_workspace: true,
+        }
+    } else {
+        sync_workspace(
+            &workspace_path,
+            request.workspace.git_transport,
+            &request.pull_request,
+        )
+        .await?
+    };
 
     let prompt_instructions = combine_operator_instructions(
         request.agent.additional_instructions.as_deref(),
@@ -200,10 +214,16 @@ async fn run_inner(request: &RunRequest) -> Result<(Option<i32>, String)> {
     Ok((status.code(), summary))
 }
 
+#[derive(Debug)]
+struct CheckoutResolution {
+    path: PathBuf,
+    resumed_conflict_workspace: bool,
+}
+
 async fn resolve_checkout(
     workspace: &ResolvedWorkspaceConfig,
     pr: &PullRequest,
-) -> Result<PathBuf> {
+) -> Result<CheckoutResolution> {
     let candidate = workspace
         .repo_map
         .get(&pr.repo_full_name)
@@ -237,13 +257,62 @@ async fn resolve_checkout(
     .await
     .context("failed to inspect local checkout state")?;
     if !tracked_changes.trim().is_empty() {
+        if can_resume_existing_conflict_workspace(&path, pr).await? {
+            return Ok(CheckoutResolution {
+                path,
+                resumed_conflict_workspace: true,
+            });
+        }
+
         return Err(anyhow!(
             "local checkout {} has tracked changes; refusing to reuse a dirty repository",
             path.display()
         ));
     }
 
-    Ok(path)
+    Ok(CheckoutResolution {
+        path,
+        resumed_conflict_workspace: false,
+    })
+}
+
+async fn can_resume_existing_conflict_workspace(
+    workspace: &Path,
+    pr: &PullRequest,
+) -> Result<bool> {
+    let current_branch = run_command_capture(
+        "git",
+        &["rev-parse", "--abbrev-ref", "HEAD"],
+        Some(workspace),
+    )
+    .await
+    .context("failed to inspect current branch for conflict resume")?;
+    if current_branch.trim() != pr.head_ref {
+        return Ok(false);
+    }
+
+    let current_head_sha = run_command_capture("git", &["rev-parse", "HEAD"], Some(workspace))
+        .await
+        .context("failed to inspect current HEAD for conflict resume")?;
+    if current_head_sha.trim() != pr.head_sha {
+        return Ok(false);
+    }
+
+    let merge_head_sha = match run_command_capture(
+        "git",
+        &["rev-parse", "-q", "--verify", "MERGE_HEAD"],
+        Some(workspace),
+    )
+    .await
+    {
+        Ok(output) => output,
+        Err(_) => return Ok(false),
+    };
+    if merge_head_sha.trim() != pr.base_sha {
+        return Ok(false);
+    }
+
+    has_unmerged_paths(workspace).await
 }
 
 async fn sync_workspace(
@@ -395,6 +464,7 @@ async fn merge_base_branch(
         return Ok(WorkspaceSyncReport {
             merged_base_branch: !is_merge_already_up_to_date(&summary),
             merge_conflicts_present: false,
+            resumed_conflict_workspace: false,
         });
     }
 
@@ -402,6 +472,7 @@ async fn merge_base_branch(
         return Ok(WorkspaceSyncReport {
             merged_base_branch: true,
             merge_conflicts_present: true,
+            resumed_conflict_workspace: false,
         });
     }
 
@@ -778,8 +849,12 @@ mod tests {
             .await
             .expect("mapped repo should resolve");
         assert_eq!(
-            std::fs::canonicalize(resolved).expect("resolved repo should canonicalize"),
+            std::fs::canonicalize(resolved.path).expect("resolved repo should canonicalize"),
             std::fs::canonicalize(mapped).expect("mapped repo should canonicalize")
+        );
+        assert!(
+            !resolved.resumed_conflict_workspace,
+            "clean mapped repo should not be treated as a conflict resume",
         );
     }
 
@@ -793,8 +868,12 @@ mod tests {
             .await
             .expect("same-name repo should resolve");
         assert_eq!(
-            std::fs::canonicalize(resolved).expect("resolved repo should canonicalize"),
+            std::fs::canonicalize(resolved.path).expect("resolved repo should canonicalize"),
             std::fs::canonicalize(repo).expect("repo should canonicalize")
+        );
+        assert!(
+            !resolved.resumed_conflict_workspace,
+            "clean auto-discovered repo should not be treated as a conflict resume",
         );
     }
 
@@ -837,6 +916,32 @@ mod tests {
         assert!(
             error.to_string().contains("tracked changes"),
             "error should explain that dirty repositories are rejected",
+        );
+    }
+
+    #[tokio::test]
+    async fn resolve_checkout_allows_resuming_matching_conflict_workspace() {
+        let (workspace, pr) = prepare_workspace_scenario(true).await;
+        let repo = workspace.root.join("symphony");
+
+        let report = sync_workspace(&repo, workspace.git_transport, &pr)
+            .await
+            .expect("conflicted merge should still return a sync report");
+        assert!(
+            report.merge_conflicts_present,
+            "workspace should contain merge conflicts"
+        );
+
+        let resolved = resolve_checkout(&workspace, &pr)
+            .await
+            .expect("matching unresolved conflict workspace should resume");
+        assert!(
+            resolved.resumed_conflict_workspace,
+            "runner should recognize the previous conflict workspace for this PR",
+        );
+        assert_eq!(
+            std::fs::canonicalize(resolved.path).expect("resolved repo should canonicalize"),
+            std::fs::canonicalize(repo).expect("repo should canonicalize")
         );
     }
 

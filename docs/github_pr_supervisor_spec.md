@@ -406,6 +406,9 @@ Rules:
   launching the agent
 - if that merge produces conflicts, the daemon should keep the conflicted merge state in the
   workspace so the agent can resolve it, instead of failing immediately
+- if a later run sees the same PR head SHA, the same base SHA in `MERGE_HEAD`, and unresolved
+  paths already present in the working tree, it should resume from that conflict workspace instead
+  of rejecting it as a generic dirty checkout
 - the daemon must not create a brand-new clone as part of the normal PR execution path
 - the daemon should refuse to reuse a checkout with tracked local modifications
 
