@@ -34,7 +34,7 @@ For each open PR authored by you, Symphony RS polls GitHub and computes a live s
 - `blocked`: the last agent run failed
 - `draft`, `closed`, `merged`: terminal or non-actionable states
 
-The UI shows the PR list, CI/review state, attention reason, timestamps, a live daemon activity panel, a dedicated run-details page that streams live Codex CLI output for active runs and preserves the latest run output after completion, and a visibly subdued row state when a PR is paused.
+The UI shows the PR list, CI/review state, attention reason, timestamps, top-right dashboard tabs for switching between the PR view and live daemon activity, a dedicated run-details page that streams live Codex CLI output for active runs and preserves the latest run output after completion, and a visibly subdued row state when a PR is paused.
 
 ## Requirements
 

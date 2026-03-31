@@ -600,6 +600,7 @@ The MVP UI can be a single page that shows:
 
 - daemon health
 - last poll time
+- a right-aligned dashboard tab switch for `PRs` and `Activity`
 - current tracked PR rows
 - each PR’s status, CI state, review state, and latest action summary
 - a row-level link into a dedicated PR detail page for run output, showing live Codex CLI output while a run is active and the saved output from the latest completed run otherwise
@@ -643,7 +644,7 @@ Panels:
 
 ### 20.3 Activity Feed
 
-Global chronological feed of poll cycles, state transitions, run starts, run finishes, and notification events.
+Global chronological feed of poll cycles, state transitions, run starts, run finishes, and notification events, shown behind the dashboard's `Activity` tab.
 
 The feed should make daemon progress legible even when no PR is currently running, including:
 

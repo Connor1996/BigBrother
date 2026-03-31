@@ -87,6 +87,50 @@ const INDEX_HTML: &str = r#"<!doctype html>
       margin-bottom: 18px;
     }
 
+    .hero-head {
+      display: flex;
+      align-items: flex-start;
+      justify-content: space-between;
+      gap: 18px;
+    }
+
+    .hero-copy {
+      min-width: 0;
+    }
+
+    .view-tabs {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      padding: 6px;
+      border-radius: 999px;
+      border: 1px solid rgba(30, 34, 40, 0.08);
+      background: rgba(255, 255, 255, 0.72);
+      flex-shrink: 0;
+    }
+
+    .view-tab {
+      border: none;
+      border-radius: 999px;
+      background: transparent;
+      color: var(--muted);
+      cursor: pointer;
+      font: inherit;
+      padding: 8px 14px;
+      transition: background 120ms ease, color 120ms ease, transform 120ms ease;
+    }
+
+    .view-tab:hover {
+      color: var(--ink);
+      transform: translateY(-1px);
+    }
+
+    .view-tab.active {
+      background: rgba(29, 107, 87, 0.12);
+      color: var(--accent);
+      box-shadow: inset 0 0 0 1px rgba(29, 107, 87, 0.14);
+    }
+
     .stats {
       display: grid;
       grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
@@ -118,6 +162,10 @@ const INDEX_HTML: &str = r#"<!doctype html>
 
     .panel + .panel {
       margin-top: 18px;
+    }
+
+    .dashboard-view.is-hidden {
+      display: none;
     }
 
     table {
@@ -302,6 +350,15 @@ const INDEX_HTML: &str = r#"<!doctype html>
     }
 
     @media (max-width: 900px) {
+      .hero-head {
+        flex-direction: column;
+        align-items: stretch;
+      }
+
+      .view-tabs {
+        width: fit-content;
+      }
+
       table, thead, tbody, th, td, tr {
         display: block;
       }
@@ -335,8 +392,16 @@ const INDEX_HTML: &str = r#"<!doctype html>
 <body>
   <main>
     <section class="hero">
-      <h1>Symphony RS</h1>
-      <p>Tracking authored GitHub pull requests, surfacing CI and review changes, and showing when the local agent has already taken a pass.</p>
+      <div class="hero-head">
+        <div class="hero-copy">
+          <h1>Symphony RS</h1>
+          <p>Tracking authored GitHub pull requests, surfacing CI and review changes, and showing when the local agent has already taken a pass.</p>
+        </div>
+        <div class="view-tabs" role="tablist" aria-label="Dashboard views">
+          <button id="tab-prs" class="view-tab active" type="button" data-view="prs" aria-selected="true">PRs</button>
+          <button id="tab-activity" class="view-tab" type="button" data-view="activity" aria-selected="false">Activity</button>
+        </div>
+      </div>
       <div class="stats">
         <div class="stat">
           <label>Daemon</label>
@@ -357,7 +422,7 @@ const INDEX_HTML: &str = r#"<!doctype html>
       </div>
     </section>
 
-    <section class="panel">
+    <section id="view-prs" class="panel dashboard-view">
       <table>
         <thead>
           <tr>
@@ -376,7 +441,7 @@ const INDEX_HTML: &str = r#"<!doctype html>
       </table>
     </section>
 
-    <section class="panel">
+    <section id="view-activity" class="panel dashboard-view is-hidden">
       <div class="panel-header">
         <h2 class="panel-title">Daemon Activity</h2>
         <span id="activity-count" class="output-label">-</span>
@@ -390,7 +455,9 @@ const INDEX_HTML: &str = r#"<!doctype html>
   <script>
     const pendingPauseKeys = new Set();
     const optimisticPausedStates = new Map();
+    const dashboardViewStorageKey = "symphony-rs.dashboard-view";
     let latestPrs = [];
+    let currentView = "prs";
 
     function fmtTime(value) {
       if (!value) return "-";
@@ -514,6 +581,27 @@ const INDEX_HTML: &str = r#"<!doctype html>
       `).join("");
     }
 
+    function setDashboardView(view, persist = true) {
+      currentView = view === "activity" ? "activity" : "prs";
+      document.getElementById("view-prs").classList.toggle("is-hidden", currentView !== "prs");
+      document.getElementById("view-activity").classList.toggle("is-hidden", currentView !== "activity");
+
+      const prTab = document.getElementById("tab-prs");
+      const activityTab = document.getElementById("tab-activity");
+      prTab.classList.toggle("active", currentView === "prs");
+      activityTab.classList.toggle("active", currentView === "activity");
+      prTab.setAttribute("aria-selected", String(currentView === "prs"));
+      activityTab.setAttribute("aria-selected", String(currentView === "activity"));
+      prTab.setAttribute("tabindex", currentView === "prs" ? "0" : "-1");
+      activityTab.setAttribute("tabindex", currentView === "activity" ? "0" : "-1");
+
+      if (persist) {
+        try {
+          window.localStorage.setItem(dashboardViewStorageKey, currentView);
+        } catch (_) {}
+      }
+    }
+
     function renderActivity(events) {
       const container = document.getElementById("activity-feed");
       document.getElementById("activity-count").textContent = `${events.length} recent events`;
@@ -533,6 +621,14 @@ const INDEX_HTML: &str = r#"<!doctype html>
           <p class="activity-message">${escapeHtml(event.message)}</p>
         </article>
       `).join("");
+    }
+
+    function restoreDashboardView() {
+      try {
+        return window.localStorage.getItem(dashboardViewStorageKey) || "prs";
+      } catch (_) {
+        return "prs";
+      }
     }
 
     async function refresh() {
@@ -555,9 +651,15 @@ const INDEX_HTML: &str = r#"<!doctype html>
       renderActivity(activityPayload.events || []);
     }
 
+    setDashboardView(restoreDashboardView(), false);
+    document.getElementById("tab-prs").addEventListener("click", () => setDashboardView("prs"));
+    document.getElementById("tab-activity").addEventListener("click", () => setDashboardView("activity"));
+
     refresh().catch((error) => {
       document.getElementById("prs-table").innerHTML =
         `<tr><td colspan="7" class="empty">Failed to load dashboard: ${error.message}</td></tr>`;
+      document.getElementById("activity-feed").innerHTML =
+        `<div class="empty">Failed to load daemon activity: ${error.message}</div>`;
     });
     setInterval(() => refresh().catch(() => {}), 1500);
   </script>
