@@ -302,6 +302,7 @@ impl Supervisor {
                 persisted.last_run_status =
                     Some(if outcome.success { "success" } else { "error" }.to_owned());
                 persisted.last_run_summary = Some(outcome.summary.clone());
+                persisted.last_run_output = capped_run_output(outcome.captured_output.as_deref());
                 persisted.last_run_trigger = active_run.as_ref().map(|run| run.trigger);
                 if outcome.success {
                     record_successful_run(persisted, &request, &outcome);
@@ -630,6 +631,17 @@ fn append_live_output(buffer: &mut String, chunk: &str) {
     }
 }
 
+fn capped_run_output(output: Option<&str>) -> Option<String> {
+    let output = output?;
+    if output.trim().is_empty() {
+        return None;
+    }
+
+    let mut capped = String::new();
+    append_live_output(&mut capped, output);
+    Some(capped)
+}
+
 #[cfg(test)]
 mod tests {
     use std::{collections::HashMap, path::PathBuf};
@@ -761,6 +773,7 @@ mod tests {
             success: true,
             exit_code: Some(0),
             summary: "review addressed".to_owned(),
+            captured_output: Some("codex: fixed review feedback\ncargo test -q".to_owned()),
             processed_comment_at: pr.latest_reviewer_activity_at,
             processed_ci_at: pr.ci_updated_at,
             processed_head_sha: pr.head_sha.clone(),

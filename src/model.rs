@@ -143,6 +143,7 @@ pub struct PersistentPrState {
     pub last_run_finished_at: Option<DateTime<Utc>>,
     pub last_run_status: Option<String>,
     pub last_run_summary: Option<String>,
+    pub last_run_output: Option<String>,
     pub last_run_trigger: Option<AttentionReason>,
     #[serde(default)]
     pub consecutive_failures: u32,

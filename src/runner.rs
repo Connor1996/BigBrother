@@ -35,6 +35,7 @@ pub struct RunOutcome {
     pub success: bool,
     pub exit_code: Option<i32>,
     pub summary: String,
+    pub captured_output: Option<String>,
     pub processed_comment_at: Option<DateTime<Utc>>,
     pub processed_ci_at: Option<DateTime<Utc>>,
     pub processed_head_sha: String,
@@ -83,12 +84,13 @@ pub async fn run(request: RunRequest) -> RunOutcome {
     let finished_at = Utc::now();
 
     match result {
-        Ok((exit_code, summary)) => RunOutcome {
+        Ok((exit_code, summary, captured_output)) => RunOutcome {
             started_at,
             finished_at,
             success: exit_code == Some(0),
             exit_code,
             summary,
+            captured_output,
             processed_comment_at: request.pull_request.latest_reviewer_activity_at,
             processed_ci_at: request.pull_request.ci_updated_at,
             processed_head_sha: request.pull_request.head_sha.clone(),
@@ -99,6 +101,7 @@ pub async fn run(request: RunRequest) -> RunOutcome {
             success: false,
             exit_code: None,
             summary: error.to_string(),
+            captured_output: Some(error.to_string()),
             processed_comment_at: request.pull_request.latest_reviewer_activity_at,
             processed_ci_at: request.pull_request.ci_updated_at,
             processed_head_sha: request.pull_request.head_sha.clone(),
@@ -106,7 +109,7 @@ pub async fn run(request: RunRequest) -> RunOutcome {
     }
 }
 
-async fn run_inner(request: &RunRequest) -> Result<(Option<i32>, String)> {
+async fn run_inner(request: &RunRequest) -> Result<(Option<i32>, String, Option<String>)> {
     let checkout = resolve_checkout(&request.workspace, &request.pull_request).await?;
     let workspace_path = checkout.path;
     let sync_report = if checkout.resumed_conflict_workspace {
@@ -207,11 +210,12 @@ async fn run_inner(request: &RunRequest) -> Result<(Option<i32>, String)> {
         .take()
         .ok_or_else(|| anyhow!("agent stderr was not available"))?;
 
-    let (status, stdout, stderr) =
+    let (status, combined_output, _stdout, _stderr) =
         collect_process_output(child, stdout, stderr, request.output_updates.clone()).await?;
-    let summary = summarize_output(&stdout, &stderr);
+    let summary = summarize_captured_output(&combined_output);
+    let captured_output = normalize_output(&combined_output);
 
-    Ok((status.code(), summary))
+    Ok((status.code(), summary, captured_output))
 }
 
 #[derive(Debug)]
@@ -525,19 +529,38 @@ fn repo_dir_name(repo_full_name: &str) -> &str {
 }
 
 fn summarize_output(stdout: &str, stderr: &str) -> String {
+    let Some(combined) = combine_output(stdout, stderr) else {
+        return "agent completed without output".to_owned();
+    };
+
+    summarize_captured_output(&combined)
+}
+
+fn summarize_captured_output(output: &str) -> String {
+    let lines = output.lines().collect::<Vec<_>>();
+    let tail = lines.iter().rev().take(12).copied().collect::<Vec<_>>();
+    tail.into_iter().rev().collect::<Vec<_>>().join("\n")
+}
+
+fn normalize_output(output: &str) -> Option<String> {
+    if output.trim().is_empty() {
+        None
+    } else {
+        Some(output.to_owned())
+    }
+}
+
+fn combine_output(stdout: &str, stderr: &str) -> Option<String> {
     let combined = [stdout.trim(), stderr.trim()]
         .into_iter()
         .filter(|part| !part.is_empty())
         .collect::<Vec<_>>()
         .join("\n");
-
     if combined.is_empty() {
-        return "agent completed without output".to_owned();
+        None
+    } else {
+        Some(combined)
     }
-
-    let lines = combined.lines().collect::<Vec<_>>();
-    let tail = lines.iter().rev().take(12).copied().collect::<Vec<_>>();
-    tail.into_iter().rev().collect::<Vec<_>>().join("\n")
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -557,11 +580,12 @@ async fn collect_process_output(
     stdout: impl AsyncRead + Unpin + Send + 'static,
     stderr: impl AsyncRead + Unpin + Send + 'static,
     output_updates: Option<UnboundedSender<String>>,
-) -> Result<(ExitStatus, String, String)> {
+) -> Result<(ExitStatus, String, String, String)> {
     let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<OutputChunk>();
     let stdout_task = tokio::spawn(read_output_stream(stdout, OutputStream::Stdout, tx.clone()));
     let stderr_task = tokio::spawn(read_output_stream(stderr, OutputStream::Stderr, tx));
 
+    let mut combined_text = String::new();
     let mut stdout_text = String::new();
     let mut stderr_text = String::new();
 
@@ -569,6 +593,7 @@ async fn collect_process_output(
         if let Some(output_updates) = output_updates.as_ref() {
             let _ = output_updates.send(chunk.text.clone());
         }
+        combined_text.push_str(&chunk.text);
 
         match chunk.stream {
             OutputStream::Stdout => stdout_text.push_str(&chunk.text),
@@ -584,7 +609,7 @@ async fn collect_process_output(
         .await
         .context("failed waiting for agent process")?;
 
-    Ok((status, stdout_text, stderr_text))
+    Ok((status, combined_text, stdout_text, stderr_text))
 }
 
 async fn read_output_stream(

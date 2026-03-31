@@ -659,7 +659,7 @@ const PR_DETAIL_HTML: &str = r##"<!doctype html>
         <div id="summary-text" class="summary-text">-</div>
       </div>
       <div>
-        <span class="section-label">Codex CLI Output</span>
+        <span id="output-label" class="section-label">Codex CLI Output</span>
         <pre id="output" class="output">Waiting for output…</pre>
       </div>
     </section>
@@ -706,7 +706,13 @@ const PR_DETAIL_HTML: &str = r##"<!doctype html>
       document.getElementById("attention-text").textContent = `Attention: ${pr.attention_reason || "-"}`;
       document.getElementById("updated-at").textContent = fmtTime(pr.updated_at);
       document.getElementById("summary-text").textContent = pr.latest_summary || "-";
-      document.getElementById("output").textContent = pr.live_output || "No live output is available for this PR right now.";
+      document.getElementById("output-label").textContent =
+        pr.status === "running" ? "Live Codex CLI Output" : "Saved Codex CLI Output";
+      document.getElementById("output").textContent = pr.live_output || (
+        pr.status === "running"
+          ? "No live output is available for this PR right now."
+          : "No saved output is available for the last run."
+      );
       setPill("status-pill", pr.status);
       setPill("ci-pill", pr.ci_status);
       setPill("review-pill", pr.review_status);
@@ -911,7 +917,8 @@ fn summarize_pr(tracked: &TrackedPr) -> PullRequestSummary {
         live_output: tracked
             .runner
             .as_ref()
-            .and_then(|runner| runner.live_output.clone()),
+            .map(|runner| runner.live_output.clone())
+            .unwrap_or_else(|| tracked.persisted.last_run_output.clone()),
     }
 }
 

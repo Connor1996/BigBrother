@@ -598,7 +598,7 @@ The MVP UI can be a single page that shows:
 - last poll time
 - current tracked PR rows
 - each PR’s status, CI state, review state, and latest action summary
-- a row-level link into a dedicated PR detail page for live Codex CLI output
+- a row-level link into a dedicated PR detail page for run output, showing live Codex CLI output while a run is active and the saved output from the latest completed run otherwise
 - a row-level pause/resume control for each tracked PR
 - a visually subdued treatment for paused rows so they read as intentionally muted rather than inactive by accident
 
@@ -632,6 +632,7 @@ Panels:
 - recent comments/reviews summary
 - run history
 - live Codex CLI output for the current run, when a run is active
+- saved latest run output when no run is currently active
 - latest run output summary
 - workspace path
 - notification state

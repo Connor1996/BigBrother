@@ -21,7 +21,10 @@ use symphony_rs::{
         AgentConfig, DaemonConfig, ResolvedConfig, ResolvedGitHubConfig, ResolvedWorkspaceConfig,
         UiConfig,
     },
-    model::{CiStatus, PersistentPrState, PullRequest, ReviewDecision, TrackedPr, TrackingStatus},
+    model::{
+        AttentionReason, CiStatus, PersistentPrState, PullRequest, ReviewDecision, RunnerState,
+        TrackedPr, TrackingStatus,
+    },
     runner::{RunOutcome, RunRequest},
     service::{AgentRunner, GitHubProvider, Supervisor},
     web,
@@ -74,6 +77,7 @@ impl AgentRunner for FakeAgentRunner {
                 success: true,
                 exit_code: Some(0),
                 summary: format!("fixed {}", request.pull_request.key),
+                captured_output: Some("codex: inspecting workspace\ncargo test -q\n".to_owned()),
                 processed_comment_at: request.pull_request.latest_reviewer_activity_at,
                 processed_ci_at: request.pull_request.ci_updated_at,
                 processed_head_sha: request.pull_request.head_sha,
@@ -103,6 +107,7 @@ impl AgentRunner for AlwaysFailingAgentRunner {
                 success: false,
                 exit_code: Some(1),
                 summary: format!("failed {}", request.pull_request.key),
+                captured_output: Some("codex: run failed before fix\n".to_owned()),
                 processed_comment_at: request.pull_request.latest_reviewer_activity_at,
                 processed_ci_at: request.pull_request.ci_updated_at,
                 processed_head_sha: request.pull_request.head_sha,
@@ -469,6 +474,97 @@ async fn running_pr_exposes_live_codex_output() {
         .await
         .expect("poll task should join")
         .expect("poll should succeed");
+}
+
+#[tokio::test]
+async fn completed_pr_detail_shows_saved_last_run_output() {
+    let runner = FakeAgentRunner {
+        invocations: Arc::new(AtomicUsize::new(0)),
+        started: Arc::new(Semaphore::new(0)),
+        allow_finish: Arc::new(Semaphore::new(1)),
+    };
+    let supervisor = Arc::new(
+        Supervisor::new(
+            sample_config(
+                unique_temp_path("state.json"),
+                unique_temp_path("workspaces"),
+            ),
+            Arc::new(FakeGitHubProvider {
+                prs: vec![actionable_pr()],
+            }),
+            Arc::new(runner),
+        )
+        .expect("supervisor should initialize"),
+    );
+
+    supervisor
+        .poll_once()
+        .await
+        .expect("poll should finish the fake run");
+
+    let detail_payload = get_json(supervisor.clone(), "/api/pr?key=openai%2Fsymphony%237").await;
+    assert_eq!(detail_payload["status"], json!("waiting review"));
+    assert_eq!(
+        detail_payload["live_output"],
+        json!("codex: inspecting workspace\ncargo test -q\n")
+    );
+    assert_eq!(
+        detail_payload["latest_summary"],
+        json!("fixed openai/symphony#7")
+    );
+}
+
+#[tokio::test]
+async fn running_pr_does_not_fall_back_to_saved_output() {
+    let supervisor = Arc::new(
+        Supervisor::new(
+            sample_config(
+                unique_temp_path("state.json"),
+                unique_temp_path("workspaces"),
+            ),
+            Arc::new(FakeGitHubProvider { prs: vec![] }),
+            Arc::new(FakeAgentRunner {
+                invocations: Arc::new(AtomicUsize::new(0)),
+                started: Arc::new(Semaphore::new(0)),
+                allow_finish: Arc::new(Semaphore::new(0)),
+            }),
+        )
+        .expect("supervisor should initialize"),
+    );
+
+    {
+        let shared_state = supervisor.shared_state();
+        let mut state = shared_state
+            .lock()
+            .expect("dashboard state mutex should not be poisoned");
+        let pr = actionable_pr();
+        state.tracked_prs.insert(
+            pr.key.clone(),
+            TrackedPr {
+                pull_request: pr,
+                status: TrackingStatus::Running,
+                attention_reason: Some(AttentionReason::CiFailed),
+                persisted: PersistentPrState {
+                    last_run_output: Some("stale output".to_owned()),
+                    ..PersistentPrState::default()
+                },
+                runner: Some(RunnerState {
+                    status: TrackingStatus::Running,
+                    started_at: Utc::now(),
+                    finished_at: None,
+                    attempt: 1,
+                    trigger: AttentionReason::CiFailed,
+                    summary: "waiting for Codex CLI output...".to_owned(),
+                    live_output: None,
+                    exit_code: None,
+                }),
+            },
+        );
+    }
+
+    let detail_payload = get_json(supervisor, "/api/pr?key=openai%2Fsymphony%237").await;
+    assert_eq!(detail_payload["status"], json!("running"));
+    assert_eq!(detail_payload["live_output"], Value::Null);
 }
 
 #[tokio::test]
