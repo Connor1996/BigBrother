@@ -697,7 +697,6 @@ Panels:
 - a hero header that reuses the homepage `BigBrother` brand lockup and size, with `Back to dashboard` aligned on the right
 - a GitHub PR link and PR title block styled like the dashboard PR description cell rather than a large standalone CTA
 - no dedicated attention banner or oversized `Open GitHub PR` control in the detail view; operator context should come from the status cards and summary/output sections
-- the detail header cards should stay minimal and avoid repeating dashboard-only CI and review pills
 - summary
 - recent comments/reviews summary
 - run history
