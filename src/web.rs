@@ -965,6 +965,19 @@ const PR_DETAIL_HTML: &str = r##"<!doctype html>
       padding: 32px 20px 64px;
     }
 
+    h1 {
+      margin: 0 0 8px;
+      font-size: clamp(2.2rem, 3vw, 3.4rem);
+      font-weight: 700;
+      letter-spacing: -0.04em;
+    }
+
+    p {
+      margin: 0;
+      color: var(--muted);
+      line-height: 1.55;
+    }
+
     .hero,
     .panel {
       background: var(--panel);
@@ -979,36 +992,57 @@ const PR_DETAIL_HTML: &str = r##"<!doctype html>
       margin-bottom: 18px;
     }
 
-    .detail-brand {
-      display: inline-flex;
+    .hero-head {
+      display: flex;
       align-items: center;
-      gap: 14px;
-      margin-bottom: 14px;
+      justify-content: space-between;
+      gap: 18px;
+      margin-bottom: 18px;
     }
 
-    .detail-brand .brand-mark {
-      width: 64px;
+    .brand-lockup {
+      display: flex;
+      align-items: center;
+      gap: 18px;
     }
 
-    .detail-brand .brand-mark img {
+    .brand-mark {
+      width: clamp(78px, 8vw, 104px);
+      flex-shrink: 0;
+    }
+
+    .brand-mark img {
       display: block;
       width: 100%;
       height: auto;
     }
 
-    .detail-brand-name {
-      font-size: 0.78rem;
-      text-transform: uppercase;
-      letter-spacing: 0.14em;
+    .brand-copy {
+      min-width: 0;
+    }
+
+    .hero-copy {
+      min-width: 0;
+      margin-bottom: 20px;
+    }
+
+    .pr-title {
+      margin-top: 6px;
+      font-weight: 600;
+      font-size: 1.12rem;
+      line-height: 1.45;
+    }
+
+    .pr-meta {
+      margin-top: 4px;
       color: var(--muted);
-      font-weight: 700;
+      font-size: 0.9rem;
     }
 
     .meta {
       display: grid;
       grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
       gap: 14px;
-      margin-top: 20px;
     }
 
     .meta-card {
@@ -1039,17 +1073,19 @@ const PR_DETAIL_HTML: &str = r##"<!doctype html>
       margin-bottom: 18px;
     }
 
-    .back-link,
-    .pr-link {
+    .detail-link {
       color: var(--accent);
       text-decoration: none;
       border-bottom: 1px solid rgba(29, 107, 87, 0.25);
       width: fit-content;
     }
 
-    .back-link:hover,
-    .pr-link:hover {
+    .detail-link:hover {
       border-bottom-color: rgba(29, 107, 87, 0.8);
+    }
+
+    .is-hidden {
+      display: none;
     }
 
     .pill {
@@ -1140,15 +1176,23 @@ const PR_DETAIL_HTML: &str = r##"<!doctype html>
 <body>
   <main>
     <section class="hero">
-      <div class="detail-brand">
-        <div class="brand-mark" aria-hidden="true">
-          <img src="/assets/bigbrother-mark.png" alt="" />
+      <div class="hero-head">
+        <div class="brand-lockup">
+          <div class="brand-mark" aria-hidden="true">
+            <img src="/assets/bigbrother-mark.png" alt="" />
+          </div>
+          <div class="brand-copy">
+            <h1>BigBrother</h1>
+            <p>PR run details and saved output.</p>
+          </div>
         </div>
-        <div class="detail-brand-name">BigBrother</div>
+        <a class="detail-link" href="/">Back to dashboard</a>
       </div>
-      <a class="back-link" href="/">Back to dashboard</a>
-      <h1 id="title" style="margin: 12px 0 6px; font-size: clamp(2rem, 3vw, 3rem); letter-spacing: -0.04em;">Loading run…</h1>
-      <div id="subtitle" style="color: var(--muted); line-height: 1.55;">Fetching PR details…</div>
+      <div class="hero-copy">
+        <a id="pr-link" class="is-hidden" href="#" target="_blank" rel="noreferrer">PR</a>
+        <div id="title" class="pr-title">Loading PR details…</div>
+        <div id="subtitle" class="pr-meta">Fetching PR details…</div>
+      </div>
       <div class="meta">
         <div class="meta-card">
           <label>Status</label>
@@ -1170,10 +1214,6 @@ const PR_DETAIL_HTML: &str = r##"<!doctype html>
     </section>
 
     <section class="panel">
-      <div class="toolbar">
-        <a id="pr-link" class="pr-link" href="#" target="_blank" rel="noreferrer">Open GitHub PR</a>
-        <span id="attention-text" class="empty">Attention: -</span>
-      </div>
       <div class="summary-block">
         <span class="section-label">Latest Summary</span>
         <div id="summary-text" class="summary-text">-</div>
@@ -1207,6 +1247,20 @@ const PR_DETAIL_HTML: &str = r##"<!doctype html>
       document.getElementById(id).innerHTML = `<span class="${pillClass(value)}">${String(value || "-")}</span>`;
     }
 
+    function setPrLink(url, label) {
+      const link = document.getElementById("pr-link");
+      if (!url || !label) {
+        link.classList.add("is-hidden");
+        link.removeAttribute("href");
+        link.textContent = "PR";
+        return;
+      }
+
+      link.href = url;
+      link.textContent = label;
+      link.classList.remove("is-hidden");
+    }
+
     function setTerminalMode(isRunning) {
       document.getElementById("terminal-label").textContent =
         isRunning ? "Live Terminal" : "Last Run Output";
@@ -1231,6 +1285,7 @@ const PR_DETAIL_HTML: &str = r##"<!doctype html>
     async function refresh() {
       const key = new URLSearchParams(window.location.search).get("key");
       if (!key) {
+        setPrLink(null, null);
         document.getElementById("title").textContent = "Missing PR key";
         document.getElementById("subtitle").textContent = "Open this page from the dashboard so the PR key is included.";
         setTerminalMode(false);
@@ -1247,10 +1302,9 @@ const PR_DETAIL_HTML: &str = r##"<!doctype html>
 
       const pr = await response.json();
       document.title = `${pr.repo_full_name} #${pr.number} · BigBrother`;
-      document.getElementById("title").textContent = `${pr.repo_full_name} #${pr.number}`;
-      document.getElementById("subtitle").textContent = pr.title;
-      document.getElementById("pr-link").href = pr.url;
-      document.getElementById("attention-text").textContent = `Attention: ${pr.attention_reason || "-"}`;
+      setPrLink(pr.url, `${pr.repo_full_name} #${pr.number}`);
+      document.getElementById("title").textContent = pr.title;
+      document.getElementById("subtitle").textContent = `Updated ${fmtTime(pr.updated_at)}`;
       document.getElementById("updated-at").textContent = fmtTime(pr.updated_at);
       document.getElementById("summary-text").textContent = pr.latest_summary || "-";
       setTerminalMode(pr.status === "running");
@@ -1262,6 +1316,7 @@ const PR_DETAIL_HTML: &str = r##"<!doctype html>
     }
 
     refresh().catch((error) => {
+      setPrLink(null, null);
       document.getElementById("title").textContent = "Failed to load run";
       document.getElementById("subtitle").textContent = error.message;
       setTerminalMode(false);

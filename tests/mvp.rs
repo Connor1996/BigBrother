@@ -863,10 +863,16 @@ async fn pr_detail_page_uses_bigbrother_branding() {
 
     assert!(
         html.contains("<title>BigBrother Run View</title>")
-            && html.contains("detail-brand-name\">BigBrother</div>")
+            && html.contains("<div class=\"brand-lockup\">")
+            && html.contains("<h1>BigBrother</h1>")
+            && html.contains("Back to dashboard")
             && html.contains("src=\"/assets/bigbrother-mark.png\"")
-            && html.contains(r#"isRunning ? "terminal-shell" : "output""#),
-        "run detail page should reuse the BigBrother branding, PNG icon asset, and wrapped saved output mode, got: {html}",
+            && html.contains("id=\"title\" class=\"pr-title\"")
+            && html.contains("id=\"subtitle\" class=\"pr-meta\"")
+            && html.contains(r#"isRunning ? "terminal-shell" : "output""#)
+            && !html.contains("Open GitHub PR")
+            && !html.contains("Attention:"),
+        "run detail page should reuse the homepage branding/layout and omit the old PR CTA and attention banner, got: {html}",
     );
 }
 
