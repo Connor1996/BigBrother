@@ -234,6 +234,12 @@ const INDEX_HTML: &str = r#"<!doctype html>
       gap: 8px;
     }
 
+    .detail-meta {
+      font-size: 0.78rem;
+      color: var(--muted);
+      white-space: nowrap;
+    }
+
     .output-label,
     .output-empty {
       font-size: 0.74rem;
@@ -495,10 +501,14 @@ const INDEX_HTML: &str = r#"<!doctype html>
     function renderDetails(pr) {
       const summary = `<div class="summary">${escapeHtml(pr.latest_summary || "-")}</div>`;
       const detailLabel = pr.status === "running" ? "Open live output" : "Open details";
+      const detailMeta = pr.details_at && pr.details_label
+        ? `<div class="detail-meta">${escapeHtml(pr.details_label)} ${escapeHtml(fmtTime(pr.details_at))}</div>`
+        : "";
       return `
         <div class="details-stack">
           ${summary}
           <a class="detail-link" href="/pr?key=${encodeURIComponent(pr.key)}">${detailLabel}</a>
+          ${detailMeta}
         </div>
       `;
     }
@@ -968,6 +978,8 @@ struct PullRequestSummary {
     updated_at: DateTime<Utc>,
     latest_summary: Option<String>,
     live_output: Option<String>,
+    details_label: Option<String>,
+    details_at: Option<DateTime<Utc>>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -1110,6 +1122,16 @@ async fn set_pr_paused(
 }
 
 fn summarize_pr(tracked: &TrackedPr) -> PullRequestSummary {
+    let (details_label, details_at) = if let Some(runner) = tracked.runner.as_ref() {
+        (Some("Started".to_owned()), Some(runner.started_at))
+    } else if let Some(finished_at) = tracked.persisted.last_run_finished_at {
+        (Some("Last run".to_owned()), Some(finished_at))
+    } else if let Some(started_at) = tracked.persisted.last_run_started_at {
+        (Some("Last run".to_owned()), Some(started_at))
+    } else {
+        (None, None)
+    };
+
     PullRequestSummary {
         key: tracked.pull_request.key.clone(),
         repo_full_name: tracked.pull_request.repo_full_name.clone(),
@@ -1135,6 +1157,8 @@ fn summarize_pr(tracked: &TrackedPr) -> PullRequestSummary {
             .as_ref()
             .map(|runner| runner.live_output.clone())
             .unwrap_or_else(|| tracked.persisted.last_run_output.clone()),
+        details_label,
+        details_at,
     }
 }
 

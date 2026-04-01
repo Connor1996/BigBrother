@@ -670,6 +670,8 @@ async fn running_pr_exposes_live_codex_output() {
         .find(|pr| pr["key"] == json!("openai/symphony#7"))
         .expect("running PR should be visible");
     assert_eq!(running_pr["status"], json!("running"));
+    assert_eq!(running_pr["details_label"], json!("Started"));
+    assert!(running_pr["details_at"].is_string());
     assert_eq!(
         running_pr["live_output"],
         json!("codex: inspecting workspace\ncargo test -q\n")
@@ -717,6 +719,8 @@ async fn completed_pr_detail_shows_saved_last_run_output() {
 
     let detail_payload = get_json(supervisor.clone(), "/api/pr?key=openai%2Fsymphony%237").await;
     assert_eq!(detail_payload["status"], json!("waiting review"));
+    assert_eq!(detail_payload["details_label"], json!("Last run"));
+    assert!(detail_payload["details_at"].is_string());
     assert_eq!(
         detail_payload["live_output"],
         json!("codex: inspecting workspace\ncargo test -q\n")
@@ -778,6 +782,57 @@ async fn running_pr_does_not_fall_back_to_saved_output() {
     let detail_payload = get_json(supervisor, "/api/pr?key=openai%2Fsymphony%237").await;
     assert_eq!(detail_payload["status"], json!("running"));
     assert_eq!(detail_payload["live_output"], Value::Null);
+}
+
+#[tokio::test]
+async fn saved_run_timestamp_is_exposed_in_pr_list() {
+    let finished_at = Utc.with_ymd_and_hms(2026, 3, 31, 21, 12, 0).unwrap();
+    let supervisor = Arc::new(
+        Supervisor::new(
+            sample_config(
+                unique_temp_path("state.json"),
+                unique_temp_path("workspaces"),
+            ),
+            Arc::new(FakeGitHubProvider { prs: vec![] }),
+            Arc::new(FakeAgentRunner {
+                invocations: Arc::new(AtomicUsize::new(0)),
+                started: Arc::new(Semaphore::new(0)),
+                allow_finish: Arc::new(Semaphore::new(0)),
+            }),
+        )
+        .expect("supervisor should initialize"),
+    );
+
+    {
+        let shared_state = supervisor.shared_state();
+        let mut state = shared_state
+            .lock()
+            .expect("dashboard state mutex should not be poisoned");
+        let pr = actionable_pr();
+        state.tracked_prs.insert(
+            pr.key.clone(),
+            TrackedPr {
+                pull_request: pr,
+                status: TrackingStatus::WaitingReview,
+                attention_reason: None,
+                persisted: PersistentPrState {
+                    last_run_finished_at: Some(finished_at),
+                    last_run_summary: Some("saved summary".to_owned()),
+                    ..PersistentPrState::default()
+                },
+                runner: None,
+            },
+        );
+    }
+
+    let prs_payload = get_json(supervisor, "/api/prs").await;
+    let prs = prs_payload["prs"].as_array().expect("prs array");
+    let pr = prs
+        .iter()
+        .find(|pr| pr["key"] == json!("openai/symphony#7"))
+        .expect("tracked PR should be visible");
+    assert_eq!(pr["details_label"], json!("Last run"));
+    assert_eq!(pr["details_at"], json!(finished_at.to_rfc3339_opts(chrono::SecondsFormat::Secs, true)));
 }
 
 #[tokio::test]
