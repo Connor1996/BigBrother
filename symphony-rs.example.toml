@@ -33,9 +33,19 @@ additional_instructions = """
 [ui]
 refresh_hz = 2
 
-# Optional one-way Feishu notifications via a custom bot webhook.
+# Optional one-way Feishu notifications.
 # This first pass only pushes daemon run state and results outward; it does not receive commands.
 #
+# Private DM mode via an enterprise self-built app bot.
+# [notifications.feishu]
+# app_id = "$FEISHU_APP_ID"
+# app_secret = "$FEISHU_APP_SECRET"
+# receive_id = "$FEISHU_NOTIFY_EMAIL"
+# receive_id_type = "email"
+# label = "connor-mbp"
+# timeout_secs = 10
+#
+# Group mode via a custom bot webhook.
 # [notifications.feishu]
 # webhook_url = "$FEISHU_BOT_WEBHOOK_URL"
 # keyword = "Symphony"
