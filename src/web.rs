@@ -586,6 +586,7 @@ const INDEX_HTML: &str = r#"<!doctype html>
 
     function pillClass(value) {
       const label = String(value || "").toLowerCase();
+      if (!label || label === "-" || label === "not loaded") return "pill";
       if (label.includes("fail") || label.includes("block") || label.includes("conflict")) return "pill bad";
       if (label.includes("pause")) return "pill warn";
       if (label.includes("need") || label.includes("pending") || label.includes("comment") || label.includes("retry")) return "pill warn";
@@ -1108,6 +1109,7 @@ const PR_DETAIL_HTML: &str = r##"<!doctype html>
 
     function pillClass(value) {
       const label = String(value || "").toLowerCase();
+      if (!label || label === "-" || label === "not loaded") return "pill";
       if (label.includes("fail") || label.includes("block") || label.includes("conflict")) return "pill bad";
       if (label.includes("pause")) return "pill warn";
       if (label.includes("need") || label.includes("pending") || label.includes("comment") || label.includes("retry")) return "pill warn";
@@ -1506,12 +1508,8 @@ fn summarize_review_request(review_request: &ReviewRequestPr) -> PullRequestSumm
         title: review_request.pull_request.title.clone(),
         url: review_request.pull_request.url.clone(),
         status: review_request_status(review_request).to_owned(),
-        ci_status: review_request.pull_request.ci_status.label().to_owned(),
-        review_status: review_request
-            .pull_request
-            .review_decision
-            .label()
-            .to_owned(),
+        ci_status: "-".to_owned(),
+        review_status: "-".to_owned(),
         is_paused: false,
         can_toggle_pause: false,
         attention_reason: Some("requested reviewer".to_owned()),

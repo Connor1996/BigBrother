@@ -833,6 +833,8 @@ async fn review_requests_api_lists_requested_review_prs() {
     assert_eq!(prs.len(), 1);
     assert_eq!(prs[0]["key"], json!("openai/symphony#18"));
     assert_eq!(prs[0]["status"], json!("requested review"));
+    assert_eq!(prs[0]["ci_status"], json!("-"));
+    assert_eq!(prs[0]["review_status"], json!("-"));
     assert_eq!(prs[0]["latest_summary"], Value::Null);
 }
 
