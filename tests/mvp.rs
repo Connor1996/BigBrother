@@ -799,6 +799,47 @@ async fn dashboard_html_exposes_top_right_pr_review_request_and_activity_tabs() 
             && html.contains("&#10074;&#10074;"),
         "dashboard should render play and pause icons for the action buttons, got: {html}",
     );
+    assert!(
+        html.contains("<title>BigBrother</title>")
+            && html.contains(">BigBrother</h1>")
+            && html.contains("viewBox=\"0 0 160 112\""),
+        "dashboard should expose the BigBrother brand and three-mole icon, got: {html}",
+    );
+}
+
+#[tokio::test]
+async fn pr_detail_page_uses_bigbrother_branding() {
+    let supervisor = Arc::new(
+        Supervisor::new(
+            sample_config(
+                unique_temp_path("state.json"),
+                unique_temp_path("workspaces"),
+            ),
+            Arc::new(FakeGitHubProvider { prs: vec![] }),
+            Arc::new(FakeAgentRunner {
+                invocations: Arc::new(AtomicUsize::new(0)),
+                started: Arc::new(Semaphore::new(0)),
+                allow_finish: Arc::new(Semaphore::new(0)),
+            }),
+        )
+        .expect("supervisor should initialize"),
+    );
+
+    let html = request_text(
+        supervisor,
+        Request::builder()
+            .uri("/pr")
+            .body(Body::empty())
+            .expect("request should build"),
+    )
+    .await;
+
+    assert!(
+        html.contains("<title>BigBrother Run View</title>")
+            && html.contains("detail-brand-name\">BigBrother</div>")
+            && html.contains("viewBox=\"0 0 160 112\""),
+        "run detail page should reuse the BigBrother branding and icon, got: {html}",
+    );
 }
 
 #[tokio::test]

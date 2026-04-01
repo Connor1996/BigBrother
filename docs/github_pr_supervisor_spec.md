@@ -2,7 +2,7 @@
 
 Status: Draft v0.2
 
-Owner: `symphony-rs` implementation track
+Owner: `BigBrother` implementation track
 
 Repository note:
 
@@ -11,7 +11,7 @@ Repository note:
 
 ## 1. Goal
 
-Build a new Rust-based Symphony implementation that:
+Build a new Rust-based BigBrother implementation that:
 
 1. tracks GitHub pull requests authored by the configured user
 2. monitors CI, reviews, inline comments, and top-level PR comments

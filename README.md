@@ -1,6 +1,6 @@
-# Symphony RS
+# BigBrother
 
-`symphony-rs` is a new Rust-based Symphony implementation focused on GitHub pull requests.
+`BigBrother` is the product name for the Rust-based GitHub PR supervisor implemented in the `symphony-rs` repository.
 
 Current status:
 
@@ -25,7 +25,7 @@ The planned product direction is:
 
 ## What It Tracks
 
-For each open PR authored by you, Symphony RS polls GitHub and computes a live status:
+For each open PR authored by you, BigBrother polls GitHub and computes a live status:
 
 - `waiting review`: nothing actionable right now, still waiting on human review
 - `waiting merge`: approved and CI passed, waiting to be merged
@@ -46,7 +46,7 @@ The UI shows the authored PR list, a `Review Requests` tab for PRs that currentl
   - the example config assumes `codex`
   - if you want Codex to run with unsandboxed full local access, set
     `agent.dangerously_bypass_approvals_and_sandbox = true`
-- existing local checkouts for the repositories you want Symphony RS to operate on
+- existing local checkouts for the repositories you want BigBrother to operate on
   - by default it looks under `workspace.root` for a directory named after the repo, such as `../tikv` for `tikv/tikv`
   - if auto-discovery is not enough, you can provide `workspace.repo_map` entries in the config
 - credentials for pushing back to your PR branches
@@ -73,9 +73,9 @@ cargo build --release
 target/release/symphony-rs --config symphony-rs.toml
 ```
 
-The example config sets `workspace.root = ".."`, which means Symphony RS will look for sibling
+The example config sets `workspace.root = ".."`, which means BigBrother will look for sibling
 repositories next to `symphony-rs` before it tries any explicit `workspace.repo_map` overrides.
-If you enable `agent.dangerously_bypass_approvals_and_sandbox`, Symphony will invoke Codex with
+If you enable `agent.dangerously_bypass_approvals_and_sandbox`, BigBrother will invoke Codex with
 full unsandboxed access, so only use that on a machine you already trust.
 
 4. Open the dashboard in your browser:
@@ -90,7 +90,7 @@ is kept as a compatibility no-op for older command lines.
 
 ## How The Agent Loop Works
 
-When Symphony RS detects a PR that needs attention, it:
+When BigBrother detects a PR that needs attention, it:
 
 1. resolves an existing local repository checkout for the PR
 2. syncs the PR head branch into that checkout
@@ -112,7 +112,7 @@ Manual deep reviews use a separate read-only prompt: they inspect the diff, prod
 - CI attention is triggered only when a failing status/check is newer than the last processed CI signal for that PR
 - successful runs only consume the trigger they were started for; unchanged review and CI signals on the same PR stay independently actionable
 - repository resolution prefers `workspace.repo_map` when present, then falls back to `<workspace.root>/<repo-name>`
-- Symphony RS reuses existing local checkouts and refuses to operate on a tracked repo that has local tracked changes
+- BigBrother reuses existing local checkouts and refuses to operate on a tracked repo that has local tracked changes
 - the current UI is local-only and intentionally minimal
 - state persistence is still JSON-backed for MVP
 

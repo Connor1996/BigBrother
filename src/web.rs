@@ -29,7 +29,7 @@ const INDEX_HTML: &str = r#"<!doctype html>
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Symphony RS</title>
+  <title>BigBrother</title>
   <style>
     :root {
       color-scheme: light;
@@ -66,6 +66,29 @@ const INDEX_HTML: &str = r#"<!doctype html>
       font-size: clamp(2.2rem, 3vw, 3.4rem);
       font-weight: 700;
       letter-spacing: -0.04em;
+    }
+
+    .brand-lockup {
+      display: flex;
+      align-items: center;
+      gap: 18px;
+      margin-bottom: 8px;
+    }
+
+    .brand-mark {
+      width: clamp(78px, 8vw, 104px);
+      flex-shrink: 0;
+      color: #111;
+    }
+
+    .brand-mark svg {
+      display: block;
+      width: 100%;
+      height: auto;
+    }
+
+    .brand-copy {
+      min-width: 0;
     }
 
     p {
@@ -485,7 +508,47 @@ const INDEX_HTML: &str = r#"<!doctype html>
     <section class="hero">
       <div class="hero-head">
         <div class="hero-copy">
-          <h1>Symphony RS</h1>
+          <div class="brand-lockup">
+            <div class="brand-mark" aria-hidden="true">
+              <svg viewBox="0 0 160 112" fill="none" stroke="currentColor" stroke-width="4.5" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M10 88c8-10 17-15 28-15s20 5 28 15" />
+                <path d="M42 73v11" />
+                <circle cx="38" cy="45" r="18" />
+                <circle cx="29" cy="28" r="7" />
+                <circle cx="47" cy="28" r="7" />
+                <path d="M32 45h.01" />
+                <path d="M44 45h.01" />
+                <path d="M35 53c2 2 4 3 6 3s4-1 6-3" />
+                <path d="M29 70c2-3 5-5 9-5" />
+                <path d="M47 70c-2-3-5-5-9-5" />
+
+                <path d="M52 95c9-12 19-18 30-18s21 6 30 18" />
+                <path d="M82 77v14" />
+                <circle cx="82" cy="43" r="22" />
+                <circle cx="70" cy="21" r="8" />
+                <circle cx="94" cy="21" r="8" />
+                <path d="M74 43h.01" />
+                <path d="M90 43h.01" />
+                <path d="M75 54c3 3 5 4 7 4s4-1 7-4" />
+                <path d="M68 73c3-4 8-6 14-6" />
+                <path d="M96 73c-3-4-8-6-14-6" />
+
+                <path d="M110 88c8-10 17-15 28-15s20 5 28 15" />
+                <path d="M118 73v11" />
+                <circle cx="122" cy="45" r="18" />
+                <circle cx="113" cy="28" r="7" />
+                <circle cx="131" cy="28" r="7" />
+                <path d="M116 45h.01" />
+                <path d="M128 45h.01" />
+                <path d="M119 53c2 2 4 3 6 3s4-1 6-3" />
+                <path d="M113 70c2-3 5-5 9-5" />
+                <path d="M131 70c-2-3-5-5-9-5" />
+              </svg>
+            </div>
+            <div class="brand-copy">
+              <h1>BigBrother</h1>
+            </div>
+          </div>
           <p>Tracking authored GitHub pull requests, surfacing CI and review changes, and showing when the local agent has already taken a pass.</p>
         </div>
         <div class="view-tabs" role="tablist" aria-label="Dashboard views">
@@ -879,7 +942,7 @@ const PR_DETAIL_HTML: &str = r##"<!doctype html>
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Symphony RS Run View</title>
+  <title>BigBrother Run View</title>
   <style>
     :root {
       color-scheme: light;
@@ -923,6 +986,32 @@ const PR_DETAIL_HTML: &str = r##"<!doctype html>
     .hero {
       padding: 28px;
       margin-bottom: 18px;
+    }
+
+    .detail-brand {
+      display: inline-flex;
+      align-items: center;
+      gap: 14px;
+      margin-bottom: 14px;
+    }
+
+    .detail-brand .brand-mark {
+      width: 64px;
+      color: #111;
+    }
+
+    .detail-brand .brand-mark svg {
+      display: block;
+      width: 100%;
+      height: auto;
+    }
+
+    .detail-brand-name {
+      font-size: 0.78rem;
+      text-transform: uppercase;
+      letter-spacing: 0.14em;
+      color: var(--muted);
+      font-weight: 700;
     }
 
     .meta {
@@ -1061,6 +1150,45 @@ const PR_DETAIL_HTML: &str = r##"<!doctype html>
 <body>
   <main>
     <section class="hero">
+      <div class="detail-brand">
+        <div class="brand-mark" aria-hidden="true">
+          <svg viewBox="0 0 160 112" fill="none" stroke="currentColor" stroke-width="4.5" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M10 88c8-10 17-15 28-15s20 5 28 15" />
+            <path d="M42 73v11" />
+            <circle cx="38" cy="45" r="18" />
+            <circle cx="29" cy="28" r="7" />
+            <circle cx="47" cy="28" r="7" />
+            <path d="M32 45h.01" />
+            <path d="M44 45h.01" />
+            <path d="M35 53c2 2 4 3 6 3s4-1 6-3" />
+            <path d="M29 70c2-3 5-5 9-5" />
+            <path d="M47 70c-2-3-5-5-9-5" />
+
+            <path d="M52 95c9-12 19-18 30-18s21 6 30 18" />
+            <path d="M82 77v14" />
+            <circle cx="82" cy="43" r="22" />
+            <circle cx="70" cy="21" r="8" />
+            <circle cx="94" cy="21" r="8" />
+            <path d="M74 43h.01" />
+            <path d="M90 43h.01" />
+            <path d="M75 54c3 3 5 4 7 4s4-1 7-4" />
+            <path d="M68 73c3-4 8-6 14-6" />
+            <path d="M96 73c-3-4-8-6-14-6" />
+
+            <path d="M110 88c8-10 17-15 28-15s20 5 28 15" />
+            <path d="M118 73v11" />
+            <circle cx="122" cy="45" r="18" />
+            <circle cx="113" cy="28" r="7" />
+            <circle cx="131" cy="28" r="7" />
+            <path d="M116 45h.01" />
+            <path d="M128 45h.01" />
+            <path d="M119 53c2 2 4 3 6 3s4-1 6-3" />
+            <path d="M113 70c2-3 5-5 9-5" />
+            <path d="M131 70c-2-3-5-5-9-5" />
+          </svg>
+        </div>
+        <div class="detail-brand-name">BigBrother</div>
+      </div>
       <a class="back-link" href="/">Back to dashboard</a>
       <h1 id="title" style="margin: 12px 0 6px; font-size: clamp(2rem, 3vw, 3rem); letter-spacing: -0.04em;">Loading run…</h1>
       <div id="subtitle" style="color: var(--muted); line-height: 1.55;">Fetching PR details…</div>
@@ -1152,7 +1280,7 @@ const PR_DETAIL_HTML: &str = r##"<!doctype html>
       }
 
       const pr = await response.json();
-      document.title = `${pr.repo_full_name} #${pr.number} · Symphony RS`;
+      document.title = `${pr.repo_full_name} #${pr.number} · BigBrother`;
       document.getElementById("title").textContent = `${pr.repo_full_name} #${pr.number}`;
       document.getElementById("subtitle").textContent = pr.title;
       document.getElementById("pr-link").href = pr.url;
@@ -1295,7 +1423,7 @@ pub async fn serve(
         .await
         .with_context(|| format!("failed to bind {listen_addr}"))?;
 
-    println!("Symphony RS listening on http://{listen_addr}");
+    println!("BigBrother listening on http://{listen_addr}");
 
     axum::serve(listener, router(supervisor))
         .with_graceful_shutdown(shutdown_signal(stop_flag))

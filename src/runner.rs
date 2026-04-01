@@ -812,12 +812,12 @@ mod tests {
             .expect("git repo should initialize");
         run_command(
             "git",
-            &["config", "user.email", "symphony-rs@example.com"],
+            &["config", "user.email", "bigbrother@example.com"],
             Some(path),
         )
         .await
         .expect("git email should configure");
-        run_command("git", &["config", "user.name", "Symphony RS"], Some(path))
+        run_command("git", &["config", "user.name", "BigBrother"], Some(path))
             .await
             .expect("git user should configure");
         run_command("git", &["branch", "-M", "main"], Some(path))
@@ -913,14 +913,14 @@ mod tests {
         clone_repo(&remote, &workspace_repo).await;
         run_command(
             "git",
-            &["config", "user.email", "symphony-rs@example.com"],
+            &["config", "user.email", "bigbrother@example.com"],
             Some(&workspace_repo),
         )
         .await
         .expect("workspace email should configure");
         run_command(
             "git",
-            &["config", "user.name", "Symphony RS"],
+            &["config", "user.name", "BigBrother"],
             Some(&workspace_repo),
         )
         .await

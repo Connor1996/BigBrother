@@ -37,7 +37,7 @@ impl GitHubClient {
             ACCEPT,
             HeaderValue::from_static("application/vnd.github+json"),
         );
-        headers.insert(USER_AGENT, HeaderValue::from_static("symphony-rs/0.1"));
+        headers.insert(USER_AGENT, HeaderValue::from_static("bigbrother/0.1"));
 
         let auth_value = format!("Bearer {}", config.api_token);
         headers.insert(
