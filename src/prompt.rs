@@ -16,6 +16,7 @@ pub fn build_prompt(pr: &PullRequest, reason: AttentionReason, extra: Option<&st
         .filter(|value| !value.is_empty())
         .map(|value| format!("\nAdditional operator instructions:\n{value}\n"))
         .unwrap_or_default();
+    let trigger_specific_rules = trigger_specific_rules(reason);
 
     format!(
         "You are an autonomous agent helping maintain an existing GitHub pull request.\n\
@@ -45,6 +46,7 @@ pub fn build_prompt(pr: &PullRequest, reason: AttentionReason, extra: Option<&st
          - Start by checking the current branch state, latest CI failures, and latest review comments for this PR.\n\
          - If the base and head branches differ, fetch and merge the latest base branch into the PR branch yourself before addressing the trigger-specific issue.\n\
          - If that merge produces conflicts, resolve them first, then continue addressing the original trigger.\n\
+         {trigger_specific_rules}\
          - If code changes are needed, make them, run targeted validation, commit, and push back to the same PR branch.\n\
          - If reviewer feedback needs a textual response, leave a concise response on the PR thread when tooling is available.\n\
          - If you are blocked by missing auth, missing secrets, or ambiguous product decisions, stop and explain the blocker clearly.\n\
@@ -67,8 +69,20 @@ pub fn build_prompt(pr: &PullRequest, reason: AttentionReason, extra: Option<&st
         issue_comments = pr.issue_comment_count,
         reviewer_activity = reviewer_activity,
         body = body,
+        trigger_specific_rules = trigger_specific_rules,
         extra = extra
     )
+}
+
+fn trigger_specific_rules(reason: AttentionReason) -> &'static str {
+    match reason {
+        AttentionReason::CiFailed => {
+            "- If the failing CI looks unrelated to this PR's changes (for example flaky infrastructure, unrelated suites, or transient external breakage), do not make speculative code changes.\n\
+             - In that unrelated/flaky case, leave a concise PR comment containing exactly `/retest` when tooling and auth are available, then summarize why you chose a retest.\n\
+             - If you cannot tell with reasonable confidence whether the failure is unrelated, stop and explain the uncertainty instead of guessing.\n"
+        }
+        AttentionReason::ReviewFeedback | AttentionReason::MergeConflict => "",
+    }
 }
 
 #[cfg(test)]
@@ -122,7 +136,16 @@ mod tests {
         assert!(prompt.contains("Trigger: CI failed"));
         assert!(prompt.contains("merge the latest base branch into the PR branch yourself"));
         assert!(prompt.contains("If that merge produces conflicts, resolve them first"));
+        assert!(prompt.contains("leave a concise PR comment containing exactly `/retest`"));
         assert!(prompt.contains("whether you merged base"));
         assert!(prompt.contains("Additional operator instructions:\n- Extra operator note."));
+    }
+
+    #[test]
+    fn build_prompt_limits_retest_instruction_to_ci_failures() {
+        let prompt = build_prompt(&sample_pr(), AttentionReason::ReviewFeedback, None);
+
+        assert!(!prompt.contains("`/retest`"));
+        assert!(!prompt.contains("do not make speculative code changes"));
     }
 }
