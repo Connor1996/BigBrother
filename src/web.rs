@@ -374,11 +374,20 @@ const INDEX_HTML: &str = r#"<!doctype html>
       background: #3f7f6b;
     }
 
+    .action-button.deep-review-button {
+      background: #6f8896;
+      color: #fff;
+    }
+
+    .action-button.deep-review-button:hover:not(:disabled) {
+      background: #627987;
+    }
+
     .action-button:hover:not(:disabled) {
       transform: translateY(-1px);
     }
 
-    .action-button:not(.pause-button):not(.resume-button):hover:not(:disabled) {
+    .action-button:not(.pause-button):not(.resume-button):not(.deep-review-button):hover:not(:disabled) {
       background: rgba(255, 255, 255, 1);
     }
 
@@ -719,7 +728,7 @@ const INDEX_HTML: &str = r#"<!doctype html>
       const label = pending ? "Starting..." : (running ? "Running..." : "Deep Review");
       return `
         <button
-          class="action-button"
+          class="action-button deep-review-button"
           ${(pending || running) ? "disabled" : ""}
           onclick="triggerDeepReview('${encodeURIComponent(pr.key)}')"
         >

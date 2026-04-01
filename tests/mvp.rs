@@ -810,6 +810,11 @@ async fn dashboard_html_exposes_top_right_pr_review_request_and_activity_tabs() 
         "dashboard should use the lighter pause and resume button fills, got: {html}",
     );
     assert!(
+        html.contains("deep-review-button")
+            && html.contains("background: #6f8896;"),
+        "dashboard should render deep review with the same filled action button style family, got: {html}",
+    );
+    assert!(
         html.contains("button-icon")
             && html.contains("&#9654;")
             && html.contains("&#10074;&#10074;"),
