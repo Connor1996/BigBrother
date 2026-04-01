@@ -732,7 +732,7 @@ async fn approved_green_pr_is_exposed_as_waiting_merge() {
 }
 
 #[tokio::test]
-async fn approved_pr_with_pending_ci_stays_waiting_review() {
+async fn approved_pr_with_pending_ci_reports_waiting_for_ci() {
     let supervisor = Arc::new(
         Supervisor::new(
             sample_config(
@@ -760,7 +760,7 @@ async fn approved_pr_with_pending_ci_stays_waiting_review() {
     let prs = prs_payload["prs"].as_array().expect("prs array");
     assert_eq!(
         status_for(prs, "openai/symphony#10"),
-        Some("waiting review")
+        Some("waiting for CI")
     );
 }
 

@@ -315,6 +315,7 @@ Canonical statuses:
 - `draft`
 - `paused`
 - `conflict`
+- `waiting_ci`
 - `waiting_review`
 - `waiting_merge`
 - `needs_attention`
@@ -356,6 +357,10 @@ Processed markers are signal-specific:
 
 In addition to attention triggers, the review panel needs a clear passive-state derivation:
 
+- `waiting_ci`
+  The PR is open, not draft, not paused, not merged, not currently actionable, and its latest CI
+  signal is still pending. This state should be preferred over `waiting_review` so operators can
+  immediately see that the next blocker is unfinished CI rather than missing review activity.
 - `waiting_review`
   The PR is open, not draft, not paused, not merged, not currently actionable, and does not yet
   satisfy merge-ready policy.
@@ -727,7 +732,7 @@ The MVP is done when all of the following are true:
 
 1. running the binary starts a local web server
 2. opening the local page shows tracked PR rows from the backend
-3. the daemon can poll a provider and derive `waiting_review`, `waiting_merge`, `needs_attention`, and `running` or `blocked`
+3. the daemon can poll a provider and derive `waiting_ci`, `waiting_review`, `waiting_merge`, `needs_attention`, and `running` or `blocked`
 4. the backend can invoke a runner abstraction for one actionable PR
 5. there is at least one `cargo test` simulated integration test that:
    - uses a fake GitHub provider

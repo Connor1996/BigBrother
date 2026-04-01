@@ -882,6 +882,8 @@ fn derive_status(
         }
     } else if pr.has_conflicts {
         TrackingStatus::Conflict
+    } else if matches!(pr.ci_status, crate::model::CiStatus::Pending) {
+        TrackingStatus::WaitingCi
     } else if is_waiting_merge(pr) {
         TrackingStatus::WaitingMerge
     } else {
@@ -1433,7 +1435,18 @@ mod tests {
 
         assert_eq!(
             derive_status(&pr, &PersistentPrState::default(), None, false),
-            TrackingStatus::WaitingReview
+            TrackingStatus::WaitingCi
+        );
+    }
+
+    #[test]
+    fn clean_pr_with_pending_ci_reports_waiting_ci() {
+        let mut pr = sample_pr();
+        pr.ci_status = CiStatus::Pending;
+
+        assert_eq!(
+            derive_status(&pr, &PersistentPrState::default(), None, false),
+            TrackingStatus::WaitingCi
         );
     }
 
