@@ -871,8 +871,10 @@ async fn pr_detail_page_uses_bigbrother_branding() {
             && html.contains("id=\"subtitle\" class=\"pr-meta\"")
             && html.contains(r#"isRunning ? "terminal-shell" : "output""#)
             && !html.contains("Open GitHub PR")
-            && !html.contains("Attention:"),
-        "run detail page should reuse the homepage branding/layout and omit the old PR CTA and attention banner, got: {html}",
+            && !html.contains("Attention:")
+            && !html.contains("<label>CI</label>")
+            && !html.contains("<label>Reviews</label>"),
+        "run detail page should reuse the homepage branding/layout and omit the old PR CTA, attention banner, and CI/reviews cards, got: {html}",
     );
 }
 

@@ -1199,14 +1199,6 @@ const PR_DETAIL_HTML: &str = r##"<!doctype html>
           <div id="status-pill">-</div>
         </div>
         <div class="meta-card">
-          <label>CI</label>
-          <div id="ci-pill">-</div>
-        </div>
-        <div class="meta-card">
-          <label>Reviews</label>
-          <div id="review-pill">-</div>
-        </div>
-        <div class="meta-card">
           <label>Updated</label>
           <strong id="updated-at">-</strong>
         </div>
@@ -1311,8 +1303,6 @@ const PR_DETAIL_HTML: &str = r##"<!doctype html>
       document.getElementById("terminal-meta").textContent = detailOutputStatusText(pr);
       document.getElementById("terminal").textContent = pr.detail_output || detailOutputStatusText(pr);
       setPill("status-pill", pr.status);
-      setPill("ci-pill", pr.ci_status);
-      setPill("review-pill", pr.review_status);
     }
 
     refresh().catch((error) => {
