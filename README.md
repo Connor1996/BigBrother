@@ -43,6 +43,8 @@ The UI shows the PR list, CI/review state, attention reason, timestamps, top-rig
 - a GitHub token in `GITHUB_TOKEN` or `GH_TOKEN`
 - an agent command available on your machine
   - the example config assumes `codex`
+  - if you want Codex to run with unsandboxed full local access, set
+    `agent.dangerously_bypass_approvals_and_sandbox = true`
 - existing local checkouts for the repositories you want Symphony RS to operate on
   - by default it looks under `workspace.root` for a directory named after the repo, such as `../tikv` for `tikv/tikv`
   - if auto-discovery is not enough, you can provide `workspace.repo_map` entries in the config
@@ -71,6 +73,8 @@ cargo run -- --config symphony-rs.toml
 
 The example config sets `workspace.root = ".."`, which means Symphony RS will look for sibling
 repositories next to `symphony-rs` before it tries any explicit `workspace.repo_map` overrides.
+If you enable `agent.dangerously_bypass_approvals_and_sandbox`, Symphony will invoke Codex with
+full unsandboxed access, so only use that on a machine you already trust.
 
 4. Open the dashboard in your browser:
 

@@ -1585,6 +1585,7 @@ fn sample_config(state_path: PathBuf, workspace_root: PathBuf) -> ResolvedConfig
         agent: AgentConfig {
             command: "fake-agent".to_owned(),
             args: vec![],
+            dangerously_bypass_approvals_and_sandbox: false,
             additional_instructions: None,
         },
         ui: UiConfig::default(),

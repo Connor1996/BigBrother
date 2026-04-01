@@ -691,6 +691,8 @@ The feed should make daemon progress legible even when no PR is currently runnin
 - agent subprocess cwd must equal workspace path
 - existing local checkouts must not be silently rewritten when they contain tracked local modifications
 - shell packaging must not bypass backend policy
+- if the operator explicitly enables unsandboxed Codex execution in config, the backend must pass
+  that through deliberately rather than smuggling dangerous flags inside opaque free-form args
 
 ## 22. Migration Note
 

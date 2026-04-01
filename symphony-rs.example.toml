@@ -16,6 +16,10 @@ git_transport = "ssh"
 
 [agent]
 command = "codex"
+# When true, Symphony launches `codex` with `--dangerously-bypass-approvals-and-sandbox`.
+# Leave this off unless the host environment is already externally sandboxed and you want
+# Codex to have full local access.
+# dangerously_bypass_approvals_and_sandbox = true
 args = ["exec", "--model", "gpt-5.4", "-"]
 additional_instructions = """
 - Prefer using `gh` when you need to inspect the latest PR review comments or CI state.

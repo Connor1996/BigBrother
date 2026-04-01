@@ -69,6 +69,8 @@ pub struct AgentConfig {
     #[serde(default = "default_agent_args")]
     pub args: Vec<String>,
     #[serde(default)]
+    pub dangerously_bypass_approvals_and_sandbox: bool,
+    #[serde(default)]
     pub additional_instructions: Option<String>,
 }
 
@@ -159,6 +161,9 @@ impl AppConfig {
                     .into_iter()
                     .map(|value| resolve_literal(value, None))
                     .collect(),
+                dangerously_bypass_approvals_and_sandbox: self
+                    .agent
+                    .dangerously_bypass_approvals_and_sandbox,
                 additional_instructions: self
                     .agent
                     .additional_instructions
@@ -194,6 +199,7 @@ impl Default for AgentConfig {
         Self {
             command: default_agent_command(),
             args: default_agent_args(),
+            dangerously_bypass_approvals_and_sandbox: false,
             additional_instructions: None,
         }
     }
@@ -373,5 +379,31 @@ repo_map = { "tidbcloud/tidb-cse" = "./repos/custom/tidb-cse-local" }
                 .expect("repo map entry should exist"),
             &dir.join("repos/custom/tidb-cse-local")
         );
+    }
+
+    #[test]
+    fn load_preserves_explicit_agent_full_access_flag() {
+        let unique = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("time")
+            .as_nanos();
+        let dir = std::env::temp_dir().join(format!("symphony-rs-config-{unique}"));
+        std::fs::create_dir_all(&dir).expect("temp config dir should create");
+        let config_path = dir.join("symphony-rs.toml");
+        std::fs::write(
+            &config_path,
+            r#"
+[github]
+api_token = "token"
+
+[agent]
+dangerously_bypass_approvals_and_sandbox = true
+"#,
+        )
+        .expect("config fixture should write");
+
+        let resolved = AppConfig::load(&config_path).expect("config should load");
+
+        assert!(resolved.agent.dangerously_bypass_approvals_and_sandbox);
     }
 }

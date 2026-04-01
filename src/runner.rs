@@ -562,6 +562,9 @@ fn build_pty_command(
     command.arg("exec \"$@\" <\"$SYMPHONY_PROMPT_PATH\"");
     command.arg("symphony-agent");
     command.arg(&request.agent.command);
+    if request.agent.dangerously_bypass_approvals_and_sandbox {
+        command.arg("--dangerously-bypass-approvals-and-sandbox");
+    }
     for arg in &request.agent.args {
         command.arg(arg);
     }
