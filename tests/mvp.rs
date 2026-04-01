@@ -977,7 +977,7 @@ async fn running_pr_exposes_live_terminal() {
         json!("investigating CI failure")
     );
     assert_eq!(
-        running_pr["terminal_screen"],
+        running_pr["detail_output"],
         json!("$ codex exec\nThinking...\ncargo test -q")
     );
 
@@ -988,7 +988,7 @@ async fn running_pr_exposes_live_terminal() {
         json!("investigating CI failure")
     );
     assert_eq!(
-        detail_payload["terminal_screen"],
+        detail_payload["detail_output"],
         json!("$ codex exec\nThinking...\ncargo test -q")
     );
     assert!(detail_payload["last_terminal_output_at"].is_string());
@@ -1002,7 +1002,7 @@ async fn running_pr_exposes_live_terminal() {
 }
 
 #[tokio::test]
-async fn completed_pr_detail_shows_saved_terminal_snapshot() {
+async fn completed_pr_detail_shows_saved_run_output() {
     let runner = FakeAgentRunner {
         invocations: Arc::new(AtomicUsize::new(0)),
         started: Arc::new(Semaphore::new(0)),
@@ -1032,8 +1032,8 @@ async fn completed_pr_detail_shows_saved_terminal_snapshot() {
     assert_eq!(detail_payload["details_label"], json!("Last run"));
     assert!(detail_payload["details_at"].is_string());
     assert_eq!(
-        detail_payload["terminal_screen"],
-        json!("$ codex exec\nThinking...\ncargo test -q")
+        detail_payload["detail_output"],
+        json!("codex: inspecting workspace\ncargo test -q")
     );
     assert!(detail_payload["last_terminal_output_at"].is_string());
     assert_eq!(detail_payload["live_output"], Value::Null);
@@ -1097,7 +1097,7 @@ async fn running_pr_does_not_fall_back_to_saved_terminal_snapshot() {
     let detail_payload = get_json(supervisor, "/api/pr?key=openai%2Fsymphony%237").await;
     assert_eq!(detail_payload["status"], json!("running"));
     assert_eq!(detail_payload["live_output"], Value::Null);
-    assert_eq!(detail_payload["terminal_screen"], Value::Null);
+    assert_eq!(detail_payload["detail_output"], Value::Null);
 }
 
 #[tokio::test]

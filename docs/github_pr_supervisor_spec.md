@@ -629,7 +629,7 @@ The MVP UI can be a single page that shows:
 - a right-aligned dashboard tab switch for `PRs` and `Activity`
 - current tracked PR rows
 - each PR’s status, CI state, review state, and latest action summary
-- a row-level link into a dedicated PR detail page for run output, showing an embedded read-only terminal while a run is active and the saved last terminal snapshot after the run completes
+- a row-level link into a dedicated PR detail page for run output, showing an embedded read-only terminal while a run is active and the saved last run output after the run completes
 - a row-level pause/resume control for each tracked PR
 - a visually subdued treatment for paused rows so they read as intentionally muted rather than inactive by accident
 
@@ -663,7 +663,7 @@ Panels:
 - recent comments/reviews summary
 - run history
 - read-only embedded terminal screen for the current run, including the latest terminal redraw state and last terminal activity time
-- saved last terminal snapshot when no run is currently active
+- saved last run output when no run is currently active, sourced from the persisted command/output transcript rather than the last terminal redraw snapshot
 - latest run output summary rendered as a short operator-facing status line rather than raw terminal or transcript text
 - workspace path
 - notification state

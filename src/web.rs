@@ -20,6 +20,7 @@ use tokio::net::TcpListener;
 
 use crate::{
     model::{ActivityEvent, PersistentPrState, TrackedPr},
+    runner::OUTPUT_TRANSCRIPT_HEADER,
     service::Supervisor,
 };
 
@@ -915,16 +916,18 @@ const PR_DETAIL_HTML: &str = r##"<!doctype html>
       document.getElementById(id).innerHTML = `<span class="${pillClass(value)}">${String(value || "-")}</span>`;
     }
 
-    function terminalStatusText(pr) {
+    function detailOutputStatusText(pr) {
       if (pr.last_terminal_output_at) {
-        return pr.status === "running"
-          ? `Last terminal update: ${fmtTime(pr.last_terminal_output_at)}`
-          : `Saved from terminal state at: ${fmtTime(pr.last_terminal_output_at)}`;
+        return `Last terminal update: ${fmtTime(pr.last_terminal_output_at)}`;
+      }
+
+      if (pr.status !== "running" && pr.details_at) {
+        return `Captured from last run at: ${fmtTime(pr.details_at)}`;
       }
 
       return pr.status === "running"
         ? "No terminal output yet. Codex may still be thinking."
-        : "No saved terminal snapshot is available for the last run.";
+        : "No saved run output is available for the last run.";
     }
 
     async function refresh() {
@@ -932,7 +935,7 @@ const PR_DETAIL_HTML: &str = r##"<!doctype html>
       if (!key) {
         document.getElementById("title").textContent = "Missing PR key";
         document.getElementById("subtitle").textContent = "Open this page from the dashboard so the PR key is included.";
-        document.getElementById("terminal-label").textContent = "Terminal";
+        document.getElementById("terminal-label").textContent = "Run Output";
         document.getElementById("terminal-meta").textContent = "-";
         document.getElementById("terminal").textContent = "No PR key was provided.";
         return;
@@ -953,9 +956,9 @@ const PR_DETAIL_HTML: &str = r##"<!doctype html>
       document.getElementById("updated-at").textContent = fmtTime(pr.updated_at);
       document.getElementById("summary-text").textContent = pr.latest_summary || "-";
       document.getElementById("terminal-label").textContent =
-        pr.status === "running" ? "Live Terminal" : "Saved Terminal Snapshot";
-      document.getElementById("terminal-meta").textContent = terminalStatusText(pr);
-      document.getElementById("terminal").textContent = pr.terminal_screen || terminalStatusText(pr);
+        pr.status === "running" ? "Live Terminal" : "Last Run Output";
+      document.getElementById("terminal-meta").textContent = detailOutputStatusText(pr);
+      document.getElementById("terminal").textContent = pr.detail_output || detailOutputStatusText(pr);
       setPill("status-pill", pr.status);
       setPill("ci-pill", pr.ci_status);
       setPill("review-pill", pr.review_status);
@@ -964,7 +967,7 @@ const PR_DETAIL_HTML: &str = r##"<!doctype html>
     refresh().catch((error) => {
       document.getElementById("title").textContent = "Failed to load run";
       document.getElementById("subtitle").textContent = error.message;
-      document.getElementById("terminal-label").textContent = "Terminal";
+      document.getElementById("terminal-label").textContent = "Run Output";
       document.getElementById("terminal-meta").textContent = "-";
       document.getElementById("terminal").textContent = error.message;
     });
@@ -1017,7 +1020,7 @@ struct PullRequestSummary {
     attention_reason: Option<String>,
     updated_at: DateTime<Utc>,
     latest_summary: Option<String>,
-    terminal_screen: Option<String>,
+    detail_output: Option<String>,
     last_terminal_output_at: Option<DateTime<Utc>>,
     details_label: Option<String>,
     details_at: Option<DateTime<Utc>>,
@@ -1189,17 +1192,7 @@ fn summarize_pr(tracked: &TrackedPr) -> PullRequestSummary {
             .map(|reason| reason.label().to_owned()),
         updated_at: tracked.pull_request.updated_at,
         latest_summary: latest_operator_summary(tracked),
-        terminal_screen: tracked
-            .runner
-            .as_ref()
-            .and_then(|runner| runner.live_terminal.clone())
-            .or_else(|| {
-                if tracked.runner.is_none() {
-                    tracked.persisted.last_run_terminal.clone()
-                } else {
-                    None
-                }
-            }),
+        detail_output: latest_detail_output(tracked),
         last_terminal_output_at: tracked
             .runner
             .as_ref()
@@ -1214,6 +1207,20 @@ fn summarize_pr(tracked: &TrackedPr) -> PullRequestSummary {
         details_label,
         details_at,
     }
+}
+
+fn latest_detail_output(tracked: &TrackedPr) -> Option<String> {
+    tracked
+        .runner
+        .as_ref()
+        .and_then(|runner| runner.live_terminal.clone())
+        .or_else(|| {
+            if tracked.runner.is_none() {
+                persisted_run_output(tracked.persisted.last_run_output.as_deref())
+            } else {
+                None
+            }
+        })
 }
 
 fn latest_operator_summary(tracked: &TrackedPr) -> Option<String> {
@@ -1252,6 +1259,21 @@ fn compact_summary_text(summary: Option<&str>) -> Option<String> {
     Some(truncated)
 }
 
+fn persisted_run_output(output: Option<&str>) -> Option<String> {
+    let output = output?;
+    let output = output
+        .find(OUTPUT_TRANSCRIPT_HEADER)
+        .map(|offset| &output[offset + OUTPUT_TRANSCRIPT_HEADER.len()..])
+        .unwrap_or(output)
+        .trim();
+
+    if output.is_empty() {
+        None
+    } else {
+        Some(output.to_owned())
+    }
+}
+
 fn summarize_activity(event: &ActivityEvent) -> ActivitySummary {
     ActivitySummary {
         timestamp: event.timestamp,
@@ -1270,7 +1292,7 @@ async fn shutdown_signal(stop_flag: Arc<AtomicBool>) {
 mod tests {
     use chrono::TimeZone;
 
-    use super::{compact_summary_text, latest_operator_summary};
+    use super::{compact_summary_text, latest_operator_summary, persisted_run_output};
     use crate::model::{
         AttentionReason, CiStatus, PersistentPrState, PullRequest, ReviewDecision, RunnerState,
         TrackedPr, TrackingStatus,
@@ -1371,6 +1393,17 @@ mod tests {
             ))
             .as_deref(),
             Some("fatal: auth expired")
+        );
+    }
+
+    #[test]
+    fn persisted_run_output_strips_transcript_headers() {
+        assert_eq!(
+            persisted_run_output(Some(
+                "=== Prompt Sent To Codex CLI ===\nprompt body\n=== Codex CLI Output ===\n$ cargo test\nok\n"
+            ))
+            .as_deref(),
+            Some("$ cargo test\nok")
         );
     }
 }
