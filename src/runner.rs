@@ -19,6 +19,9 @@ use crate::{
     service::AgentRunner,
 };
 
+pub(crate) const PROMPT_TRANSCRIPT_HEADER: &str = "=== Prompt Sent To Codex CLI ===\n";
+pub(crate) const OUTPUT_TRANSCRIPT_HEADER: &str = "=== Codex CLI Output ===\n";
+
 #[derive(Debug, Clone)]
 pub struct RunRequest {
     pub pull_request: PullRequest,
@@ -39,6 +42,28 @@ pub struct RunOutcome {
     pub processed_comment_at: Option<DateTime<Utc>>,
     pub processed_ci_at: Option<DateTime<Utc>>,
     pub processed_head_sha: String,
+}
+
+#[derive(Debug)]
+struct RunFailure {
+    error: anyhow::Error,
+    captured_output: Option<String>,
+}
+
+impl RunFailure {
+    fn without_output(error: anyhow::Error) -> Self {
+        Self {
+            error,
+            captured_output: None,
+        }
+    }
+
+    fn with_transcript(error: anyhow::Error, transcript_preamble: &str) -> Self {
+        Self {
+            captured_output: Some(cli_transcript(transcript_preamble, &format!("{error}\n"))),
+            error,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Default)]
@@ -91,22 +116,29 @@ pub async fn run(request: RunRequest) -> RunOutcome {
             processed_ci_at: request.pull_request.ci_updated_at,
             processed_head_sha: request.pull_request.head_sha.clone(),
         },
-        Err(error) => RunOutcome {
-            started_at,
-            finished_at,
-            success: false,
-            exit_code: None,
-            summary: error.to_string(),
-            captured_output: Some(error.to_string()),
-            processed_comment_at: request.pull_request.latest_reviewer_activity_at,
-            processed_ci_at: request.pull_request.ci_updated_at,
-            processed_head_sha: request.pull_request.head_sha.clone(),
-        },
+        Err(failure) => {
+            let summary = failure.error.to_string();
+            RunOutcome {
+                started_at,
+                finished_at,
+                success: false,
+                exit_code: None,
+                summary: summary.clone(),
+                captured_output: failure.captured_output.or(Some(summary)),
+                processed_comment_at: request.pull_request.latest_reviewer_activity_at,
+                processed_ci_at: request.pull_request.ci_updated_at,
+                processed_head_sha: request.pull_request.head_sha.clone(),
+            }
+        }
     }
 }
 
-async fn run_inner(request: &RunRequest) -> Result<(Option<i32>, String, Option<String>)> {
-    let checkout = resolve_checkout(&request.workspace, &request.pull_request).await?;
+async fn run_inner(
+    request: &RunRequest,
+) -> Result<(Option<i32>, String, Option<String>), RunFailure> {
+    let checkout = resolve_checkout(&request.workspace, &request.pull_request)
+        .await
+        .map_err(RunFailure::without_output)?;
     let workspace_path = checkout.path;
     let sync_report = if checkout.resumed_conflict_workspace {
         WorkspaceSyncReport {
@@ -120,7 +152,8 @@ async fn run_inner(request: &RunRequest) -> Result<(Option<i32>, String, Option<
             request.workspace.git_transport,
             &request.pull_request,
         )
-        .await?
+        .await
+        .map_err(RunFailure::without_output)?
     };
 
     let prompt_instructions = combine_operator_instructions(
@@ -133,6 +166,11 @@ async fn run_inner(request: &RunRequest) -> Result<(Option<i32>, String, Option<
         request.trigger,
         prompt_instructions.as_deref(),
     );
+    let transcript_preamble = cli_transcript_preamble(&prompt);
+
+    if let Some(output_updates) = request.output_updates.as_ref() {
+        let _ = output_updates.send(transcript_preamble.clone());
+    }
 
     let mut command = Command::new(&request.agent.command);
     command.args(&request.agent.args);
@@ -186,31 +224,38 @@ async fn run_inner(request: &RunRequest) -> Result<(Option<i32>, String, Option<
 
     let mut child = command
         .spawn()
-        .with_context(|| format!("failed to spawn agent command {}", request.agent.command))?;
+        .with_context(|| format!("failed to spawn agent command {}", request.agent.command))
+        .map_err(|error| RunFailure::with_transcript(error, &transcript_preamble))?;
 
     let mut stdin = child
         .stdin
         .take()
-        .ok_or_else(|| anyhow!("agent stdin was not available"))?;
+        .ok_or_else(|| anyhow!("agent stdin was not available"))
+        .map_err(|error| RunFailure::with_transcript(error, &transcript_preamble))?;
     stdin
         .write_all(prompt.as_bytes())
         .await
-        .context("failed writing prompt to agent stdin")?;
+        .context("failed writing prompt to agent stdin")
+        .map_err(|error| RunFailure::with_transcript(error, &transcript_preamble))?;
     stdin.shutdown().await.ok();
 
     let stdout = child
         .stdout
         .take()
-        .ok_or_else(|| anyhow!("agent stdout was not available"))?;
+        .ok_or_else(|| anyhow!("agent stdout was not available"))
+        .map_err(|error| RunFailure::with_transcript(error, &transcript_preamble))?;
     let stderr = child
         .stderr
         .take()
-        .ok_or_else(|| anyhow!("agent stderr was not available"))?;
+        .ok_or_else(|| anyhow!("agent stderr was not available"))
+        .map_err(|error| RunFailure::with_transcript(error, &transcript_preamble))?;
 
     let (status, combined_output, _stdout, _stderr) =
-        collect_process_output(child, stdout, stderr, request.output_updates.clone()).await?;
+        collect_process_output(child, stdout, stderr, request.output_updates.clone())
+            .await
+            .map_err(|error| RunFailure::with_transcript(error, &transcript_preamble))?;
     let summary = summarize_captured_output(&combined_output);
-    let captured_output = normalize_output(&combined_output);
+    let captured_output = normalize_output(&cli_transcript(&transcript_preamble, &combined_output));
 
     Ok((status.code(), summary, captured_output))
 }
@@ -476,6 +521,20 @@ fn repo_dir_name(repo_full_name: &str) -> &str {
         .next()
         .filter(|value| !value.is_empty())
         .unwrap_or(repo_full_name)
+}
+
+pub(crate) fn cli_transcript_preamble(prompt: &str) -> String {
+    format!(
+        "{PROMPT_TRANSCRIPT_HEADER}{}\n\n{OUTPUT_TRANSCRIPT_HEADER}",
+        prompt.trim_end_matches('\n')
+    )
+}
+
+pub(crate) fn cli_transcript(transcript_preamble: &str, output: &str) -> String {
+    let mut transcript = String::with_capacity(transcript_preamble.len() + output.len());
+    transcript.push_str(transcript_preamble);
+    transcript.push_str(output);
+    transcript
 }
 
 fn summarize_captured_output(output: &str) -> String {
@@ -784,6 +843,18 @@ mod tests {
         });
 
         (sample_workspace(root), pr)
+    }
+
+    #[test]
+    fn cli_transcript_separates_prompt_and_output() {
+        let prompt = "Inspect the workspace\nRun focused validation\n";
+        let output = "codex: inspected workspace\ncargo test -q\n";
+        let transcript = cli_transcript(&cli_transcript_preamble(prompt), output);
+
+        assert!(transcript.starts_with(PROMPT_TRANSCRIPT_HEADER));
+        assert!(transcript.contains("Inspect the workspace\nRun focused validation"));
+        assert!(transcript.contains("\n\n=== Codex CLI Output ===\n"));
+        assert!(transcript.ends_with(output));
     }
 
     async fn simulate_agent_merge_conflict(workspace_repo: &Path, pr: &PullRequest) {

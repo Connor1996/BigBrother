@@ -14,7 +14,7 @@ use crate::{
         AttentionReason, DashboardState, EventLevel, PersistentPrState, PullRequest, RunnerState,
         TrackedPr, TrackingStatus,
     },
-    runner::{RunOutcome, RunRequest},
+    runner::{RunOutcome, RunRequest, OUTPUT_TRANSCRIPT_HEADER, PROMPT_TRANSCRIPT_HEADER},
     state_store::{PersistentStateFile, StateStore},
 };
 
@@ -715,7 +715,7 @@ fn build_tracked_prs(
                     finished_at: None,
                     attempt: 1,
                     trigger: active.trigger,
-                    summary: "waiting for Codex CLI output...".to_owned(),
+                    summary: "waiting for Codex CLI transcript...".to_owned(),
                     live_output: None,
                     exit_code: None,
                 }),
@@ -948,8 +948,13 @@ fn append_live_output(buffer: &mut String, chunk: &str) {
     }
 
     let trim_chars = total_chars - MAX_LIVE_OUTPUT_CHARS;
-    if let Some((trim_at, _)) = buffer.char_indices().nth(trim_chars) {
-        buffer.drain(..trim_at);
+    let trim_start_chars = pinned_transcript_prefix_chars(buffer).min(total_chars);
+    let trim_end_chars = (trim_start_chars + trim_chars).min(total_chars);
+    let trim_start = char_boundary(buffer, trim_start_chars);
+    let trim_end = char_boundary(buffer, trim_end_chars);
+
+    if trim_end > trim_start {
+        buffer.drain(trim_start..trim_end);
     }
 }
 
@@ -962,6 +967,28 @@ fn capped_run_output(output: Option<&str>) -> Option<String> {
     let mut capped = String::new();
     append_live_output(&mut capped, output);
     Some(capped)
+}
+
+fn pinned_transcript_prefix_chars(buffer: &str) -> usize {
+    if !buffer.starts_with(PROMPT_TRANSCRIPT_HEADER) {
+        return 0;
+    }
+
+    buffer
+        .find(OUTPUT_TRANSCRIPT_HEADER)
+        .map(|offset| {
+            buffer[..offset + OUTPUT_TRANSCRIPT_HEADER.len()]
+                .chars()
+                .count()
+        })
+        .unwrap_or(0)
+}
+
+fn char_boundary(text: &str, char_index: usize) -> usize {
+    text.char_indices()
+        .nth(char_index)
+        .map(|(byte_index, _)| byte_index)
+        .unwrap_or(text.len())
 }
 
 #[cfg(test)]
@@ -1250,6 +1277,28 @@ mod tests {
         assert_eq!(
             derive_status(&pr, &persisted, None, false),
             TrackingStatus::WaitingReview
+        );
+    }
+
+    #[test]
+    fn live_output_trimming_preserves_prompt_section() {
+        let mut buffer = crate::runner::cli_transcript_preamble("Inspect workspace\nRun tests");
+        let prompt_section = buffer.clone();
+
+        append_live_output(&mut buffer, &"x".repeat(MAX_LIVE_OUTPUT_CHARS));
+
+        assert!(buffer.starts_with(PROMPT_TRANSCRIPT_HEADER));
+        assert!(
+            buffer.contains(OUTPUT_TRANSCRIPT_HEADER),
+            "trimmed transcript should still keep the Codex output divider",
+        );
+        assert!(
+            buffer.contains(&prompt_section),
+            "trimmed transcript should preserve the full prompt section",
+        );
+        assert!(
+            buffer.chars().count() <= MAX_LIVE_OUTPUT_CHARS,
+            "trimmed transcript should still respect the live-output cap",
         );
     }
 

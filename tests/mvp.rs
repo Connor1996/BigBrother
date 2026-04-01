@@ -25,6 +25,7 @@ use symphony_rs::{
         AttentionReason, CiStatus, PersistentPrState, PullRequest, ReviewDecision, RunnerState,
         TrackedPr, TrackingStatus,
     },
+    prompt::build_prompt,
     runner::{RunOutcome, RunRequest},
     service::{AgentRunner, GitHubProvider, GitHubRequestStats, Supervisor},
     web,
@@ -150,9 +151,10 @@ impl AgentRunner for FakeAgentRunner {
         Box::pin(async move {
             invocations.fetch_add(1, Ordering::SeqCst);
             started.add_permits(1);
+            let transcript =
+                fake_cli_transcript(&request, "codex: inspecting workspace\ncargo test -q\n");
             if let Some(output_updates) = request.output_updates.as_ref() {
-                let _ =
-                    output_updates.send("codex: inspecting workspace\ncargo test -q\n".to_owned());
+                let _ = output_updates.send(transcript.clone());
             }
             let _permit = allow_finish
                 .acquire()
@@ -165,7 +167,7 @@ impl AgentRunner for FakeAgentRunner {
                 success: true,
                 exit_code: Some(0),
                 summary: format!("fixed {}", request.pull_request.key),
-                captured_output: Some("codex: inspecting workspace\ncargo test -q\n".to_owned()),
+                captured_output: Some(transcript),
                 processed_comment_at: request.pull_request.latest_reviewer_activity_at,
                 processed_ci_at: request.pull_request.ci_updated_at,
                 processed_head_sha: request.pull_request.head_sha,
@@ -188,8 +190,9 @@ impl AgentRunner for AlwaysFailingAgentRunner {
         Box::pin(async move {
             invocations.fetch_add(1, Ordering::SeqCst);
             started.add_permits(1);
+            let transcript = fake_cli_transcript(&request, "codex: run failed before fix\n");
             if let Some(output_updates) = request.output_updates.as_ref() {
-                let _ = output_updates.send("codex: run failed before fix\n".to_owned());
+                let _ = output_updates.send(transcript.clone());
             }
 
             RunOutcome {
@@ -198,7 +201,7 @@ impl AgentRunner for AlwaysFailingAgentRunner {
                 success: false,
                 exit_code: Some(1),
                 summary: format!("failed {}", request.pull_request.key),
-                captured_output: Some("codex: run failed before fix\n".to_owned()),
+                captured_output: Some(transcript),
                 processed_comment_at: request.pull_request.latest_reviewer_activity_at,
                 processed_ci_at: request.pull_request.ci_updated_at,
                 processed_head_sha: request.pull_request.head_sha,
@@ -755,17 +758,23 @@ async fn running_pr_exposes_live_codex_output() {
     assert_eq!(running_pr["status"], json!("running"));
     assert_eq!(running_pr["details_label"], json!("Started"));
     assert!(running_pr["details_at"].is_string());
-    assert_eq!(
-        running_pr["live_output"],
-        json!("codex: inspecting workspace\ncargo test -q\n")
-    );
+    let running_output = running_pr["live_output"]
+        .as_str()
+        .expect("running live output should be a string");
+    assert!(running_output.starts_with("=== Prompt Sent To Codex CLI ===\n"));
+    assert!(running_output.contains("Trigger: CI failed"));
+    assert!(running_output.contains("=== Codex CLI Output ===\n"));
+    assert!(running_output.ends_with("codex: inspecting workspace\ncargo test -q\n"));
 
     let detail_payload = get_json(supervisor.clone(), "/api/pr?key=openai%2Fsymphony%237").await;
     assert_eq!(detail_payload["key"], json!("openai/symphony#7"));
-    assert_eq!(
-        detail_payload["live_output"],
-        json!("codex: inspecting workspace\ncargo test -q\n")
-    );
+    let detail_output = detail_payload["live_output"]
+        .as_str()
+        .expect("detail output should be a string");
+    assert!(detail_output.starts_with("=== Prompt Sent To Codex CLI ===\n"));
+    assert!(detail_output.contains("Trigger: CI failed"));
+    assert!(detail_output.contains("=== Codex CLI Output ===\n"));
+    assert!(detail_output.ends_with("codex: inspecting workspace\ncargo test -q\n"));
 
     runner.allow_finish.add_permits(1);
     poll_task
@@ -804,10 +813,13 @@ async fn completed_pr_detail_shows_saved_last_run_output() {
     assert_eq!(detail_payload["status"], json!("waiting review"));
     assert_eq!(detail_payload["details_label"], json!("Last run"));
     assert!(detail_payload["details_at"].is_string());
-    assert_eq!(
-        detail_payload["live_output"],
-        json!("codex: inspecting workspace\ncargo test -q\n")
-    );
+    let saved_output = detail_payload["live_output"]
+        .as_str()
+        .expect("saved output should be a string");
+    assert!(saved_output.starts_with("=== Prompt Sent To Codex CLI ===\n"));
+    assert!(saved_output.contains("Trigger: CI failed"));
+    assert!(saved_output.contains("=== Codex CLI Output ===\n"));
+    assert!(saved_output.ends_with("codex: inspecting workspace\ncargo test -q\n"));
     assert_eq!(
         detail_payload["latest_summary"],
         json!("fixed openai/symphony#7")
@@ -854,7 +866,7 @@ async fn running_pr_does_not_fall_back_to_saved_output() {
                     finished_at: None,
                     attempt: 1,
                     trigger: AttentionReason::CiFailed,
-                    summary: "waiting for Codex CLI output...".to_owned(),
+                    summary: "waiting for Codex CLI transcript...".to_owned(),
                     live_output: None,
                     exit_code: None,
                 }),
@@ -1498,6 +1510,20 @@ fn base_pr(
         is_closed: false,
         is_merged: false,
     }
+}
+
+fn fake_cli_transcript(request: &RunRequest, output: &str) -> String {
+    let prompt = build_prompt(
+        &request.pull_request,
+        request.trigger,
+        request.agent.additional_instructions.as_deref(),
+    );
+
+    format!(
+        "=== Prompt Sent To Codex CLI ===\n{}\n\n=== Codex CLI Output ===\n{}",
+        prompt.trim_end_matches('\n'),
+        output
+    )
 }
 
 fn unique_temp_path(file_name: &str) -> PathBuf {

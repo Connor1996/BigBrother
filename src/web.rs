@@ -864,8 +864,8 @@ const PR_DETAIL_HTML: &str = r##"<!doctype html>
         <div id="summary-text" class="summary-text">-</div>
       </div>
       <div>
-        <span id="output-label" class="section-label">Codex CLI Output</span>
-        <pre id="output" class="output">Waiting for output…</pre>
+        <span id="output-label" class="section-label">Codex CLI Transcript</span>
+        <pre id="output" class="output">Waiting for transcript…</pre>
       </div>
     </section>
   </main>
@@ -912,11 +912,11 @@ const PR_DETAIL_HTML: &str = r##"<!doctype html>
       document.getElementById("updated-at").textContent = fmtTime(pr.updated_at);
       document.getElementById("summary-text").textContent = pr.latest_summary || "-";
       document.getElementById("output-label").textContent =
-        pr.status === "running" ? "Live Codex CLI Output" : "Saved Codex CLI Output";
+        pr.status === "running" ? "Live Codex CLI Transcript" : "Saved Codex CLI Transcript";
       document.getElementById("output").textContent = pr.live_output || (
         pr.status === "running"
-          ? "No live output is available for this PR right now."
-          : "No saved output is available for the last run."
+          ? "No live transcript is available for this PR right now."
+          : "No saved transcript is available for the last run."
       );
       setPill("status-pill", pr.status);
       setPill("ci-pill", pr.ci_status);

@@ -436,6 +436,7 @@ Each run includes:
 - workspace sync result
 - agent command
 - timeout
+- the exact prompt sent to the agent stdin
 - stdout and stderr capture
 - exit code
 - compact final summary
@@ -614,7 +615,7 @@ The MVP UI can be a single page that shows:
 - a right-aligned dashboard tab switch for `PRs` and `Activity`
 - current tracked PR rows
 - each PR’s status, CI state, review state, and latest action summary
-- a row-level link into a dedicated PR detail page for run output, showing live Codex CLI output while a run is active and the saved output from the latest completed run otherwise
+- a row-level link into a dedicated PR detail page for run output, showing a Codex CLI transcript that includes both the prompt sent to Codex and the live or saved Codex output
 - a row-level pause/resume control for each tracked PR
 - a visually subdued treatment for paused rows so they read as intentionally muted rather than inactive by accident
 
@@ -647,8 +648,8 @@ Panels:
 - summary
 - recent comments/reviews summary
 - run history
-- live Codex CLI output for the current run, when a run is active
-- saved latest run output when no run is currently active
+- live Codex CLI transcript for the current run, including the prompt input and Codex output
+- saved latest run transcript when no run is currently active, including the prompt input and Codex output
 - latest run output summary
 - workspace path
 - notification state
