@@ -159,22 +159,19 @@ pub async fn run(request: RunRequest) -> RunOutcome {
                 processed_head_sha: request.pull_request.head_sha.clone(),
             }
         }
-        Err(failure) => {
-            let summary = failure.error.to_string();
-            RunOutcome {
-                started_at,
-                finished_at,
-                success: false,
-                exit_code: None,
-                summary: summary.clone(),
-                captured_output: failure.captured_output.or(Some(summary)),
-                captured_terminal: None,
-                last_terminal_output_at: None,
-                processed_comment_at: request.pull_request.latest_reviewer_activity_at,
-                processed_ci_at: request.pull_request.ci_updated_at,
-                processed_head_sha: request.pull_request.head_sha.clone(),
-            }
-        }
+        Err(failure) => RunOutcome {
+            started_at,
+            finished_at,
+            success: false,
+            exit_code: None,
+            summary: request.trigger.failure_summary().to_owned(),
+            captured_output: failure.captured_output.or(Some(failure.error.to_string())),
+            captured_terminal: None,
+            last_terminal_output_at: None,
+            processed_comment_at: request.pull_request.latest_reviewer_activity_at,
+            processed_ci_at: request.pull_request.ci_updated_at,
+            processed_head_sha: request.pull_request.head_sha.clone(),
+        },
     }
 }
 
@@ -257,12 +254,17 @@ async fn run_inner(
         collect_process_output(child, reader, request.output_updates.clone())
             .await
             .map_err(|error| RunFailure::with_transcript(error, &transcript_preamble))?;
-    let summary = summarize_captured_output(&combined_output);
+    let exit_code = i32::try_from(status.exit_code()).ok();
+    let summary = if exit_code == Some(0) {
+        request.trigger.success_summary().to_owned()
+    } else {
+        request.trigger.failure_summary().to_owned()
+    };
     let captured_output = normalize_output(&cli_transcript(&transcript_preamble, &combined_output));
     let captured_terminal = normalize_output(&terminal_screen);
 
     Ok((
-        i32::try_from(status.exit_code()).ok(),
+        exit_code,
         summary,
         captured_output,
         captured_terminal,
@@ -616,12 +618,6 @@ fn build_pty_command(
     );
 
     Ok(command)
-}
-
-fn summarize_captured_output(output: &str) -> String {
-    let lines = output.lines().collect::<Vec<_>>();
-    let tail = lines.iter().rev().take(12).copied().collect::<Vec<_>>();
-    tail.into_iter().rev().collect::<Vec<_>>().join("\n")
 }
 
 fn normalize_output(output: &str) -> Option<String> {

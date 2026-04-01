@@ -58,6 +58,30 @@ impl AttentionReason {
             Self::MergeConflict => "merge conflict with base branch",
         }
     }
+
+    pub fn active_summary(self) -> &'static str {
+        match self {
+            Self::CiFailed => "investigating CI failure",
+            Self::ReviewFeedback => "addressing review feedback",
+            Self::MergeConflict => "resolving merge conflict",
+        }
+    }
+
+    pub fn success_summary(self) -> &'static str {
+        match self {
+            Self::CiFailed => "CI failure handling completed",
+            Self::ReviewFeedback => "review feedback handling completed",
+            Self::MergeConflict => "merge conflict handling completed",
+        }
+    }
+
+    pub fn failure_summary(self) -> &'static str {
+        match self {
+            Self::CiFailed => "CI failure handling failed",
+            Self::ReviewFeedback => "review feedback handling failed",
+            Self::MergeConflict => "merge conflict handling failed",
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]

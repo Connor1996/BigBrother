@@ -445,7 +445,8 @@ Each run includes:
 - the exact prompt sent to the agent stdin
 - stdout and stderr capture
 - exit code
-- compact final summary
+- compact final summary intended for operator scanning, such as `merge conflict handling completed`,
+  `review feedback handling failed`, or `CI failure handling completed`
 
 The agent prompt must include:
 
@@ -657,7 +658,7 @@ Panels:
 - run history
 - read-only embedded terminal screen for the current run, including the latest terminal redraw state and last terminal activity time
 - saved last terminal snapshot when no run is currently active
-- latest run output summary
+- latest run output summary rendered as a short operator-facing status line rather than raw terminal or transcript text
 - workspace path
 - notification state
 

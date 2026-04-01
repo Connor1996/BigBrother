@@ -765,7 +765,7 @@ fn build_tracked_pr(
             finished_at: None,
             attempt: 1,
             trigger: active.trigger,
-            summary: "waiting for Codex CLI transcript...".to_owned(),
+            summary: active.trigger.active_summary().to_owned(),
             live_output: None,
             live_terminal: None,
             last_terminal_output_at: None,

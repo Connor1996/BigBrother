@@ -345,8 +345,8 @@ async fn mvp_flow_tracks_prs_runs_actionable_one_and_does_not_duplicate() {
     );
     assert_eq!(
         summary_for(prs, "openai/symphony#7"),
-        Some("fixed openai/symphony#7"),
-        "latest summary should reflect runner output",
+        Some("CI failure handling completed"),
+        "latest summary should stay concise and trigger-aware",
     );
 
     supervisor
@@ -972,12 +972,20 @@ async fn running_pr_exposes_live_terminal() {
     assert_eq!(running_pr["details_label"], json!("Started"));
     assert!(running_pr["details_at"].is_string());
     assert_eq!(
+        running_pr["latest_summary"],
+        json!("investigating CI failure")
+    );
+    assert_eq!(
         running_pr["terminal_screen"],
         json!("$ codex exec\nThinking...\ncargo test -q")
     );
 
     let detail_payload = get_json(supervisor.clone(), "/api/pr?key=openai%2Fsymphony%237").await;
     assert_eq!(detail_payload["key"], json!("openai/symphony#7"));
+    assert_eq!(
+        detail_payload["latest_summary"],
+        json!("investigating CI failure")
+    );
     assert_eq!(
         detail_payload["terminal_screen"],
         json!("$ codex exec\nThinking...\ncargo test -q")
@@ -1030,7 +1038,7 @@ async fn completed_pr_detail_shows_saved_terminal_snapshot() {
     assert_eq!(detail_payload["live_output"], Value::Null);
     assert_eq!(
         detail_payload["latest_summary"],
-        json!("fixed openai/symphony#7")
+        json!("CI failure handling completed")
     );
 }
 
@@ -1075,7 +1083,7 @@ async fn running_pr_does_not_fall_back_to_saved_terminal_snapshot() {
                     finished_at: None,
                     attempt: 1,
                     trigger: AttentionReason::CiFailed,
-                    summary: "waiting for Codex CLI transcript...".to_owned(),
+                    summary: AttentionReason::CiFailed.active_summary().to_owned(),
                     live_output: None,
                     live_terminal: None,
                     last_terminal_output_at: None,
@@ -1124,7 +1132,12 @@ async fn saved_run_timestamp_is_exposed_in_pr_list() {
                 attention_reason: None,
                 persisted: PersistentPrState {
                     last_run_finished_at: Some(finished_at),
-                    last_run_summary: Some("saved summary".to_owned()),
+                    last_run_status: Some("error".to_owned()),
+                    last_run_trigger: Some(AttentionReason::ReviewFeedback),
+                    last_run_summary: Some(
+                        "2026-03-31T22:14:30Z ERROR auth expired\nvery long captured output"
+                            .to_owned(),
+                    ),
                     ..PersistentPrState::default()
                 },
                 runner: None,
@@ -1142,6 +1155,10 @@ async fn saved_run_timestamp_is_exposed_in_pr_list() {
     assert_eq!(
         pr["details_at"],
         json!(finished_at.to_rfc3339_opts(chrono::SecondsFormat::Secs, true))
+    );
+    assert_eq!(
+        pr["latest_summary"],
+        json!("review feedback handling failed")
     );
 }
 

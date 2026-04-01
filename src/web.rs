@@ -19,7 +19,7 @@ use serde::{Deserialize, Serialize};
 use tokio::net::TcpListener;
 
 use crate::{
-    model::{ActivityEvent, TrackedPr},
+    model::{ActivityEvent, PersistentPrState, TrackedPr},
     service::Supervisor,
 };
 
@@ -1188,11 +1188,7 @@ fn summarize_pr(tracked: &TrackedPr) -> PullRequestSummary {
             .attention_reason
             .map(|reason| reason.label().to_owned()),
         updated_at: tracked.pull_request.updated_at,
-        latest_summary: tracked
-            .runner
-            .as_ref()
-            .map(|runner| runner.summary.clone())
-            .or_else(|| tracked.persisted.last_run_summary.clone()),
+        latest_summary: latest_operator_summary(tracked),
         terminal_screen: tracked
             .runner
             .as_ref()
@@ -1220,6 +1216,42 @@ fn summarize_pr(tracked: &TrackedPr) -> PullRequestSummary {
     }
 }
 
+fn latest_operator_summary(tracked: &TrackedPr) -> Option<String> {
+    tracked
+        .runner
+        .as_ref()
+        .map(|runner| runner.summary.clone())
+        .or_else(|| summarize_persisted_run(&tracked.persisted))
+}
+
+fn summarize_persisted_run(persisted: &PersistentPrState) -> Option<String> {
+    match (
+        persisted.last_run_trigger,
+        persisted.last_run_status.as_deref(),
+    ) {
+        (Some(trigger), Some("success")) => Some(trigger.success_summary().to_owned()),
+        (Some(trigger), Some("error")) => Some(trigger.failure_summary().to_owned()),
+        _ => compact_summary_text(persisted.last_run_summary.as_deref()),
+    }
+}
+
+fn compact_summary_text(summary: Option<&str>) -> Option<String> {
+    let line = summary?.lines().map(str::trim).find(|line| {
+        !line.is_empty()
+            && *line != "=== Prompt Sent To Codex CLI ==="
+            && *line != "=== Codex CLI Output ==="
+    })?;
+
+    let truncated = if line.chars().count() > 120 {
+        let mut shortened = line.chars().take(117).collect::<String>();
+        shortened.push_str("...");
+        shortened
+    } else {
+        line.to_owned()
+    };
+    Some(truncated)
+}
+
 fn summarize_activity(event: &ActivityEvent) -> ActivitySummary {
     ActivitySummary {
         timestamp: event.timestamp,
@@ -1232,4 +1264,113 @@ fn summarize_activity(event: &ActivityEvent) -> ActivitySummary {
 async fn shutdown_signal(stop_flag: Arc<AtomicBool>) {
     let _ = tokio::signal::ctrl_c().await;
     stop_flag.store(true, Ordering::Relaxed);
+}
+
+#[cfg(test)]
+mod tests {
+    use chrono::TimeZone;
+
+    use super::{compact_summary_text, latest_operator_summary};
+    use crate::model::{
+        AttentionReason, CiStatus, PersistentPrState, PullRequest, ReviewDecision, RunnerState,
+        TrackedPr, TrackingStatus,
+    };
+
+    fn sample_pr() -> PullRequest {
+        PullRequest {
+            key: "openai/symphony#7".to_owned(),
+            repo_full_name: "openai/symphony".to_owned(),
+            number: 7,
+            title: "Test".to_owned(),
+            body: None,
+            url: "https://github.com/openai/symphony/pull/7".to_owned(),
+            author_login: "connor".to_owned(),
+            labels: vec![],
+            created_at: chrono::Utc.with_ymd_and_hms(2026, 3, 31, 18, 0, 0).unwrap(),
+            updated_at: chrono::Utc
+                .with_ymd_and_hms(2026, 3, 31, 18, 30, 0)
+                .unwrap(),
+            head_sha: "abc123".to_owned(),
+            head_ref: "feature/test".to_owned(),
+            base_sha: "def456".to_owned(),
+            base_ref: "main".to_owned(),
+            clone_url: "https://github.com/openai/symphony.git".to_owned(),
+            ssh_url: "git@github.com:openai/symphony.git".to_owned(),
+            ci_status: CiStatus::Failure,
+            ci_updated_at: Some(
+                chrono::Utc
+                    .with_ymd_and_hms(2026, 3, 31, 18, 25, 0)
+                    .unwrap(),
+            ),
+            review_decision: ReviewDecision::Clean,
+            approval_count: 0,
+            review_comment_count: 0,
+            issue_comment_count: 0,
+            latest_reviewer_activity_at: None,
+            has_conflicts: false,
+            mergeable_state: Some("clean".to_owned()),
+            is_draft: false,
+            is_closed: false,
+            is_merged: false,
+        }
+    }
+
+    #[test]
+    fn latest_operator_summary_prefers_trigger_specific_short_text() {
+        let tracked = TrackedPr {
+            pull_request: sample_pr(),
+            status: TrackingStatus::NeedsAttention,
+            attention_reason: Some(AttentionReason::ReviewFeedback),
+            persisted: PersistentPrState {
+                last_run_status: Some("error".to_owned()),
+                last_run_summary: Some("huge multiline\nsummary body".to_owned()),
+                last_run_trigger: Some(AttentionReason::ReviewFeedback),
+                ..PersistentPrState::default()
+            },
+            runner: None,
+        };
+
+        assert_eq!(
+            latest_operator_summary(&tracked).as_deref(),
+            Some("review feedback handling failed")
+        );
+    }
+
+    #[test]
+    fn running_summary_stays_short_and_trigger_aware() {
+        let tracked = TrackedPr {
+            pull_request: sample_pr(),
+            status: TrackingStatus::Running,
+            attention_reason: Some(AttentionReason::MergeConflict),
+            persisted: PersistentPrState::default(),
+            runner: Some(RunnerState {
+                status: TrackingStatus::Running,
+                started_at: chrono::Utc.with_ymd_and_hms(2026, 3, 31, 18, 0, 0).unwrap(),
+                finished_at: None,
+                attempt: 1,
+                trigger: AttentionReason::MergeConflict,
+                summary: AttentionReason::MergeConflict.active_summary().to_owned(),
+                live_output: None,
+                live_terminal: None,
+                last_terminal_output_at: None,
+                exit_code: None,
+            }),
+        };
+
+        assert_eq!(
+            latest_operator_summary(&tracked).as_deref(),
+            Some("resolving merge conflict")
+        );
+    }
+
+    #[test]
+    fn compact_summary_text_trims_legacy_multiline_blobs() {
+        assert_eq!(
+            compact_summary_text(Some(
+                "\n=== Prompt Sent To Codex CLI ===\n\nfatal: auth expired\nsecond line"
+            ))
+            .as_deref(),
+            Some("fatal: auth expired")
+        );
+    }
 }
