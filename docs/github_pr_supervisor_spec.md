@@ -684,10 +684,11 @@ Columns:
 
 - PR
 - status
-- CI
-- reviews
 - latest deep review summary
 - action
+
+The inbox status pills should visually distinguish `requested review` from `reviewed` so pending
+and completed review work do not blend together.
 
 ### 20.2 PR Detail
 

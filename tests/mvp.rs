@@ -796,6 +796,12 @@ async fn dashboard_html_exposes_top_right_pr_review_request_and_activity_tabs() 
         "dashboard should center the non-description columns, got: {html}",
     );
     assert!(
+        html.contains(
+            r#"<tr><td colspan="4" class="empty">Loading requested reviews...</td></tr>"#
+        ),
+        "review request inbox should render the compact four-column layout, got: {html}",
+    );
+    assert!(
         html.contains("pause-button") && html.contains("resume-button"),
         "dashboard should expose distinct pause and resume button styling hooks, got: {html}",
     );
@@ -804,6 +810,11 @@ async fn dashboard_html_exposes_top_right_pr_review_request_and_activity_tabs() 
             && html.contains("&#9654;")
             && html.contains("&#10074;&#10074;"),
         "dashboard should render play and pause icons for the action buttons, got: {html}",
+    );
+    assert!(
+        html.contains(r#"if (label === "requested review") return "pill warn";"#)
+            && html.contains(r#"if (label === "reviewed") return "pill good";"#),
+        "review request status pills should color requested and reviewed differently, got: {html}",
     );
     assert!(
         html.contains("<title>BigBrother</title>")

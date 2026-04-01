@@ -601,14 +601,12 @@ const INDEX_HTML: &str = r#"<!doctype html>
           <tr>
             <th class="description-col">PR</th>
             <th class="metric-col">Status</th>
-            <th class="metric-col">CI</th>
-            <th class="metric-col">Reviews</th>
             <th class="metric-col">Details</th>
             <th class="metric-col">Action</th>
           </tr>
         </thead>
         <tbody id="review-requests-table">
-          <tr><td colspan="6" class="empty">Loading requested reviews...</td></tr>
+          <tr><td colspan="4" class="empty">Loading requested reviews...</td></tr>
         </tbody>
       </table>
     </section>
@@ -650,6 +648,8 @@ const INDEX_HTML: &str = r#"<!doctype html>
     function pillClass(value) {
       const label = String(value || "").toLowerCase();
       if (!label || label === "-" || label === "not loaded") return "pill";
+      if (label === "requested review") return "pill warn";
+      if (label === "reviewed") return "pill good";
       if (label.includes("fail") || label.includes("block") || label.includes("conflict")) return "pill bad";
       if (label.includes("pause")) return "pill warn";
       if (label.includes("need") || label.includes("pending") || label.includes("comment") || label.includes("retry")) return "pill warn";
@@ -820,7 +820,7 @@ const INDEX_HTML: &str = r#"<!doctype html>
     function renderReviewRequests(prs) {
       const tbody = document.getElementById("review-requests-table");
       if (!prs.length) {
-        tbody.innerHTML = '<tr><td colspan="6" class="empty">No PRs are currently requesting your review.</td></tr>';
+        tbody.innerHTML = '<tr><td colspan="4" class="empty">No PRs are currently requesting your review.</td></tr>';
         return;
       }
 
@@ -832,8 +832,6 @@ const INDEX_HTML: &str = r#"<!doctype html>
             <div class="pr-meta">Updated ${escapeHtml(fmtTime(pr.updated_at))}</div>
           </td>
           <td class="metric-cell status-cell" data-label="Status">${renderStatus(pr, null)}</td>
-          <td class="metric-cell" data-label="CI"><span class="${pillClass(pr.ci_status)}">${escapeHtml(pr.ci_status)}</span></td>
-          <td class="metric-cell" data-label="Reviews"><span class="${pillClass(pr.review_status)}">${escapeHtml(pr.review_status)}</span></td>
           <td class="metric-cell details-cell" data-label="Details">${renderDetails(pr)}</td>
           <td class="metric-cell action-cell" data-label="Action">${renderReviewRequestAction(pr)}</td>
         </tr>
@@ -928,7 +926,7 @@ const INDEX_HTML: &str = r#"<!doctype html>
       document.getElementById("prs-table").innerHTML =
         `<tr><td colspan="7" class="empty">Failed to load dashboard: ${error.message}</td></tr>`;
       document.getElementById("review-requests-table").innerHTML =
-        `<tr><td colspan="6" class="empty">Failed to load review requests: ${error.message}</td></tr>`;
+        `<tr><td colspan="4" class="empty">Failed to load review requests: ${error.message}</td></tr>`;
       document.getElementById("activity-feed").innerHTML =
         `<div class="empty">Failed to load daemon activity: ${error.message}</div>`;
     });
@@ -1238,6 +1236,8 @@ const PR_DETAIL_HTML: &str = r##"<!doctype html>
     function pillClass(value) {
       const label = String(value || "").toLowerCase();
       if (!label || label === "-" || label === "not loaded") return "pill";
+      if (label === "requested review") return "pill warn";
+      if (label === "reviewed") return "pill good";
       if (label.includes("fail") || label.includes("block") || label.includes("conflict")) return "pill bad";
       if (label.includes("pause")) return "pill warn";
       if (label.includes("need") || label.includes("pending") || label.includes("comment") || label.includes("retry")) return "pill warn";
