@@ -651,7 +651,7 @@ The MVP UI can be a single page that shows:
 - current tracked PR rows
 - current review-request inbox rows for PRs that currently request the operator's review
 - each PR’s status, CI state, review state, and latest action summary, with attention context folded into the status cell instead of a dedicated attention column
-- the non-description columns centered for easier scanning, with red `Pause` and green `Resume` controls in the action column
+- the non-description columns centered for easier scanning, with red `Pause` and green `Resume` controls in the action column using white labels plus pause/play icons
 - a row-level link into a dedicated PR detail page for run output, showing an embedded read-only terminal while a run is active and the saved last run output after the run completes
 - a row-level pause/resume control for each tracked PR
 - a row-level `Deep Review` action for review-request inbox rows that runs a manual deep review and comments the result back onto the PR

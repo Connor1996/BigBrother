@@ -793,6 +793,12 @@ async fn dashboard_html_exposes_top_right_pr_review_request_and_activity_tabs() 
         html.contains("pause-button") && html.contains("resume-button"),
         "dashboard should expose distinct pause and resume button styling hooks, got: {html}",
     );
+    assert!(
+        html.contains("button-icon")
+            && html.contains("&#9654;")
+            && html.contains("&#10074;&#10074;"),
+        "dashboard should render play and pause icons for the action buttons, got: {html}",
+    );
 }
 
 #[tokio::test]

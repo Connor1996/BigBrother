@@ -318,6 +318,10 @@ const INDEX_HTML: &str = r#"<!doctype html>
     }
 
     .action-button {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      gap: 8px;
       border: 1px solid var(--line);
       border-radius: 999px;
       background: rgba(255, 255, 255, 0.82);
@@ -332,7 +336,7 @@ const INDEX_HTML: &str = r#"<!doctype html>
     .action-button.pause-button {
       background: rgba(183, 61, 61, 0.16);
       border-color: rgba(183, 61, 61, 0.34);
-      color: #8b2f2f;
+      color: #fff;
     }
 
     .action-button.pause-button:hover:not(:disabled) {
@@ -342,7 +346,7 @@ const INDEX_HTML: &str = r#"<!doctype html>
     .action-button.resume-button {
       background: rgba(29, 107, 87, 0.16);
       border-color: rgba(29, 107, 87, 0.34);
-      color: #1d6b57;
+      color: #fff;
     }
 
     .action-button.resume-button:hover:not(:disabled) {
@@ -350,13 +354,21 @@ const INDEX_HTML: &str = r#"<!doctype html>
     }
 
     .action-button:hover:not(:disabled) {
-      background: rgba(255, 255, 255, 1);
       transform: translateY(-1px);
+    }
+
+    .action-button:not(.pause-button):not(.resume-button):hover:not(:disabled) {
+      background: rgba(255, 255, 255, 1);
     }
 
     .action-button:disabled {
       cursor: wait;
       opacity: 0.65;
+    }
+
+    .button-icon {
+      font-size: 0.9em;
+      line-height: 1;
     }
 
     .detail-link {
@@ -616,13 +628,15 @@ const INDEX_HTML: &str = r#"<!doctype html>
       const nextPaused = !isPaused;
       const label = pending ? "Updating..." : (isPaused ? "Resume" : "Pause");
       const variantClass = isPaused ? "resume-button" : "pause-button";
+      const icon = isPaused ? "&#9654;" : "&#10074;&#10074;";
       return `
         <button
           class="action-button ${variantClass}"
           ${pending ? "disabled" : ""}
           onclick="togglePause('${encodeURIComponent(pr.key)}', ${nextPaused})"
         >
-          ${label}
+          <span class="button-icon" aria-hidden="true">${icon}</span>
+          <span>${label}</span>
         </button>
       `;
     }
