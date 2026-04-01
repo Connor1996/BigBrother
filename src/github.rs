@@ -1,4 +1,10 @@
-use std::collections::HashMap;
+use std::{
+    collections::HashMap,
+    sync::{
+        atomic::{AtomicUsize, Ordering},
+        Arc,
+    },
+};
 
 use anyhow::{anyhow, Context, Result};
 use chrono::{DateTime, Utc};
@@ -13,7 +19,7 @@ use serde::Deserialize;
 use crate::{
     config::{build_search_query, ResolvedGitHubConfig},
     model::{CiStatus, PullRequest, ReviewDecision},
-    service::GitHubProvider,
+    service::{GitHubProvider, GitHubRequestStats},
 };
 
 const SIGNAL_REFRESH_GRACE_PERIOD_SECS: i64 = 30 * 60;
@@ -52,16 +58,28 @@ impl GitHubClient {
     }
 
     pub async fn fetch_pull_requests(&self) -> Result<Vec<PullRequest>> {
-        self.fetch_pull_requests_with_state(Vec::new()).await
+        self.fetch_pull_requests_with_state_and_stats(Vec::new())
+            .await
+            .map(|(prs, _)| prs)
     }
 
     pub async fn fetch_pull_requests_with_state(
         &self,
         previous_prs: Vec<PullRequest>,
     ) -> Result<Vec<PullRequest>> {
+        self.fetch_pull_requests_with_state_and_stats(previous_prs)
+            .await
+            .map(|(prs, _)| prs)
+    }
+
+    pub async fn fetch_pull_requests_with_state_and_stats(
+        &self,
+        previous_prs: Vec<PullRequest>,
+    ) -> Result<(Vec<PullRequest>, GitHubRequestStats)> {
+        let metrics = GitHubRequestMetrics::default();
         let author = match &self.config.author {
             Some(author) => author.clone(),
-            None => self.fetch_viewer_login().await?,
+            None => self.fetch_viewer_login(&metrics).await?,
         };
         let previous_prs = previous_prs
             .into_iter()
@@ -78,15 +96,21 @@ impl GitHubClient {
                     ("order", "desc".to_owned()),
                     ("per_page", self.config.max_prs.to_string()),
                 ],
+                &metrics,
+                RequestCategory::Search,
             )
             .await?;
 
-        let light_prs = stream::iter(search.items.into_iter().map(|item| async move {
-            let repo = parse_repo_from_api_url(&item.repository_url)
-                .with_context(|| format!("failed to parse repo from {}", item.repository_url))?;
-            let detail = self.fetch_pull_detail(&repo, item.number).await?;
-            let pr = build_pull_request_from_detail(&repo, item.number, detail)?;
-            Ok::<_, anyhow::Error>((repo, pr))
+        let light_prs = stream::iter(search.items.into_iter().map(|item| {
+            let metrics = metrics.clone();
+            async move {
+                let repo = parse_repo_from_api_url(&item.repository_url)
+                    .with_context(|| format!("failed to parse repo from {}", item.repository_url))?;
+                let detail = self.fetch_pull_detail(&repo, item.number, &metrics).await?;
+                let pr = build_pull_request_from_detail(&repo, item.number, detail)?;
+                metrics.record_light_pr();
+                Ok::<_, anyhow::Error>((repo, pr))
+            }
         }))
         .buffer_unordered(6)
         .try_collect::<Vec<_>>()
@@ -95,15 +119,26 @@ impl GitHubClient {
         let prs = stream::iter(light_prs.into_iter().map(|(repo, light_pr)| {
             let author = author.clone();
             let previous_pr = previous_prs.get(&light_pr.key).cloned();
+            let metrics = metrics.clone();
             async move {
                 if should_refresh_signal_details(&light_pr, previous_pr.as_ref()) {
-                    self.hydrate_pull_request_signals(&repo, &author, light_pr)
-                        .await
+                    let pr = self
+                        .hydrate_pull_request_signals(&repo, &author, light_pr, &metrics)
+                        .await?;
+                    metrics.record_hydrated_pr();
+                    Ok::<PullRequest, anyhow::Error>(pr)
                 } else if let Some(previous_pr) = previous_pr {
-                    Ok(reuse_cached_signal_details(light_pr, &previous_pr))
+                    metrics.record_reused_pr();
+                    Ok::<PullRequest, anyhow::Error>(reuse_cached_signal_details(
+                        light_pr,
+                        &previous_pr,
+                    ))
                 } else {
-                    self.hydrate_pull_request_signals(&repo, &author, light_pr)
-                        .await
+                    let pr = self
+                        .hydrate_pull_request_signals(&repo, &author, light_pr, &metrics)
+                        .await?;
+                    metrics.record_hydrated_pr();
+                    Ok::<PullRequest, anyhow::Error>(pr)
                 }
             }
         }))
@@ -113,32 +148,59 @@ impl GitHubClient {
 
         let mut prs = prs;
         prs.sort_by(|left, right| right.updated_at.cmp(&left.updated_at));
-        Ok(prs)
+        Ok((prs, metrics.snapshot()))
     }
 
     pub async fn fetch_pull_request_by_key(&self, pr_key: &str) -> Result<Option<PullRequest>> {
+        self.fetch_pull_request_by_key_with_stats(pr_key)
+            .await
+            .map(|(pr, _)| pr)
+    }
+
+    pub async fn fetch_pull_request_by_key_with_stats(
+        &self,
+        pr_key: &str,
+    ) -> Result<(Option<PullRequest>, GitHubRequestStats)> {
+        let metrics = GitHubRequestMetrics::default();
         let (repo, number) = parse_pr_key(pr_key)?;
         let author = match &self.config.author {
             Some(author) => author.clone(),
-            None => self.fetch_viewer_login().await?,
+            None => self.fetch_viewer_login(&metrics).await?,
         };
 
-        let detail = self.fetch_pull_detail(&repo, number).await?;
+        let detail = self.fetch_pull_detail(&repo, number, &metrics).await?;
         let pr = build_pull_request_from_detail(&repo, number, detail)?;
+        metrics.record_light_pr();
 
-        self.hydrate_pull_request_signals(&repo, &author, pr)
+        let pr = self
+            .hydrate_pull_request_signals(&repo, &author, pr, &metrics)
             .await
-            .map(Some)
+            .map(Some)?;
+        metrics.record_hydrated_pr();
+
+        Ok((pr, metrics.snapshot()))
     }
 
-    async fn fetch_viewer_login(&self) -> Result<String> {
-        let user: ViewerResponse = self.get_json("user", &[]).await?;
+    async fn fetch_viewer_login(&self, metrics: &GitHubRequestMetrics) -> Result<String> {
+        let user: ViewerResponse = self
+            .get_json("user", &[], metrics, RequestCategory::Viewer)
+            .await?;
         Ok(user.login)
     }
 
-    async fn fetch_pull_detail(&self, repo: &str, number: u64) -> Result<PullDetail> {
-        self.get_json(&format!("repos/{repo}/pulls/{number}"), &[])
-            .await
+    async fn fetch_pull_detail(
+        &self,
+        repo: &str,
+        number: u64,
+        metrics: &GitHubRequestMetrics,
+    ) -> Result<PullDetail> {
+        self.get_json(
+            &format!("repos/{repo}/pulls/{number}"),
+            &[],
+            metrics,
+            RequestCategory::PullDetail,
+        )
+        .await
     }
 
     async fn hydrate_pull_request_signals(
@@ -146,6 +208,7 @@ impl GitHubClient {
         repo: &str,
         author: &str,
         mut pr: PullRequest,
+        metrics: &GitHubRequestMetrics,
     ) -> Result<PullRequest> {
         let per_page = vec![("per_page", "100".to_owned())];
         let reviews_path = format!("repos/{repo}/pulls/{}/reviews", pr.number);
@@ -155,11 +218,36 @@ impl GitHubClient {
         let combined_status_path = format!("repos/{repo}/commits/{}/status", pr.head_sha);
 
         let (reviews, review_comments, issue_comments, check_runs, combined_status) = tokio::try_join!(
-            self.get_json::<Vec<Review>>(&reviews_path, &per_page),
-            self.get_json::<Vec<ReviewComment>>(&review_comments_path, &per_page),
-            self.get_json::<Vec<IssueComment>>(&issue_comments_path, &per_page),
-            self.get_json::<CheckRunsResponse>(&check_runs_path, &per_page),
-            self.get_json::<CombinedStatus>(&combined_status_path, &[]),
+            self.get_json::<Vec<Review>>(
+                &reviews_path,
+                &per_page,
+                metrics,
+                RequestCategory::Reviews
+            ),
+            self.get_json::<Vec<ReviewComment>>(
+                &review_comments_path,
+                &per_page,
+                metrics,
+                RequestCategory::ReviewComments
+            ),
+            self.get_json::<Vec<IssueComment>>(
+                &issue_comments_path,
+                &per_page,
+                metrics,
+                RequestCategory::IssueComments
+            ),
+            self.get_json::<CheckRunsResponse>(
+                &check_runs_path,
+                &per_page,
+                metrics,
+                RequestCategory::CheckRuns
+            ),
+            self.get_json::<CombinedStatus>(
+                &combined_status_path,
+                &[],
+                metrics,
+                RequestCategory::CombinedStatus
+            ),
         )?;
 
         let review_summary = summarize_reviews(author, &reviews, &review_comments, &issue_comments);
@@ -172,11 +260,18 @@ impl GitHubClient {
         Ok(pr)
     }
 
-    async fn get_json<T>(&self, path: &str, query: &[(&str, String)]) -> Result<T>
+    async fn get_json<T>(
+        &self,
+        path: &str,
+        query: &[(&str, String)],
+        metrics: &GitHubRequestMetrics,
+        category: RequestCategory,
+    ) -> Result<T>
     where
         T: DeserializeOwned,
     {
         let url = format!("{}/{}", self.api_base_url, path.trim_start_matches('/'));
+        metrics.record_request(category);
         let response = self
             .http
             .get(url.clone())
@@ -215,8 +310,100 @@ impl GitHubProvider for GitHubClient {
         )
     }
 
+    fn fetch_pull_requests_with_state_and_stats(
+        &self,
+        previous_prs: Vec<PullRequest>,
+    ) -> BoxFuture<'_, Result<(Vec<PullRequest>, GitHubRequestStats)>> {
+        Box::pin(async move {
+            GitHubClient::fetch_pull_requests_with_state_and_stats(self, previous_prs).await
+        })
+    }
+
     fn fetch_pull_request(&self, pr_key: String) -> BoxFuture<'_, Result<Option<PullRequest>>> {
         Box::pin(async move { self.fetch_pull_request_by_key(&pr_key).await })
+    }
+
+    fn fetch_pull_request_with_stats(
+        &self,
+        pr_key: String,
+    ) -> BoxFuture<'_, Result<(Option<PullRequest>, GitHubRequestStats)>> {
+        Box::pin(async move { self.fetch_pull_request_by_key_with_stats(&pr_key).await })
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+enum RequestCategory {
+    Viewer,
+    Search,
+    PullDetail,
+    Reviews,
+    ReviewComments,
+    IssueComments,
+    CheckRuns,
+    CombinedStatus,
+}
+
+#[derive(Debug, Clone, Default)]
+struct GitHubRequestMetrics {
+    inner: Arc<GitHubRequestMetricsInner>,
+}
+
+#[derive(Debug, Default)]
+struct GitHubRequestMetricsInner {
+    viewer_requests: AtomicUsize,
+    search_requests: AtomicUsize,
+    pull_detail_requests: AtomicUsize,
+    review_requests: AtomicUsize,
+    review_comment_requests: AtomicUsize,
+    issue_comment_requests: AtomicUsize,
+    check_run_requests: AtomicUsize,
+    combined_status_requests: AtomicUsize,
+    light_prs: AtomicUsize,
+    hydrated_prs: AtomicUsize,
+    reused_prs: AtomicUsize,
+}
+
+impl GitHubRequestMetrics {
+    fn record_request(&self, category: RequestCategory) {
+        let counter = match category {
+            RequestCategory::Viewer => &self.inner.viewer_requests,
+            RequestCategory::Search => &self.inner.search_requests,
+            RequestCategory::PullDetail => &self.inner.pull_detail_requests,
+            RequestCategory::Reviews => &self.inner.review_requests,
+            RequestCategory::ReviewComments => &self.inner.review_comment_requests,
+            RequestCategory::IssueComments => &self.inner.issue_comment_requests,
+            RequestCategory::CheckRuns => &self.inner.check_run_requests,
+            RequestCategory::CombinedStatus => &self.inner.combined_status_requests,
+        };
+        counter.fetch_add(1, Ordering::Relaxed);
+    }
+
+    fn record_light_pr(&self) {
+        self.inner.light_prs.fetch_add(1, Ordering::Relaxed);
+    }
+
+    fn record_hydrated_pr(&self) {
+        self.inner.hydrated_prs.fetch_add(1, Ordering::Relaxed);
+    }
+
+    fn record_reused_pr(&self) {
+        self.inner.reused_prs.fetch_add(1, Ordering::Relaxed);
+    }
+
+    fn snapshot(&self) -> GitHubRequestStats {
+        GitHubRequestStats {
+            viewer_requests: self.inner.viewer_requests.load(Ordering::Relaxed),
+            search_requests: self.inner.search_requests.load(Ordering::Relaxed),
+            pull_detail_requests: self.inner.pull_detail_requests.load(Ordering::Relaxed),
+            review_requests: self.inner.review_requests.load(Ordering::Relaxed),
+            review_comment_requests: self.inner.review_comment_requests.load(Ordering::Relaxed),
+            issue_comment_requests: self.inner.issue_comment_requests.load(Ordering::Relaxed),
+            check_run_requests: self.inner.check_run_requests.load(Ordering::Relaxed),
+            combined_status_requests: self.inner.combined_status_requests.load(Ordering::Relaxed),
+            light_prs: self.inner.light_prs.load(Ordering::Relaxed),
+            hydrated_prs: self.inner.hydrated_prs.load(Ordering::Relaxed),
+            reused_prs: self.inner.reused_prs.load(Ordering::Relaxed),
+        }
     }
 }
 

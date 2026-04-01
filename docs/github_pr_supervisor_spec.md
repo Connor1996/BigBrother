@@ -661,6 +661,8 @@ The feed should make daemon progress legible even when no PR is currently runnin
 
 - scheduled poll start events
 - targeted re-check start events
+- per-poll GitHub request-count summaries that show how many API calls each poll consumed and how
+  much heavy hydration work happened
 - explicit idle/no-actionable poll summaries
 - runner-slot backpressure messages when work exists but concurrency is full
 

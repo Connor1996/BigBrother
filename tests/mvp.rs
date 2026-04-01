@@ -26,7 +26,7 @@ use symphony_rs::{
         TrackedPr, TrackingStatus,
     },
     runner::{RunOutcome, RunRequest},
-    service::{AgentRunner, GitHubProvider, Supervisor},
+    service::{AgentRunner, GitHubProvider, GitHubRequestStats, Supervisor},
     web,
 };
 use tokio::sync::Semaphore;
@@ -109,6 +109,28 @@ impl GitHubProvider for CountingStatefulGitHubProvider {
             last_previous_len.store(previous_prs.len(), Ordering::SeqCst);
             Ok(prs)
         })
+    }
+}
+
+#[derive(Clone)]
+struct StatsGitHubProvider {
+    prs: Vec<PullRequest>,
+    stats: GitHubRequestStats,
+}
+
+impl GitHubProvider for StatsGitHubProvider {
+    fn fetch_pull_requests(&self) -> BoxFuture<'_, Result<Vec<PullRequest>>> {
+        let prs = self.prs.clone();
+        Box::pin(async move { Ok(prs) })
+    }
+
+    fn fetch_pull_requests_with_state_and_stats(
+        &self,
+        _previous_prs: Vec<PullRequest>,
+    ) -> BoxFuture<'_, Result<(Vec<PullRequest>, GitHubRequestStats)>> {
+        let prs = self.prs.clone();
+        let stats = self.stats.clone();
+        Box::pin(async move { Ok((prs, stats)) })
     }
 }
 
@@ -369,6 +391,67 @@ async fn activity_api_exposes_recent_daemon_events() {
         }),
         "activity should include the idle poll summary: {events:?}",
     );
+}
+
+#[tokio::test]
+async fn activity_api_includes_github_request_metrics_for_scheduled_polls() {
+    let supervisor = Arc::new(
+        Supervisor::new(
+            sample_config(
+                unique_temp_path("state.json"),
+                unique_temp_path("workspaces"),
+            ),
+            Arc::new(StatsGitHubProvider {
+                prs: vec![idle_pr(), actionable_pr()],
+                stats: GitHubRequestStats {
+                    search_requests: 1,
+                    pull_detail_requests: 2,
+                    review_requests: 1,
+                    review_comment_requests: 1,
+                    issue_comment_requests: 1,
+                    check_run_requests: 1,
+                    combined_status_requests: 1,
+                    light_prs: 2,
+                    hydrated_prs: 1,
+                    reused_prs: 1,
+                    ..GitHubRequestStats::default()
+                },
+            }),
+            Arc::new(FakeAgentRunner {
+                invocations: Arc::new(AtomicUsize::new(0)),
+                started: Arc::new(Semaphore::new(0)),
+                allow_finish: Arc::new(Semaphore::new(1)),
+            }),
+        )
+        .expect("supervisor should initialize"),
+    );
+
+    supervisor
+        .poll_once()
+        .await
+        .expect("poll should record GitHub request metrics");
+
+    let payload = get_json(supervisor, "/api/activity").await;
+    let events = payload["events"].as_array().expect("activity events array");
+    let metrics_event = events
+        .iter()
+        .find(|event| {
+            event["message"]
+                .as_str()
+                .map(|message| {
+                    message.contains("scheduled poll fetched 2 PRs using 8 GitHub requests")
+                })
+                .unwrap_or(false)
+        })
+        .expect("activity should include a scheduled poll metrics event");
+
+    let message = metrics_event["message"]
+        .as_str()
+        .expect("metrics event message should be a string");
+    assert!(message.contains("search 1"));
+    assert!(message.contains("pull detail 2"));
+    assert!(message.contains("hydrated PR 1"));
+    assert!(message.contains("reused PR 1"));
 }
 
 #[tokio::test]

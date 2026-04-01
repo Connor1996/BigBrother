@@ -29,6 +29,18 @@ pub trait GitHubProvider: Send + Sync {
         Box::pin(async move { self.fetch_pull_requests().await })
     }
 
+    fn fetch_pull_requests_with_state_and_stats(
+        &self,
+        previous_prs: Vec<PullRequest>,
+    ) -> BoxFuture<'_, Result<(Vec<PullRequest>, GitHubRequestStats)>> {
+        Box::pin(async move {
+            Ok((
+                self.fetch_pull_requests_with_state(previous_prs).await?,
+                GitHubRequestStats::default(),
+            ))
+        })
+    }
+
     fn fetch_pull_request(&self, pr_key: String) -> BoxFuture<'_, Result<Option<PullRequest>>> {
         Box::pin(async move {
             Ok(self
@@ -36,6 +48,18 @@ pub trait GitHubProvider: Send + Sync {
                 .await?
                 .into_iter()
                 .find(|pr| pr.key == pr_key))
+        })
+    }
+
+    fn fetch_pull_request_with_stats(
+        &self,
+        pr_key: String,
+    ) -> BoxFuture<'_, Result<(Option<PullRequest>, GitHubRequestStats)>> {
+        Box::pin(async move {
+            Ok((
+                self.fetch_pull_request(pr_key).await?,
+                GitHubRequestStats::default(),
+            ))
         })
     }
 }
@@ -46,6 +70,116 @@ pub trait AgentRunner: Send + Sync {
 
 const MAX_AUTOMATIC_RETRIES: u32 = 5;
 const MAX_LIVE_OUTPUT_CHARS: usize = 16_000;
+
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct GitHubRequestStats {
+    pub viewer_requests: usize,
+    pub search_requests: usize,
+    pub pull_detail_requests: usize,
+    pub review_requests: usize,
+    pub review_comment_requests: usize,
+    pub issue_comment_requests: usize,
+    pub check_run_requests: usize,
+    pub combined_status_requests: usize,
+    pub light_prs: usize,
+    pub hydrated_prs: usize,
+    pub reused_prs: usize,
+}
+
+impl GitHubRequestStats {
+    pub fn has_metrics(&self) -> bool {
+        self.total_requests() > 0
+            || self.light_prs > 0
+            || self.hydrated_prs > 0
+            || self.reused_prs > 0
+    }
+
+    pub fn total_requests(&self) -> usize {
+        self.viewer_requests
+            + self.search_requests
+            + self.pull_detail_requests
+            + self.review_requests
+            + self.review_comment_requests
+            + self.issue_comment_requests
+            + self.check_run_requests
+            + self.combined_status_requests
+    }
+
+    pub fn activity_message(
+        &self,
+        fallback_pr_count: usize,
+        preferred_pr_key: Option<&str>,
+    ) -> String {
+        let scope = preferred_pr_key
+            .map(|pr_key| format!("targeted check for {pr_key}"))
+            .unwrap_or_else(|| "scheduled poll".to_owned());
+        let fetched_prs = if self.light_prs > 0 {
+            self.light_prs
+        } else {
+            fallback_pr_count
+        };
+
+        if !self.has_metrics() {
+            return format!(
+                "{scope} fetched {fetched_prs} PRs without provider-side GitHub request metrics"
+            );
+        }
+
+        let mut request_parts = Vec::new();
+        push_metric_part(&mut request_parts, "viewer", self.viewer_requests);
+        push_metric_part(&mut request_parts, "search", self.search_requests);
+        push_metric_part(&mut request_parts, "pull detail", self.pull_detail_requests);
+        push_metric_part(&mut request_parts, "reviews", self.review_requests);
+        push_metric_part(
+            &mut request_parts,
+            "review comments",
+            self.review_comment_requests,
+        );
+        push_metric_part(
+            &mut request_parts,
+            "issue comments",
+            self.issue_comment_requests,
+        );
+        push_metric_part(&mut request_parts, "check runs", self.check_run_requests);
+        push_metric_part(
+            &mut request_parts,
+            "combined status",
+            self.combined_status_requests,
+        );
+
+        let mut outcome_parts = Vec::new();
+        push_metric_part(&mut outcome_parts, "hydrated PR", self.hydrated_prs);
+        push_metric_part(&mut outcome_parts, "reused PR", self.reused_prs);
+
+        let total_requests = self.total_requests();
+        let request_label = if total_requests == 1 {
+            "request"
+        } else {
+            "requests"
+        };
+
+        if outcome_parts.is_empty() {
+            format!(
+                "{scope} fetched {fetched_prs} PRs using {total_requests} GitHub {request_label} ({})",
+                request_parts.join(", ")
+            )
+        } else {
+            format!(
+                "{scope} fetched {fetched_prs} PRs using {total_requests} GitHub {request_label} ({}; {})",
+                request_parts.join(", "),
+                outcome_parts.join(", ")
+            )
+        }
+    }
+}
+
+fn push_metric_part(parts: &mut Vec<String>, label: &str, count: usize) {
+    if count == 0 {
+        return;
+    }
+
+    parts.push(format!("{label} {count}"));
+}
 
 #[derive(Debug, Clone)]
 struct ActiveRun {
@@ -284,9 +418,16 @@ impl Supervisor {
             },
         );
 
-        let prs = self
+        let (prs, fetch_stats) = self
             .fetch_prs_for_poll(preferred_pr_key, allow_fallback)
             .await?;
+        if fetch_stats.has_metrics() {
+            self.push_event(
+                EventLevel::Info,
+                preferred_pr_key.map(str::to_owned),
+                fetch_stats.activity_message(prs.len(), preferred_pr_key),
+            );
+        }
 
         let selected_request = {
             let mut inner = self.inner.lock().await;
@@ -459,18 +600,21 @@ impl Supervisor {
         &self,
         preferred_pr_key: Option<&str>,
         allow_fallback: bool,
-    ) -> Result<Vec<PullRequest>> {
+    ) -> Result<(Vec<PullRequest>, GitHubRequestStats)> {
         if let Some(pr_key) = preferred_pr_key {
             if !allow_fallback {
                 let mut prs = current_snapshot_prs(&self.shared_state);
-                let fetched = self.provider.fetch_pull_request(pr_key.to_owned()).await?;
+                let (fetched, stats) = self
+                    .provider
+                    .fetch_pull_request_with_stats(pr_key.to_owned())
+                    .await?;
                 merge_targeted_pr_into_list(&mut prs, pr_key, fetched);
-                return Ok(prs);
+                return Ok((prs, stats));
             }
         }
 
         self.provider
-            .fetch_pull_requests_with_state(current_snapshot_prs(&self.shared_state))
+            .fetch_pull_requests_with_state_and_stats(current_snapshot_prs(&self.shared_state))
             .await
     }
 }
