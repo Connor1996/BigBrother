@@ -37,6 +37,8 @@ The product decision is:
 - primary UI: local web app
 - optional packaging: Tauri shell around the same web app
 - non-goal: a bespoke native Rust GUI framework as the main surface
+- default operator run mode: an optimized `release` daemon binary rather than a long-lived debug
+  `cargo run` process
 
 ## 3. Notes On Existing Tools
 

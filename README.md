@@ -66,10 +66,11 @@ cp symphony-rs.example.toml symphony-rs.toml
 export GITHUB_TOKEN=...
 ```
 
-3. Launch the local daemon and dashboard server from the project root:
+3. Build and launch the local daemon and dashboard server from the project root using the optimized release binary:
 
 ```bash
-cargo run -- --config symphony-rs.toml
+cargo build --release
+target/release/symphony-rs --config symphony-rs.toml
 ```
 
 The example config sets `workspace.root = ".."`, which means Symphony RS will look for sibling
@@ -83,7 +84,9 @@ full unsandboxed access, so only use that on a machine you already trust.
 http://127.0.0.1:8787/
 ```
 
-The binary is already server-only in this MVP. `--headless` is kept as a compatibility no-op for older command lines.
+For long-running local use, prefer `target/release/symphony-rs` over `cargo run` so the daemon
+stays on the optimized release build. The binary is already server-only in this MVP. `--headless`
+is kept as a compatibility no-op for older command lines.
 
 ## How The Agent Loop Works
 
