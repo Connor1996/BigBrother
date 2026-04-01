@@ -1248,6 +1248,13 @@ const PR_DETAIL_HTML: &str = r##"<!doctype html>
       document.getElementById(id).innerHTML = `<span class="${pillClass(value)}">${String(value || "-")}</span>`;
     }
 
+    function setTerminalMode(isRunning) {
+      document.getElementById("terminal-label").textContent =
+        isRunning ? "Live Terminal" : "Last Run Output";
+      document.getElementById("terminal").className =
+        isRunning ? "terminal-shell" : "output";
+    }
+
     function detailOutputStatusText(pr) {
       if (pr.last_terminal_output_at) {
         return `Last terminal update: ${fmtTime(pr.last_terminal_output_at)}`;
@@ -1267,7 +1274,7 @@ const PR_DETAIL_HTML: &str = r##"<!doctype html>
       if (!key) {
         document.getElementById("title").textContent = "Missing PR key";
         document.getElementById("subtitle").textContent = "Open this page from the dashboard so the PR key is included.";
-        document.getElementById("terminal-label").textContent = "Run Output";
+        setTerminalMode(false);
         document.getElementById("terminal-meta").textContent = "-";
         document.getElementById("terminal").textContent = "No PR key was provided.";
         return;
@@ -1287,8 +1294,7 @@ const PR_DETAIL_HTML: &str = r##"<!doctype html>
       document.getElementById("attention-text").textContent = `Attention: ${pr.attention_reason || "-"}`;
       document.getElementById("updated-at").textContent = fmtTime(pr.updated_at);
       document.getElementById("summary-text").textContent = pr.latest_summary || "-";
-      document.getElementById("terminal-label").textContent =
-        pr.status === "running" ? "Live Terminal" : "Last Run Output";
+      setTerminalMode(pr.status === "running");
       document.getElementById("terminal-meta").textContent = detailOutputStatusText(pr);
       document.getElementById("terminal").textContent = pr.detail_output || detailOutputStatusText(pr);
       setPill("status-pill", pr.status);
@@ -1299,7 +1305,7 @@ const PR_DETAIL_HTML: &str = r##"<!doctype html>
     refresh().catch((error) => {
       document.getElementById("title").textContent = "Failed to load run";
       document.getElementById("subtitle").textContent = error.message;
-      document.getElementById("terminal-label").textContent = "Run Output";
+      setTerminalMode(false);
       document.getElementById("terminal-meta").textContent = "-";
       document.getElementById("terminal").textContent = error.message;
     });

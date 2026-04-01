@@ -698,7 +698,7 @@ Panels:
 - recent comments/reviews summary
 - run history
 - read-only embedded terminal screen for the current run, including the latest terminal redraw state and last terminal activity time
-- saved last run output when no run is currently active, sourced from the persisted command/output transcript rather than the last terminal redraw snapshot
+- saved last run output when no run is currently active, sourced from the persisted command/output transcript rather than the last terminal redraw snapshot and rendered with wrapped monospace text so long lines stay readable
 - latest run output summary rendered as a short operator-facing status line rather than raw terminal or transcript text
 - workspace path
 - notification state

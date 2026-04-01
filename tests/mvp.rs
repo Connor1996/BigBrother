@@ -854,8 +854,9 @@ async fn pr_detail_page_uses_bigbrother_branding() {
     assert!(
         html.contains("<title>BigBrother Run View</title>")
             && html.contains("detail-brand-name\">BigBrother</div>")
-            && html.contains("viewBox=\"0 0 160 112\""),
-        "run detail page should reuse the BigBrother branding and icon, got: {html}",
+            && html.contains("viewBox=\"0 0 160 112\"")
+            && html.contains(r#"isRunning ? "terminal-shell" : "output""#),
+        "run detail page should reuse the BigBrother branding, icon, and wrapped saved output mode, got: {html}",
     );
 }
 
