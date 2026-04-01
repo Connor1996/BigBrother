@@ -49,6 +49,8 @@ pub struct RunOutcome {
     pub exit_code: Option<i32>,
     pub summary: String,
     pub captured_output: Option<String>,
+    pub captured_terminal: Option<String>,
+    pub last_terminal_output_at: Option<DateTime<Utc>>,
     pub processed_comment_at: Option<DateTime<Utc>>,
     pub processed_ci_at: Option<DateTime<Utc>>,
     pub processed_head_sha: String,
@@ -142,17 +144,21 @@ pub async fn run(request: RunRequest) -> RunOutcome {
     let finished_at = Utc::now();
 
     match result {
-        Ok((exit_code, summary, captured_output)) => RunOutcome {
-            started_at,
-            finished_at,
-            success: exit_code == Some(0),
-            exit_code,
-            summary,
-            captured_output,
-            processed_comment_at: request.pull_request.latest_reviewer_activity_at,
-            processed_ci_at: request.pull_request.ci_updated_at,
-            processed_head_sha: request.pull_request.head_sha.clone(),
-        },
+        Ok((exit_code, summary, captured_output, captured_terminal, last_terminal_output_at)) => {
+            RunOutcome {
+                started_at,
+                finished_at,
+                success: exit_code == Some(0),
+                exit_code,
+                summary,
+                captured_output,
+                captured_terminal,
+                last_terminal_output_at,
+                processed_comment_at: request.pull_request.latest_reviewer_activity_at,
+                processed_ci_at: request.pull_request.ci_updated_at,
+                processed_head_sha: request.pull_request.head_sha.clone(),
+            }
+        }
         Err(failure) => {
             let summary = failure.error.to_string();
             RunOutcome {
@@ -162,6 +168,8 @@ pub async fn run(request: RunRequest) -> RunOutcome {
                 exit_code: None,
                 summary: summary.clone(),
                 captured_output: failure.captured_output.or(Some(summary)),
+                captured_terminal: None,
+                last_terminal_output_at: None,
                 processed_comment_at: request.pull_request.latest_reviewer_activity_at,
                 processed_ci_at: request.pull_request.ci_updated_at,
                 processed_head_sha: request.pull_request.head_sha.clone(),
@@ -172,7 +180,16 @@ pub async fn run(request: RunRequest) -> RunOutcome {
 
 async fn run_inner(
     request: &RunRequest,
-) -> Result<(Option<i32>, String, Option<String>), RunFailure> {
+) -> Result<
+    (
+        Option<i32>,
+        String,
+        Option<String>,
+        Option<String>,
+        Option<DateTime<Utc>>,
+    ),
+    RunFailure,
+> {
     let checkout = resolve_checkout(&request.workspace, &request.pull_request)
         .await
         .map_err(RunFailure::without_output)?;
@@ -236,17 +253,20 @@ async fn run_inner(
         .map_err(|error| RunFailure::with_transcript(error, &transcript_preamble))?;
     drop(pair.master);
 
-    let (status, combined_output) =
+    let (status, combined_output, terminal_screen, last_terminal_output_at) =
         collect_process_output(child, reader, request.output_updates.clone())
             .await
             .map_err(|error| RunFailure::with_transcript(error, &transcript_preamble))?;
     let summary = summarize_captured_output(&combined_output);
     let captured_output = normalize_output(&cli_transcript(&transcript_preamble, &combined_output));
+    let captured_terminal = normalize_output(&terminal_screen);
 
     Ok((
         i32::try_from(status.exit_code()).ok(),
         summary,
         captured_output,
+        captured_terminal,
+        last_terminal_output_at,
     ))
 }
 
@@ -613,7 +633,12 @@ async fn collect_process_output(
     mut child: Box<dyn portable_pty::Child + Send>,
     reader: Box<dyn Read + Send>,
     output_updates: Option<UnboundedSender<RunUpdate>>,
-) -> Result<(portable_pty::ExitStatus, String)> {
+) -> Result<(
+    portable_pty::ExitStatus,
+    String,
+    String,
+    Option<DateTime<Utc>>,
+)> {
     let wait_task = tokio::task::spawn_blocking(move || {
         child.wait().context("failed waiting for agent PTY process")
     });
@@ -621,20 +646,26 @@ async fn collect_process_output(
         tokio::task::spawn_blocking(move || read_output_stream(reader, output_updates));
 
     let status = wait_task.await.context("agent wait task panicked")??;
-    let combined_text = reader_task
+    let (combined_text, terminal_screen, last_terminal_output_at) = reader_task
         .await
         .context("agent PTY reader task panicked")??;
 
-    Ok((status, combined_text))
+    Ok((
+        status,
+        combined_text,
+        terminal_screen,
+        last_terminal_output_at,
+    ))
 }
 
 fn read_output_stream(
     mut reader: Box<dyn Read + Send>,
     output_updates: Option<UnboundedSender<RunUpdate>>,
-) -> Result<String> {
+) -> Result<(String, String, Option<DateTime<Utc>>)> {
     let mut parser = vt100::Parser::new(DEFAULT_PTY_ROWS, DEFAULT_PTY_COLS, 0);
     let mut buffer = [0_u8; 4096];
     let mut combined_text = String::new();
+    let mut last_terminal_output_at = None;
 
     loop {
         let bytes_read = reader
@@ -646,6 +677,8 @@ fn read_output_stream(
 
         let chunk = &buffer[..bytes_read];
         parser.process(chunk);
+        let output_at = Utc::now();
+        last_terminal_output_at = Some(output_at);
 
         let transcript_chunk = normalize_terminal_transcript_chunk(chunk);
         if !transcript_chunk.is_empty() {
@@ -659,12 +692,16 @@ fn read_output_stream(
         if let Some(output_updates) = output_updates.as_ref() {
             let _ = output_updates.send(RunUpdate::TerminalSnapshot {
                 screen,
-                last_output_at: Utc::now(),
+                last_output_at: output_at,
             });
         }
     }
 
-    Ok(combined_text)
+    Ok((
+        combined_text,
+        render_terminal_screen(&parser),
+        last_terminal_output_at,
+    ))
 }
 
 fn normalize_terminal_transcript_chunk(chunk: &[u8]) -> String {

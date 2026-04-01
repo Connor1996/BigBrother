@@ -172,6 +172,8 @@ impl AgentRunner for FakeAgentRunner {
                 exit_code: Some(0),
                 summary: format!("fixed {}", request.pull_request.key),
                 captured_output: Some(transcript),
+                captured_terminal: Some("$ codex exec\nThinking...\ncargo test -q".to_owned()),
+                last_terminal_output_at: Some(Utc::now()),
                 processed_comment_at: request.pull_request.latest_reviewer_activity_at,
                 processed_ci_at: request.pull_request.ci_updated_at,
                 processed_head_sha: request.pull_request.head_sha,
@@ -210,6 +212,8 @@ impl AgentRunner for AlwaysFailingAgentRunner {
                 exit_code: Some(1),
                 summary: format!("failed {}", request.pull_request.key),
                 captured_output: Some(transcript),
+                captured_terminal: Some("$ codex exec\nrun failed before fix".to_owned()),
+                last_terminal_output_at: Some(Utc::now()),
                 processed_comment_at: request.pull_request.latest_reviewer_activity_at,
                 processed_ci_at: request.pull_request.ci_updated_at,
                 processed_head_sha: request.pull_request.head_sha,
@@ -726,7 +730,7 @@ async fn review_run_success_leaves_same_pr_ci_failure_actionable() {
 }
 
 #[tokio::test]
-async fn running_pr_exposes_live_codex_output() {
+async fn running_pr_exposes_live_terminal() {
     let runner = FakeAgentRunner {
         invocations: Arc::new(AtomicUsize::new(0)),
         started: Arc::new(Semaphore::new(0)),
@@ -766,28 +770,19 @@ async fn running_pr_exposes_live_codex_output() {
     assert_eq!(running_pr["status"], json!("running"));
     assert_eq!(running_pr["details_label"], json!("Started"));
     assert!(running_pr["details_at"].is_string());
-    let running_output = running_pr["live_output"]
-        .as_str()
-        .expect("running live output should be a string");
-    assert!(running_output.starts_with("=== Prompt Sent To Codex CLI ===\n"));
-    assert!(running_output.contains("Trigger: CI failed"));
-    assert!(running_output.contains("=== Codex CLI Output ===\n"));
-    assert!(running_output.ends_with("codex: inspecting workspace\ncargo test -q\n"));
+    assert_eq!(
+        running_pr["terminal_screen"],
+        json!("$ codex exec\nThinking...\ncargo test -q")
+    );
 
     let detail_payload = get_json(supervisor.clone(), "/api/pr?key=openai%2Fsymphony%237").await;
     assert_eq!(detail_payload["key"], json!("openai/symphony#7"));
-    let detail_output = detail_payload["live_output"]
-        .as_str()
-        .expect("detail output should be a string");
-    assert!(detail_output.starts_with("=== Prompt Sent To Codex CLI ===\n"));
-    assert!(detail_output.contains("Trigger: CI failed"));
-    assert!(detail_output.contains("=== Codex CLI Output ===\n"));
-    assert!(detail_output.ends_with("codex: inspecting workspace\ncargo test -q\n"));
     assert_eq!(
-        detail_payload["live_terminal"],
+        detail_payload["terminal_screen"],
         json!("$ codex exec\nThinking...\ncargo test -q")
     );
     assert!(detail_payload["last_terminal_output_at"].is_string());
+    assert_eq!(detail_payload["live_output"], Value::Null);
 
     runner.allow_finish.add_permits(1);
     poll_task
@@ -797,7 +792,7 @@ async fn running_pr_exposes_live_codex_output() {
 }
 
 #[tokio::test]
-async fn completed_pr_detail_shows_saved_last_run_output() {
+async fn completed_pr_detail_shows_saved_terminal_snapshot() {
     let runner = FakeAgentRunner {
         invocations: Arc::new(AtomicUsize::new(0)),
         started: Arc::new(Semaphore::new(0)),
@@ -826,15 +821,12 @@ async fn completed_pr_detail_shows_saved_last_run_output() {
     assert_eq!(detail_payload["status"], json!("waiting review"));
     assert_eq!(detail_payload["details_label"], json!("Last run"));
     assert!(detail_payload["details_at"].is_string());
-    let saved_output = detail_payload["live_output"]
-        .as_str()
-        .expect("saved output should be a string");
-    assert!(saved_output.starts_with("=== Prompt Sent To Codex CLI ===\n"));
-    assert!(saved_output.contains("Trigger: CI failed"));
-    assert!(saved_output.contains("=== Codex CLI Output ===\n"));
-    assert!(saved_output.ends_with("codex: inspecting workspace\ncargo test -q\n"));
-    assert_eq!(detail_payload["live_terminal"], Value::Null);
-    assert_eq!(detail_payload["last_terminal_output_at"], Value::Null);
+    assert_eq!(
+        detail_payload["terminal_screen"],
+        json!("$ codex exec\nThinking...\ncargo test -q")
+    );
+    assert!(detail_payload["last_terminal_output_at"].is_string());
+    assert_eq!(detail_payload["live_output"], Value::Null);
     assert_eq!(
         detail_payload["latest_summary"],
         json!("fixed openai/symphony#7")
@@ -842,7 +834,7 @@ async fn completed_pr_detail_shows_saved_last_run_output() {
 }
 
 #[tokio::test]
-async fn running_pr_does_not_fall_back_to_saved_output() {
+async fn running_pr_does_not_fall_back_to_saved_terminal_snapshot() {
     let supervisor = Arc::new(
         Supervisor::new(
             sample_config(
@@ -873,6 +865,7 @@ async fn running_pr_does_not_fall_back_to_saved_output() {
                 attention_reason: Some(AttentionReason::CiFailed),
                 persisted: PersistentPrState {
                     last_run_output: Some("stale output".to_owned()),
+                    last_run_terminal: Some("stale terminal".to_owned()),
                     ..PersistentPrState::default()
                 },
                 runner: Some(RunnerState {
@@ -894,7 +887,7 @@ async fn running_pr_does_not_fall_back_to_saved_output() {
     let detail_payload = get_json(supervisor, "/api/pr?key=openai%2Fsymphony%237").await;
     assert_eq!(detail_payload["status"], json!("running"));
     assert_eq!(detail_payload["live_output"], Value::Null);
-    assert_eq!(detail_payload["live_terminal"], Value::Null);
+    assert_eq!(detail_payload["terminal_screen"], Value::Null);
 }
 
 #[tokio::test]

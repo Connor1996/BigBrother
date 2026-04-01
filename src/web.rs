@@ -889,14 +889,10 @@ const PR_DETAIL_HTML: &str = r##"<!doctype html>
         <span class="section-label">Latest Summary</span>
         <div id="summary-text" class="summary-text">-</div>
       </div>
-      <div id="terminal-block" class="terminal-block" hidden>
-        <span class="section-label">Live Terminal</span>
+      <div class="terminal-block">
+        <span id="terminal-label" class="section-label">Terminal</span>
         <div id="terminal-meta" class="terminal-meta">Waiting for terminal activity…</div>
         <pre id="terminal" class="terminal-shell">No terminal output yet. Codex may still be thinking.</pre>
-      </div>
-      <div>
-        <span id="output-label" class="section-label">Codex CLI Transcript</span>
-        <pre id="output" class="output">Waiting for transcript…</pre>
       </div>
     </section>
   </main>
@@ -920,15 +916,15 @@ const PR_DETAIL_HTML: &str = r##"<!doctype html>
     }
 
     function terminalStatusText(pr) {
-      if (pr.status !== "running") {
-        return "Live terminal is only available while a run is active.";
-      }
-
       if (pr.last_terminal_output_at) {
-        return `Last terminal update: ${fmtTime(pr.last_terminal_output_at)}`;
+        return pr.status === "running"
+          ? `Last terminal update: ${fmtTime(pr.last_terminal_output_at)}`
+          : `Saved from terminal state at: ${fmtTime(pr.last_terminal_output_at)}`;
       }
 
-      return "No terminal output yet. Codex may still be thinking.";
+      return pr.status === "running"
+        ? "No terminal output yet. Codex may still be thinking."
+        : "No saved terminal snapshot is available for the last run.";
     }
 
     async function refresh() {
@@ -936,8 +932,9 @@ const PR_DETAIL_HTML: &str = r##"<!doctype html>
       if (!key) {
         document.getElementById("title").textContent = "Missing PR key";
         document.getElementById("subtitle").textContent = "Open this page from the dashboard so the PR key is included.";
-        document.getElementById("terminal-block").hidden = true;
-        document.getElementById("output").textContent = "No PR key was provided.";
+        document.getElementById("terminal-label").textContent = "Terminal";
+        document.getElementById("terminal-meta").textContent = "-";
+        document.getElementById("terminal").textContent = "No PR key was provided.";
         return;
       }
 
@@ -955,16 +952,10 @@ const PR_DETAIL_HTML: &str = r##"<!doctype html>
       document.getElementById("attention-text").textContent = `Attention: ${pr.attention_reason || "-"}`;
       document.getElementById("updated-at").textContent = fmtTime(pr.updated_at);
       document.getElementById("summary-text").textContent = pr.latest_summary || "-";
-      document.getElementById("terminal-block").hidden = pr.status !== "running";
+      document.getElementById("terminal-label").textContent =
+        pr.status === "running" ? "Live Terminal" : "Saved Terminal Snapshot";
       document.getElementById("terminal-meta").textContent = terminalStatusText(pr);
-      document.getElementById("terminal").textContent = pr.live_terminal || "No terminal output yet. Codex may still be thinking.";
-      document.getElementById("output-label").textContent =
-        pr.status === "running" ? "Live Codex CLI Transcript" : "Saved Codex CLI Transcript";
-      document.getElementById("output").textContent = pr.live_output || (
-        pr.status === "running"
-          ? "No live transcript is available for this PR right now."
-          : "No saved transcript is available for the last run."
-      );
+      document.getElementById("terminal").textContent = pr.terminal_screen || terminalStatusText(pr);
       setPill("status-pill", pr.status);
       setPill("ci-pill", pr.ci_status);
       setPill("review-pill", pr.review_status);
@@ -973,8 +964,9 @@ const PR_DETAIL_HTML: &str = r##"<!doctype html>
     refresh().catch((error) => {
       document.getElementById("title").textContent = "Failed to load run";
       document.getElementById("subtitle").textContent = error.message;
-      document.getElementById("terminal-block").hidden = true;
-      document.getElementById("output").textContent = error.message;
+      document.getElementById("terminal-label").textContent = "Terminal";
+      document.getElementById("terminal-meta").textContent = "-";
+      document.getElementById("terminal").textContent = error.message;
     });
     setInterval(() => refresh().catch(() => {}), 1500);
   </script>
@@ -1025,8 +1017,7 @@ struct PullRequestSummary {
     attention_reason: Option<String>,
     updated_at: DateTime<Utc>,
     latest_summary: Option<String>,
-    live_output: Option<String>,
-    live_terminal: Option<String>,
+    terminal_screen: Option<String>,
     last_terminal_output_at: Option<DateTime<Utc>>,
     details_label: Option<String>,
     details_at: Option<DateTime<Utc>>,
@@ -1202,19 +1193,28 @@ fn summarize_pr(tracked: &TrackedPr) -> PullRequestSummary {
             .as_ref()
             .map(|runner| runner.summary.clone())
             .or_else(|| tracked.persisted.last_run_summary.clone()),
-        live_output: tracked
+        terminal_screen: tracked
             .runner
             .as_ref()
-            .map(|runner| runner.live_output.clone())
-            .unwrap_or_else(|| tracked.persisted.last_run_output.clone()),
-        live_terminal: tracked
-            .runner
-            .as_ref()
-            .and_then(|runner| runner.live_terminal.clone()),
+            .and_then(|runner| runner.live_terminal.clone())
+            .or_else(|| {
+                if tracked.runner.is_none() {
+                    tracked.persisted.last_run_terminal.clone()
+                } else {
+                    None
+                }
+            }),
         last_terminal_output_at: tracked
             .runner
             .as_ref()
-            .and_then(|runner| runner.last_terminal_output_at),
+            .and_then(|runner| runner.last_terminal_output_at)
+            .or_else(|| {
+                if tracked.runner.is_none() {
+                    tracked.persisted.last_terminal_output_at
+                } else {
+                    None
+                }
+            }),
         details_label,
         details_at,
     }
