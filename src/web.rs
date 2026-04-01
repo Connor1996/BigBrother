@@ -401,6 +401,12 @@ const INDEX_HTML: &str = r#"<!doctype html>
       line-height: 1;
     }
 
+    .button-icon svg {
+      display: block;
+      width: 0.95em;
+      height: 0.95em;
+    }
+
     .detail-link {
       display: inline-flex;
       align-items: center;
@@ -726,13 +732,22 @@ const INDEX_HTML: &str = r#"<!doctype html>
       const pending = pendingDeepReviewKeys.has(pr.key);
       const running = pr.status === "running";
       const label = pending ? "Starting..." : (running ? "Running..." : "Deep Review");
+      const icon = `
+        <span class="button-icon" aria-hidden="true">
+          <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+            <circle cx="7" cy="7" r="4.5"></circle>
+            <path d="M11.5 11.5L14 14"></path>
+          </svg>
+        </span>
+      `;
       return `
         <button
           class="action-button deep-review-button"
           ${(pending || running) ? "disabled" : ""}
           onclick="triggerDeepReview('${encodeURIComponent(pr.key)}')"
         >
-          ${label}
+          ${icon}
+          <span>${label}</span>
         </button>
       `;
     }

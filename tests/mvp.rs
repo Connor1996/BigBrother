@@ -811,8 +811,9 @@ async fn dashboard_html_exposes_top_right_pr_review_request_and_activity_tabs() 
     );
     assert!(
         html.contains("deep-review-button")
-            && html.contains("background: #6f8896;"),
-        "dashboard should render deep review with the same filled action button style family, got: {html}",
+            && html.contains("background: #6f8896;")
+            && html.contains("M11.5 11.5L14 14"),
+        "dashboard should render deep review with the same filled action button style family and magnifying glass icon, got: {html}",
     );
     assert!(
         html.contains("button-icon")
