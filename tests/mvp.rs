@@ -273,8 +273,14 @@ impl AgentRunner for FakeAgentRunner {
         Box::pin(async move {
             invocations.fetch_add(1, Ordering::SeqCst);
             started.add_permits(1);
+            let report = "### Deep Review\n\n#### Problem Summary\n- Validate the PR for risky behavior.\n\n#### Solution Walkthrough\n- Read the diff and surrounding code.\n\n#### Findings (ordered by severity)\n- No findings.\n\n#### Costs and Negative Impacts\n- Correctness: None.\n- Security: None.\n- Compatibility: None.\n- Robustness: Low residual risk.\n- Cognitive Load: Low.\n- CPU: None.\n- Memory: None.\n- Log Volume: None.\n\n#### Engineering Rules Check\n- None\n\n#### Questions and Assumptions\n- None\n\n#### Suggested Tests / Validation\n- cargo test -q\n";
             let transcript =
                 fake_cli_transcript(&request, "codex: inspecting workspace\ncargo test -q\n");
+            let captured_output = if request.trigger == AttentionReason::DeepReview {
+                report.to_owned()
+            } else {
+                transcript.clone()
+            };
             if let Some(output_updates) = request.output_updates.as_ref() {
                 let _ = output_updates.send(RunUpdate::TranscriptChunk(transcript.clone()));
                 let _ = output_updates.send(RunUpdate::TerminalSnapshot {
@@ -293,7 +299,7 @@ impl AgentRunner for FakeAgentRunner {
                 success: true,
                 exit_code: Some(0),
                 summary: format!("fixed {}", request.pull_request.key),
-                captured_output: Some(transcript),
+                captured_output: Some(captured_output),
                 captured_terminal: Some("$ codex exec\nThinking...\ncargo test -q".to_owned()),
                 last_terminal_output_at: Some(Utc::now()),
                 processed_comment_at: request.pull_request.latest_reviewer_activity_at,
@@ -945,7 +951,7 @@ async fn deep_review_action_runs_requested_review_pr_and_persists_output() {
     assert_eq!(detail["latest_summary"], json!("deep review completed"));
     assert_eq!(
         detail["detail_output"],
-        json!("codex: inspecting workspace\ncargo test -q")
+        json!("### Deep Review\n\n#### Problem Summary\n- Validate the PR for risky behavior.\n\n#### Solution Walkthrough\n- Read the diff and surrounding code.\n\n#### Findings (ordered by severity)\n- No findings.\n\n#### Costs and Negative Impacts\n- Correctness: None.\n- Security: None.\n- Compatibility: None.\n- Robustness: Low residual risk.\n- Cognitive Load: Low.\n- CPU: None.\n- Memory: None.\n- Log Volume: None.\n\n#### Engineering Rules Check\n- None\n\n#### Questions and Assumptions\n- None\n\n#### Suggested Tests / Validation\n- cargo test -q")
     );
 
     let comments = comments
@@ -954,9 +960,12 @@ async fn deep_review_action_runs_requested_review_pr_and_persists_output() {
     assert_eq!(comments.len(), 1);
     assert_eq!(comments[0].0, "openai/symphony#18");
     assert!(
-        comments[0].1.contains("## Deep Review")
-            && comments[0].1.contains("codex: inspecting workspace"),
-        "deep review should post the captured report as a PR comment, got: {}",
+        comments[0].1.contains("### Deep Review")
+            && comments[0]
+                .1
+                .contains("#### Findings (ordered by severity)")
+            && !comments[0].1.contains("codex: inspecting workspace"),
+        "deep review should post only the final review report as a PR comment, got: {}",
         comments[0].1,
     );
 }

@@ -103,7 +103,7 @@ When BigBrother detects a PR that needs attention, it:
 
 The default prompt asks the agent to inspect GitHub feedback and CI, merge the latest base branch itself when needed, resolve conflicts before declaring success, fix code in-place, run targeted validation, and push back to the PR branch if it can. It also tells the agent to stop and ask for operator direction before making material or high-risk changes instead of changing code unilaterally.
 
-Manual deep reviews use a separate read-only prompt: they inspect the diff, produce a concise review report, and the backend posts that report back to the PR as a comment when the run succeeds.
+Manual deep reviews use the `$deep-review` skill in read-only mode: they write the final review markdown under `target/bigbrother-deep-review`, and the backend posts only that final review artifact back to the PR as a comment when the run succeeds.
 
 ## Current Assumptions
 

@@ -1366,8 +1366,12 @@ fn deep_review_comment_body(output: Option<&str>) -> String {
     let review_body = output
         .and_then(strip_output_transcript_preamble)
         .filter(|body| !body.trim().is_empty())
-        .unwrap_or("No findings.".to_owned());
-    format!("## Deep Review\n\n{review_body}")
+        .unwrap_or("### Deep Review\n\nNo findings.".to_owned());
+    if review_body.trim_start().starts_with('#') {
+        review_body
+    } else {
+        format!("### Deep Review\n\n{review_body}")
+    }
 }
 
 fn strip_output_transcript_preamble(output: &str) -> Option<String> {
