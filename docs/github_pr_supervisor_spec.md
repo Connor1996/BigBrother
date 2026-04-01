@@ -348,8 +348,9 @@ Processed markers are signal-specific:
 
 - a successful review-feedback run only consumes the review-feedback marker
 - a successful CI repair run only consumes the CI-failure marker for that head SHA
-- a successful conflict-handling run only consumes the conflict marker for that `(head_sha, base_sha)` pair
+- a successful conflict-handling run must not eagerly consume the conflict marker at run completion; merge-conflict actionability is determined from the current PR state on the next poll or targeted re-check
 - a successful run for one signal must not silently consume any other still-actionable signal on the same PR
+- if a PR still reports a merge conflict on the next poll, that conflict remains actionable even if the previous conflict-handling run exited cleanly
 
 ## 11. Review Lifecycle State Derivation
 

@@ -795,6 +795,76 @@ async fn conflicting_pr_is_exposed_as_conflict() {
 }
 
 #[tokio::test]
+async fn unresolved_conflict_run_remains_actionable_after_resume() {
+    let state_path = unique_temp_path("state.json");
+    let workspace_root = unique_temp_path("workspaces");
+    let provider = FreezingAwareMutableGitHubProvider {
+        prs: Arc::new(Mutex::new(vec![conflicting_pr()])),
+        last_frozen_len: Arc::new(AtomicUsize::new(usize::MAX)),
+    };
+    let runner = FakeAgentRunner {
+        invocations: Arc::new(AtomicUsize::new(0)),
+        started: Arc::new(Semaphore::new(0)),
+        allow_finish: Arc::new(Semaphore::new(2)),
+    };
+    let supervisor = Arc::new(
+        Supervisor::new(
+            sample_config(state_path.clone(), workspace_root),
+            Arc::new(provider),
+            Arc::new(runner.clone()),
+        )
+        .expect("supervisor should initialize"),
+    );
+
+    supervisor
+        .poll_once()
+        .await
+        .expect("initial poll should succeed");
+
+    let prs_payload = get_json(supervisor.clone(), "/api/prs").await;
+    let prs = prs_payload["prs"].as_array().expect("prs array");
+    assert_eq!(
+        status_for(prs, "openai/symphony#11"),
+        Some("conflict"),
+        "a conflict run that leaves the PR conflicting should stay actionable",
+    );
+
+    let persisted: Value = serde_json::from_str(
+        &std::fs::read_to_string(&state_path).expect("state file should exist"),
+    )
+    .expect("state file should be valid json");
+    assert_eq!(
+        persisted["prs"]["openai/symphony#11"]["last_processed_conflict_head_sha"],
+        Value::Null,
+        "an unresolved conflict must not be marked as processed",
+    );
+    assert_eq!(
+        persisted["prs"]["openai/symphony#11"]["last_run_status"],
+        json!("success"),
+        "without an immediate post-run recheck, the run result itself stays successful",
+    );
+
+    supervisor
+        .set_pr_paused("openai/symphony#11", true)
+        .await
+        .expect("pause operation should succeed")
+        .expect("tracked PR should exist");
+    let resumed = supervisor
+        .set_pr_paused("openai/symphony#11", false)
+        .await
+        .expect("resume operation should succeed")
+        .expect("tracked PR should exist");
+    assert_eq!(resumed.status, TrackingStatus::Conflict);
+
+    wait_for_invocations(&runner.invocations, 2).await;
+    assert_eq!(
+        runner.invocations.load(Ordering::SeqCst),
+        2,
+        "resume should trigger another attempt because the conflict is still current",
+    );
+}
+
+#[tokio::test]
 async fn review_run_success_leaves_same_pr_ci_failure_actionable() {
     let runner = FakeAgentRunner {
         invocations: Arc::new(AtomicUsize::new(0)),

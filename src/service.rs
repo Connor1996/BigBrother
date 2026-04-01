@@ -817,18 +817,7 @@ pub fn determine_attention_reason(
         return None;
     }
 
-    let has_new_conflict = pr.has_conflicts
-        && match (
-            persisted.processed_conflict_head_sha(),
-            persisted.processed_conflict_base_sha(),
-        ) {
-            (Some(last_head_sha), Some(last_base_sha)) => {
-                last_head_sha != pr.head_sha.as_str() || last_base_sha != pr.base_sha.as_str()
-            }
-            _ => true,
-        };
-
-    if has_new_conflict {
+    if pr.has_conflicts {
         return Some(AttentionReason::MergeConflict);
     }
 
@@ -983,13 +972,7 @@ fn record_successful_run(
             persisted.last_processed_ci_at = outcome.processed_ci_at;
             persisted.last_processed_head_sha = Some(outcome.processed_head_sha.clone());
         }
-        AttentionReason::MergeConflict => {
-            persisted.last_processed_conflict_head_sha = Some(outcome.processed_head_sha.clone());
-            persisted.last_processed_conflict_base_sha =
-                Some(request.pull_request.base_sha.clone());
-            persisted.last_processed_head_sha = Some(outcome.processed_head_sha.clone());
-            persisted.last_processed_base_sha = Some(request.pull_request.base_sha.clone());
-        }
+        AttentionReason::MergeConflict => {}
     }
 
     persisted.clear_retry_state();
@@ -1201,6 +1184,41 @@ mod tests {
             determine_attention_reason(&pr, &persisted),
             Some(AttentionReason::CiFailed)
         );
+    }
+
+    #[test]
+    fn successful_conflict_run_does_not_write_processed_conflict_marker() {
+        let mut pr = sample_pr();
+        pr.has_conflicts = true;
+        pr.mergeable_state = Some("dirty".to_owned());
+
+        let config = sample_config();
+        let request = RunRequest {
+            pull_request: pr.clone(),
+            trigger: AttentionReason::MergeConflict,
+            workspace: config.workspace,
+            agent: config.agent,
+            output_updates: None,
+        };
+        let outcome = RunOutcome {
+            started_at: Utc::now(),
+            finished_at: Utc::now(),
+            success: true,
+            exit_code: Some(0),
+            summary: "conflict analysis completed".to_owned(),
+            captured_output: Some("codex: analyzed merge conflict".to_owned()),
+            captured_terminal: Some("$ codex exec\nanalyzed merge conflict".to_owned()),
+            last_terminal_output_at: Some(Utc::now()),
+            processed_comment_at: pr.latest_reviewer_activity_at,
+            processed_ci_at: pr.ci_updated_at,
+            processed_head_sha: pr.head_sha.clone(),
+        };
+        let mut persisted = PersistentPrState::default();
+
+        record_successful_run(&mut persisted, &request, &outcome);
+
+        assert_eq!(persisted.last_processed_conflict_head_sha, None);
+        assert_eq!(persisted.last_processed_conflict_base_sha, None);
     }
 
     #[test]
@@ -1440,7 +1458,7 @@ mod tests {
     }
 
     #[test]
-    fn processed_conflict_for_same_head_and_base_does_not_retrigger() {
+    fn current_conflict_state_remains_actionable_even_with_legacy_processed_marker() {
         let mut pr = sample_pr();
         pr.has_conflicts = true;
 
@@ -1450,9 +1468,12 @@ mod tests {
             ..PersistentPrState::default()
         };
 
-        assert_eq!(determine_attention_reason(&pr, &persisted), None);
         assert_eq!(
-            derive_status(&pr, &persisted, None, false),
+            determine_attention_reason(&pr, &persisted),
+            Some(AttentionReason::MergeConflict)
+        );
+        assert_eq!(
+            derive_status(&pr, &persisted, Some(AttentionReason::MergeConflict), false,),
             TrackingStatus::Conflict
         );
     }
