@@ -470,6 +470,8 @@ The agent prompt must include:
 - explicit instruction to work only in the synced workspace
 - explicit instruction to push only to the PR branch when safe
 - explicit instruction to stop and explain blockers when unsafe
+- explicit instruction that material or high-risk changes must be escalated to the operator for a
+  decision instead of being applied unilaterally
 - for CI-failure triggers, explicit instruction that clearly unrelated or flaky failures may be
   handled by commenting `/retest` on the PR instead of making speculative code changes
 

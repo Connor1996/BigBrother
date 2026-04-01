@@ -50,6 +50,8 @@ pub fn build_prompt(pr: &PullRequest, reason: AttentionReason, extra: Option<&st
          - Start by checking the current branch state, latest CI failures, and latest review comments for this PR.\n\
          - If the base and head branches differ, fetch and merge the latest base branch into the PR branch yourself before addressing the trigger-specific issue.\n\
          - If that merge produces conflicts, resolve them first, then continue addressing the original trigger.\n\
+         - Before making code changes, assess whether the fix would be a material or high-risk change, such as a broad refactor, user-visible behavior change, API/schema change, or an important product tradeoff.\n\
+         - If the required change is material or high-risk, stop before editing files and explain the decision or approval you need from the operator instead of changing code unilaterally.\n\
          {trigger_specific_rules}\
          - If code changes are needed, make them, run targeted validation, commit, and push back to the same PR branch.\n\
          - If reviewer feedback needs a textual response, leave a concise response on the PR thread when tooling is available.\n\
@@ -199,6 +201,7 @@ mod tests {
         assert!(prompt.contains("Trigger: CI failed"));
         assert!(prompt.contains("merge the latest base branch into the PR branch yourself"));
         assert!(prompt.contains("If that merge produces conflicts, resolve them first"));
+        assert!(prompt.contains("If the required change is material or high-risk"));
         assert!(prompt.contains("leave a concise PR comment containing exactly `/retest`"));
         assert!(prompt.contains("whether you merged base"));
         assert!(prompt.contains("Additional operator instructions:\n- Extra operator note."));
