@@ -879,7 +879,7 @@ mod tests {
 
         assert!(
             !should_refresh_signal_details(&current, Some(&previous)),
-            "unchanged PRs with stale-enough green CI should reuse cached signal details",
+            "unchanged PRs with stale-enough passed CI should reuse cached signal details",
         );
     }
 

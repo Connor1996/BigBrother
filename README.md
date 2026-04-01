@@ -27,7 +27,7 @@ The planned product direction is:
 For each open PR authored by you, Symphony RS polls GitHub and computes a live status:
 
 - `waiting review`: nothing actionable right now, still waiting on human review
-- `waiting merge`: approved and green, waiting to be merged
+- `waiting merge`: approved and CI passed, waiting to be merged
 - `conflict`: the PR does not currently merge cleanly with the latest base branch
 - `needs attention`: new reviewer feedback or a newly failing CI signal
 - `running`: the local agent command is currently working on the PR

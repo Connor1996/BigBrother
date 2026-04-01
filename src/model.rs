@@ -16,7 +16,7 @@ pub enum CiStatus {
 impl CiStatus {
     pub fn label(self) -> &'static str {
         match self {
-            Self::Success => "green",
+            Self::Success => "passed",
             Self::Pending => "pending",
             Self::Failure => "failing",
             Self::Unknown => "unknown",

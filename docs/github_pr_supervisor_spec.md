@@ -374,7 +374,7 @@ In addition to attention triggers, the review panel needs a clear passive-state 
 
 For the first implementation tier, merge-ready policy should at least require:
 
-- CI status is green
+- CI status is passed
 - review decision is approved
 - PR is not draft, closed, or merged
 - no merge conflict is currently detected

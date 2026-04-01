@@ -96,7 +96,7 @@ This section is the only task list that matters for the next implementation pass
 - [ ] Surface an explicit `conflict` state when the PR cannot merge cleanly with the latest base branch
 - [ ] Define merge-ready heuristics for MVP:
   - at least one non-author approval
-  - CI is green
+  - CI has passed
   - PR is not draft, closed, or merged
   - PR has no detected merge conflict
 - [ ] Surface the derived review lifecycle state through `/api/prs`
@@ -107,7 +107,7 @@ This section is the only task list that matters for the next implementation pass
   - conflict
 - [ ] Add tests covering:
   - approved but CI-pending or CI-failing PRs stay out of `waiting_merge`
-  - approved + green PRs become `waiting_merge`
+  - approved + passed PRs become `waiting_merge`
   - clean open PRs without approval show `waiting_review`
   - merge conflicts override passive wait states and show `conflict`
 
