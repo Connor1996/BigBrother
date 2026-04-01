@@ -1,16 +1,15 @@
 use std::{
+    fs,
+    io::Read,
     path::{Path, PathBuf},
-    process::{ExitStatus, Stdio},
+    time::{SystemTime, UNIX_EPOCH},
 };
 
 use anyhow::{anyhow, Context, Result};
 use chrono::{DateTime, Utc};
 use futures::future::BoxFuture;
-use tokio::{
-    io::{AsyncRead, AsyncReadExt, AsyncWriteExt},
-    process::Command,
-    sync::mpsc::UnboundedSender,
-};
+use portable_pty::{native_pty_system, CommandBuilder, PtySize};
+use tokio::{process::Command, sync::mpsc::UnboundedSender};
 
 use crate::{
     config::{AgentConfig, GitTransport, ResolvedWorkspaceConfig},
@@ -21,6 +20,8 @@ use crate::{
 
 pub(crate) const PROMPT_TRANSCRIPT_HEADER: &str = "=== Prompt Sent To Codex CLI ===\n";
 pub(crate) const OUTPUT_TRANSCRIPT_HEADER: &str = "=== Codex CLI Output ===\n";
+const DEFAULT_PTY_ROWS: u16 = 36;
+const DEFAULT_PTY_COLS: u16 = 120;
 
 #[derive(Debug, Clone)]
 pub struct RunRequest {
@@ -28,7 +29,16 @@ pub struct RunRequest {
     pub trigger: AttentionReason,
     pub workspace: ResolvedWorkspaceConfig,
     pub agent: AgentConfig,
-    pub output_updates: Option<UnboundedSender<String>>,
+    pub output_updates: Option<UnboundedSender<RunUpdate>>,
+}
+
+#[derive(Debug, Clone)]
+pub enum RunUpdate {
+    TranscriptChunk(String),
+    TerminalSnapshot {
+        screen: String,
+        last_output_at: DateTime<Utc>,
+    },
 }
 
 #[derive(Debug, Clone)]
@@ -48,6 +58,33 @@ pub struct RunOutcome {
 struct RunFailure {
     error: anyhow::Error,
     captured_output: Option<String>,
+}
+
+#[derive(Debug)]
+struct PromptFile {
+    path: PathBuf,
+}
+
+impl PromptFile {
+    fn create(prompt: &str) -> Result<Self> {
+        let nonce = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .context("system clock is before UNIX_EPOCH")?
+            .as_nanos();
+        let path = std::env::temp_dir().join(format!(
+            "symphony-rs-prompt-{}-{nonce}.txt",
+            std::process::id()
+        ));
+        fs::write(&path, prompt)
+            .with_context(|| format!("failed to write prompt file at {}", path.display()))?;
+        Ok(Self { path })
+    }
+}
+
+impl Drop for PromptFile {
+    fn drop(&mut self) {
+        let _ = fs::remove_file(&self.path);
+    }
 }
 
 impl RunFailure {
@@ -169,95 +206,48 @@ async fn run_inner(
     let transcript_preamble = cli_transcript_preamble(&prompt);
 
     if let Some(output_updates) = request.output_updates.as_ref() {
-        let _ = output_updates.send(transcript_preamble.clone());
+        let _ = output_updates.send(RunUpdate::TranscriptChunk(transcript_preamble.clone()));
     }
 
-    let mut command = Command::new(&request.agent.command);
-    command.args(&request.agent.args);
-    command.current_dir(&workspace_path);
-    command.stdin(Stdio::piped());
-    command.stdout(Stdio::piped());
-    command.stderr(Stdio::piped());
-    command.env("SYMPHONY_PR_REPO", &request.pull_request.repo_full_name);
-    command.env(
-        "SYMPHONY_PR_NUMBER",
-        request.pull_request.number.to_string(),
-    );
-    command.env("SYMPHONY_PR_URL", &request.pull_request.url);
-    command.env("SYMPHONY_PR_HEAD_REF", &request.pull_request.head_ref);
-    command.env("SYMPHONY_PR_BASE_REF", &request.pull_request.base_ref);
-    command.env("SYMPHONY_PR_BASE_SHA", &request.pull_request.base_sha);
-    command.env("SYMPHONY_PR_HEAD_SHA", &request.pull_request.head_sha);
-    command.env(
-        "SYMPHONY_PR_HAS_CONFLICT",
-        if request.pull_request.has_conflicts {
-            "1"
-        } else {
-            "0"
-        },
-    );
-    if let Some(mergeable_state) = request.pull_request.mergeable_state.as_deref() {
-        command.env("SYMPHONY_PR_MERGEABLE_STATE", mergeable_state);
-    }
-    command.env("SYMPHONY_TRIGGER", request.trigger.label());
-    command.env(
-        "SYMPHONY_WORKSPACE",
-        workspace_path.to_string_lossy().to_string(),
-    );
-    command.env("SYMPHONY_BASE_BRANCH_MERGED", "0");
-    command.env(
-        "SYMPHONY_BASE_BRANCH_FETCHED",
-        if sync_report.fetched_base_branch {
-            "1"
-        } else {
-            "0"
-        },
-    );
-    command.env(
-        "SYMPHONY_WORKSPACE_CONFLICTS_PRESENT",
-        if sync_report.resumed_conflict_workspace {
-            "1"
-        } else {
-            "0"
-        },
-    );
-
-    let mut child = command
-        .spawn()
+    let prompt_file = PromptFile::create(&prompt)
+        .map_err(|error| RunFailure::with_transcript(error, &transcript_preamble))?;
+    let pty_system = native_pty_system();
+    let pair = pty_system
+        .openpty(PtySize {
+            rows: DEFAULT_PTY_ROWS,
+            cols: DEFAULT_PTY_COLS,
+            pixel_width: 0,
+            pixel_height: 0,
+        })
+        .context("failed to create PTY for agent command")
+        .map_err(|error| RunFailure::with_transcript(error, &transcript_preamble))?;
+    let command = build_pty_command(request, &workspace_path, &sync_report, &prompt_file)
+        .map_err(|error| RunFailure::with_transcript(error, &transcript_preamble))?;
+    let child = pair
+        .slave
+        .spawn_command(command)
         .with_context(|| format!("failed to spawn agent command {}", request.agent.command))
         .map_err(|error| RunFailure::with_transcript(error, &transcript_preamble))?;
+    drop(pair.slave);
+    let reader = pair
+        .master
+        .try_clone_reader()
+        .context("failed to clone PTY reader for agent command")
+        .map_err(|error| RunFailure::with_transcript(error, &transcript_preamble))?;
+    drop(pair.master);
 
-    let mut stdin = child
-        .stdin
-        .take()
-        .ok_or_else(|| anyhow!("agent stdin was not available"))
-        .map_err(|error| RunFailure::with_transcript(error, &transcript_preamble))?;
-    stdin
-        .write_all(prompt.as_bytes())
-        .await
-        .context("failed writing prompt to agent stdin")
-        .map_err(|error| RunFailure::with_transcript(error, &transcript_preamble))?;
-    stdin.shutdown().await.ok();
-
-    let stdout = child
-        .stdout
-        .take()
-        .ok_or_else(|| anyhow!("agent stdout was not available"))
-        .map_err(|error| RunFailure::with_transcript(error, &transcript_preamble))?;
-    let stderr = child
-        .stderr
-        .take()
-        .ok_or_else(|| anyhow!("agent stderr was not available"))
-        .map_err(|error| RunFailure::with_transcript(error, &transcript_preamble))?;
-
-    let (status, combined_output, _stdout, _stderr) =
-        collect_process_output(child, stdout, stderr, request.output_updates.clone())
+    let (status, combined_output) =
+        collect_process_output(child, reader, request.output_updates.clone())
             .await
             .map_err(|error| RunFailure::with_transcript(error, &transcript_preamble))?;
     let summary = summarize_captured_output(&combined_output);
     let captured_output = normalize_output(&cli_transcript(&transcript_preamble, &combined_output));
 
-    Ok((status.code(), summary, captured_output))
+    Ok((
+        i32::try_from(status.exit_code()).ok(),
+        summary,
+        captured_output,
+    ))
 }
 
 #[derive(Debug)]
@@ -537,6 +527,74 @@ pub(crate) fn cli_transcript(transcript_preamble: &str, output: &str) -> String 
     transcript
 }
 
+fn build_pty_command(
+    request: &RunRequest,
+    workspace_path: &Path,
+    sync_report: &WorkspaceSyncReport,
+    prompt_file: &PromptFile,
+) -> Result<CommandBuilder> {
+    let prompt_path = prompt_file
+        .path
+        .to_str()
+        .ok_or_else(|| anyhow!("prompt file path is not valid UTF-8"))?;
+    let mut command = CommandBuilder::new("sh");
+    command.arg("-c");
+    command.arg("exec \"$@\" <\"$SYMPHONY_PROMPT_PATH\"");
+    command.arg("symphony-agent");
+    command.arg(&request.agent.command);
+    for arg in &request.agent.args {
+        command.arg(arg);
+    }
+
+    command.cwd(workspace_path);
+    command.env("SYMPHONY_PROMPT_PATH", prompt_path);
+    command.env("SYMPHONY_PR_REPO", &request.pull_request.repo_full_name);
+    command.env(
+        "SYMPHONY_PR_NUMBER",
+        request.pull_request.number.to_string(),
+    );
+    command.env("SYMPHONY_PR_URL", &request.pull_request.url);
+    command.env("SYMPHONY_PR_HEAD_REF", &request.pull_request.head_ref);
+    command.env("SYMPHONY_PR_BASE_REF", &request.pull_request.base_ref);
+    command.env("SYMPHONY_PR_BASE_SHA", &request.pull_request.base_sha);
+    command.env("SYMPHONY_PR_HEAD_SHA", &request.pull_request.head_sha);
+    command.env(
+        "SYMPHONY_PR_HAS_CONFLICT",
+        if request.pull_request.has_conflicts {
+            "1"
+        } else {
+            "0"
+        },
+    );
+    if let Some(mergeable_state) = request.pull_request.mergeable_state.as_deref() {
+        command.env("SYMPHONY_PR_MERGEABLE_STATE", mergeable_state);
+    }
+    command.env("SYMPHONY_TRIGGER", request.trigger.label());
+    command.env(
+        "SYMPHONY_WORKSPACE",
+        workspace_path.to_string_lossy().to_string(),
+    );
+    command.env("SYMPHONY_BASE_BRANCH_MERGED", "0");
+    command.env(
+        "SYMPHONY_BASE_BRANCH_FETCHED",
+        if sync_report.fetched_base_branch {
+            "1"
+        } else {
+            "0"
+        },
+    );
+    command.env(
+        "SYMPHONY_WORKSPACE_CONFLICTS_PRESENT",
+        if sync_report.resumed_conflict_workspace {
+            "1"
+        } else {
+            "0"
+        },
+    );
+
+    Ok(command)
+}
+
 fn summarize_captured_output(output: &str) -> String {
     let lines = output.lines().collect::<Vec<_>>();
     let tail = lines.iter().rev().take(12).copied().collect::<Vec<_>>();
@@ -551,86 +609,97 @@ fn normalize_output(output: &str) -> Option<String> {
     }
 }
 
-#[derive(Debug, Clone, Copy)]
-enum OutputStream {
-    Stdout,
-    Stderr,
-}
-
-#[derive(Debug)]
-struct OutputChunk {
-    stream: OutputStream,
-    text: String,
-}
-
 async fn collect_process_output(
-    mut child: tokio::process::Child,
-    stdout: impl AsyncRead + Unpin + Send + 'static,
-    stderr: impl AsyncRead + Unpin + Send + 'static,
-    output_updates: Option<UnboundedSender<String>>,
-) -> Result<(ExitStatus, String, String, String)> {
-    let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<OutputChunk>();
-    let stdout_task = tokio::spawn(read_output_stream(stdout, OutputStream::Stdout, tx.clone()));
-    let stderr_task = tokio::spawn(read_output_stream(stderr, OutputStream::Stderr, tx));
+    mut child: Box<dyn portable_pty::Child + Send>,
+    reader: Box<dyn Read + Send>,
+    output_updates: Option<UnboundedSender<RunUpdate>>,
+) -> Result<(portable_pty::ExitStatus, String)> {
+    let wait_task = tokio::task::spawn_blocking(move || {
+        child.wait().context("failed waiting for agent PTY process")
+    });
+    let reader_task =
+        tokio::task::spawn_blocking(move || read_output_stream(reader, output_updates));
 
-    let mut combined_text = String::new();
-    let mut stdout_text = String::new();
-    let mut stderr_text = String::new();
-
-    while let Some(chunk) = rx.recv().await {
-        if let Some(output_updates) = output_updates.as_ref() {
-            let _ = output_updates.send(chunk.text.clone());
-        }
-        combined_text.push_str(&chunk.text);
-
-        match chunk.stream {
-            OutputStream::Stdout => stdout_text.push_str(&chunk.text),
-            OutputStream::Stderr => stderr_text.push_str(&chunk.text),
-        }
-    }
-
-    stdout_task.await.context("stdout reader task panicked")??;
-    stderr_task.await.context("stderr reader task panicked")??;
-
-    let status = child
-        .wait()
+    let status = wait_task.await.context("agent wait task panicked")??;
+    let combined_text = reader_task
         .await
-        .context("failed waiting for agent process")?;
+        .context("agent PTY reader task panicked")??;
 
-    Ok((status, combined_text, stdout_text, stderr_text))
+    Ok((status, combined_text))
 }
 
-async fn read_output_stream(
-    mut reader: impl AsyncRead + Unpin,
-    stream: OutputStream,
-    tx: tokio::sync::mpsc::UnboundedSender<OutputChunk>,
-) -> Result<()> {
+fn read_output_stream(
+    mut reader: Box<dyn Read + Send>,
+    output_updates: Option<UnboundedSender<RunUpdate>>,
+) -> Result<String> {
+    let mut parser = vt100::Parser::new(DEFAULT_PTY_ROWS, DEFAULT_PTY_COLS, 0);
     let mut buffer = [0_u8; 4096];
+    let mut combined_text = String::new();
 
     loop {
         let bytes_read = reader
             .read(&mut buffer)
-            .await
-            .context("failed reading agent output stream")?;
+            .context("failed reading agent PTY output stream")?;
         if bytes_read == 0 {
             break;
         }
 
-        if tx
-            .send(OutputChunk {
-                stream: match stream {
-                    OutputStream::Stdout => OutputStream::Stdout,
-                    OutputStream::Stderr => OutputStream::Stderr,
-                },
-                text: String::from_utf8_lossy(&buffer[..bytes_read]).into_owned(),
-            })
-            .is_err()
-        {
-            break;
+        let chunk = &buffer[..bytes_read];
+        parser.process(chunk);
+
+        let transcript_chunk = normalize_terminal_transcript_chunk(chunk);
+        if !transcript_chunk.is_empty() {
+            combined_text.push_str(&transcript_chunk);
+            if let Some(output_updates) = output_updates.as_ref() {
+                let _ = output_updates.send(RunUpdate::TranscriptChunk(transcript_chunk));
+            }
+        }
+
+        let screen = render_terminal_screen(&parser);
+        if let Some(output_updates) = output_updates.as_ref() {
+            let _ = output_updates.send(RunUpdate::TerminalSnapshot {
+                screen,
+                last_output_at: Utc::now(),
+            });
         }
     }
 
-    Ok(())
+    Ok(combined_text)
+}
+
+fn normalize_terminal_transcript_chunk(chunk: &[u8]) -> String {
+    let stripped = strip_ansi_escapes::strip(chunk);
+    normalize_carriage_returns(&String::from_utf8_lossy(&stripped))
+}
+
+fn normalize_carriage_returns(text: &str) -> String {
+    let mut normalized = String::new();
+    let mut chars = text.chars().peekable();
+
+    while let Some(ch) = chars.next() {
+        if ch == '\r' {
+            normalized.push('\n');
+            if matches!(chars.peek(), Some('\n')) {
+                chars.next();
+            }
+        } else {
+            normalized.push(ch);
+        }
+    }
+
+    normalized
+}
+
+fn render_terminal_screen(parser: &vt100::Parser) -> String {
+    trim_trailing_blank_lines(&parser.screen().contents())
+}
+
+fn trim_trailing_blank_lines(screen: &str) -> String {
+    let mut lines = screen.lines().collect::<Vec<_>>();
+    while matches!(lines.last(), Some(line) if line.trim().is_empty()) {
+        lines.pop();
+    }
+    lines.join("\n")
 }
 
 #[cfg(test)]

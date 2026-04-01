@@ -808,6 +808,32 @@ const PR_DETAIL_HTML: &str = r##"<!doctype html>
       line-height: 1.5;
     }
 
+    .terminal-block {
+      margin-bottom: 18px;
+    }
+
+    .terminal-meta {
+      margin-bottom: 8px;
+      color: var(--muted);
+      font-size: 0.78rem;
+    }
+
+    .terminal-shell {
+      margin: 0;
+      min-height: 220px;
+      max-height: 50vh;
+      overflow: auto;
+      padding: 16px;
+      border-radius: 16px;
+      border: 1px solid rgba(19, 24, 29, 0.14);
+      background:
+        radial-gradient(circle at top left, rgba(57, 81, 95, 0.35), transparent 32%),
+        linear-gradient(180deg, #182126 0%, #10171b 100%);
+      color: #d6e2e5;
+      font: 0.84rem/1.45 "SFMono-Regular", "SF Mono", ui-monospace, monospace;
+      white-space: pre;
+    }
+
     .output {
       margin: 0;
       min-height: 320px;
@@ -863,6 +889,11 @@ const PR_DETAIL_HTML: &str = r##"<!doctype html>
         <span class="section-label">Latest Summary</span>
         <div id="summary-text" class="summary-text">-</div>
       </div>
+      <div id="terminal-block" class="terminal-block" hidden>
+        <span class="section-label">Live Terminal</span>
+        <div id="terminal-meta" class="terminal-meta">Waiting for terminal activity…</div>
+        <pre id="terminal" class="terminal-shell">No terminal output yet. Codex may still be thinking.</pre>
+      </div>
       <div>
         <span id="output-label" class="section-label">Codex CLI Transcript</span>
         <pre id="output" class="output">Waiting for transcript…</pre>
@@ -888,11 +919,24 @@ const PR_DETAIL_HTML: &str = r##"<!doctype html>
       document.getElementById(id).innerHTML = `<span class="${pillClass(value)}">${String(value || "-")}</span>`;
     }
 
+    function terminalStatusText(pr) {
+      if (pr.status !== "running") {
+        return "Live terminal is only available while a run is active.";
+      }
+
+      if (pr.last_terminal_output_at) {
+        return `Last terminal update: ${fmtTime(pr.last_terminal_output_at)}`;
+      }
+
+      return "No terminal output yet. Codex may still be thinking.";
+    }
+
     async function refresh() {
       const key = new URLSearchParams(window.location.search).get("key");
       if (!key) {
         document.getElementById("title").textContent = "Missing PR key";
         document.getElementById("subtitle").textContent = "Open this page from the dashboard so the PR key is included.";
+        document.getElementById("terminal-block").hidden = true;
         document.getElementById("output").textContent = "No PR key was provided.";
         return;
       }
@@ -911,6 +955,9 @@ const PR_DETAIL_HTML: &str = r##"<!doctype html>
       document.getElementById("attention-text").textContent = `Attention: ${pr.attention_reason || "-"}`;
       document.getElementById("updated-at").textContent = fmtTime(pr.updated_at);
       document.getElementById("summary-text").textContent = pr.latest_summary || "-";
+      document.getElementById("terminal-block").hidden = pr.status !== "running";
+      document.getElementById("terminal-meta").textContent = terminalStatusText(pr);
+      document.getElementById("terminal").textContent = pr.live_terminal || "No terminal output yet. Codex may still be thinking.";
       document.getElementById("output-label").textContent =
         pr.status === "running" ? "Live Codex CLI Transcript" : "Saved Codex CLI Transcript";
       document.getElementById("output").textContent = pr.live_output || (
@@ -926,6 +973,7 @@ const PR_DETAIL_HTML: &str = r##"<!doctype html>
     refresh().catch((error) => {
       document.getElementById("title").textContent = "Failed to load run";
       document.getElementById("subtitle").textContent = error.message;
+      document.getElementById("terminal-block").hidden = true;
       document.getElementById("output").textContent = error.message;
     });
     setInterval(() => refresh().catch(() => {}), 1500);
@@ -978,6 +1026,8 @@ struct PullRequestSummary {
     updated_at: DateTime<Utc>,
     latest_summary: Option<String>,
     live_output: Option<String>,
+    live_terminal: Option<String>,
+    last_terminal_output_at: Option<DateTime<Utc>>,
     details_label: Option<String>,
     details_at: Option<DateTime<Utc>>,
 }
@@ -1157,6 +1207,14 @@ fn summarize_pr(tracked: &TrackedPr) -> PullRequestSummary {
             .as_ref()
             .map(|runner| runner.live_output.clone())
             .unwrap_or_else(|| tracked.persisted.last_run_output.clone()),
+        live_terminal: tracked
+            .runner
+            .as_ref()
+            .and_then(|runner| runner.live_terminal.clone()),
+        last_terminal_output_at: tracked
+            .runner
+            .as_ref()
+            .and_then(|runner| runner.last_terminal_output_at),
         details_label,
         details_at,
     }

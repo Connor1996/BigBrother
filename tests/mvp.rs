@@ -26,7 +26,7 @@ use symphony_rs::{
         TrackedPr, TrackingStatus,
     },
     prompt::build_prompt,
-    runner::{RunOutcome, RunRequest},
+    runner::{RunOutcome, RunRequest, RunUpdate},
     service::{AgentRunner, GitHubProvider, GitHubRequestStats, Supervisor},
     web,
 };
@@ -154,7 +154,11 @@ impl AgentRunner for FakeAgentRunner {
             let transcript =
                 fake_cli_transcript(&request, "codex: inspecting workspace\ncargo test -q\n");
             if let Some(output_updates) = request.output_updates.as_ref() {
-                let _ = output_updates.send(transcript.clone());
+                let _ = output_updates.send(RunUpdate::TranscriptChunk(transcript.clone()));
+                let _ = output_updates.send(RunUpdate::TerminalSnapshot {
+                    screen: "$ codex exec\nThinking...\ncargo test -q".to_owned(),
+                    last_output_at: Utc::now(),
+                });
             }
             let _permit = allow_finish
                 .acquire()
@@ -192,7 +196,11 @@ impl AgentRunner for AlwaysFailingAgentRunner {
             started.add_permits(1);
             let transcript = fake_cli_transcript(&request, "codex: run failed before fix\n");
             if let Some(output_updates) = request.output_updates.as_ref() {
-                let _ = output_updates.send(transcript.clone());
+                let _ = output_updates.send(RunUpdate::TranscriptChunk(transcript.clone()));
+                let _ = output_updates.send(RunUpdate::TerminalSnapshot {
+                    screen: "$ codex exec\nrun failed before fix".to_owned(),
+                    last_output_at: Utc::now(),
+                });
             }
 
             RunOutcome {
@@ -775,6 +783,11 @@ async fn running_pr_exposes_live_codex_output() {
     assert!(detail_output.contains("Trigger: CI failed"));
     assert!(detail_output.contains("=== Codex CLI Output ===\n"));
     assert!(detail_output.ends_with("codex: inspecting workspace\ncargo test -q\n"));
+    assert_eq!(
+        detail_payload["live_terminal"],
+        json!("$ codex exec\nThinking...\ncargo test -q")
+    );
+    assert!(detail_payload["last_terminal_output_at"].is_string());
 
     runner.allow_finish.add_permits(1);
     poll_task
@@ -820,6 +833,8 @@ async fn completed_pr_detail_shows_saved_last_run_output() {
     assert!(saved_output.contains("Trigger: CI failed"));
     assert!(saved_output.contains("=== Codex CLI Output ===\n"));
     assert!(saved_output.ends_with("codex: inspecting workspace\ncargo test -q\n"));
+    assert_eq!(detail_payload["live_terminal"], Value::Null);
+    assert_eq!(detail_payload["last_terminal_output_at"], Value::Null);
     assert_eq!(
         detail_payload["latest_summary"],
         json!("fixed openai/symphony#7")
@@ -868,6 +883,8 @@ async fn running_pr_does_not_fall_back_to_saved_output() {
                     trigger: AttentionReason::CiFailed,
                     summary: "waiting for Codex CLI transcript...".to_owned(),
                     live_output: None,
+                    live_terminal: None,
+                    last_terminal_output_at: None,
                     exit_code: None,
                 }),
             },
@@ -877,6 +894,7 @@ async fn running_pr_does_not_fall_back_to_saved_output() {
     let detail_payload = get_json(supervisor, "/api/pr?key=openai%2Fsymphony%237").await;
     assert_eq!(detail_payload["status"], json!("running"));
     assert_eq!(detail_payload["live_output"], Value::Null);
+    assert_eq!(detail_payload["live_terminal"], Value::Null);
 }
 
 #[tokio::test]

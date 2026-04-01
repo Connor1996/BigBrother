@@ -14,7 +14,9 @@ use crate::{
         AttentionReason, DashboardState, EventLevel, PersistentPrState, PullRequest, RunnerState,
         TrackedPr, TrackingStatus,
     },
-    runner::{RunOutcome, RunRequest, OUTPUT_TRANSCRIPT_HEADER, PROMPT_TRANSCRIPT_HEADER},
+    runner::{
+        RunOutcome, RunRequest, RunUpdate, OUTPUT_TRANSCRIPT_HEADER, PROMPT_TRANSCRIPT_HEADER,
+    },
     state_store::{PersistentStateFile, StateStore},
 };
 
@@ -520,19 +522,30 @@ impl Supervisor {
 
         if let Some(request) = selected_request {
             let pr_key = request.pull_request.key.clone();
-            let (output_tx, mut output_rx) = mpsc::unbounded_channel::<String>();
+            let (output_tx, mut output_rx) = mpsc::unbounded_channel::<RunUpdate>();
             let mut runner_request = request.clone();
             runner_request.output_updates = Some(output_tx);
             let output_pr_key = pr_key.clone();
             let shared_state = self.shared_state.clone();
             let output_forwarder = tokio::spawn(async move {
                 let mut buffered_output = String::new();
-                while let Some(chunk) = output_rx.recv().await {
-                    append_live_output(&mut buffered_output, &chunk);
+                while let Some(update) = output_rx.recv().await {
                     let mut state = shared_state.lock().expect("dashboard state mutex poisoned");
                     if let Some(tracked) = state.tracked_prs.get_mut(&output_pr_key) {
                         if let Some(runner) = tracked.runner.as_mut() {
-                            runner.live_output = Some(buffered_output.clone());
+                            match update {
+                                RunUpdate::TranscriptChunk(chunk) => {
+                                    append_live_output(&mut buffered_output, &chunk);
+                                    runner.live_output = Some(buffered_output.clone());
+                                }
+                                RunUpdate::TerminalSnapshot {
+                                    screen,
+                                    last_output_at,
+                                } => {
+                                    runner.live_terminal = Some(screen);
+                                    runner.last_terminal_output_at = Some(last_output_at);
+                                }
+                            }
                         }
                     }
                 }
@@ -717,6 +730,8 @@ fn build_tracked_prs(
                     trigger: active.trigger,
                     summary: "waiting for Codex CLI transcript...".to_owned(),
                     live_output: None,
+                    live_terminal: None,
+                    last_terminal_output_at: None,
                     exit_code: None,
                 }),
             },

@@ -232,6 +232,8 @@ pub struct RunnerState {
     pub trigger: AttentionReason,
     pub summary: String,
     pub live_output: Option<String>,
+    pub live_terminal: Option<String>,
+    pub last_terminal_output_at: Option<DateTime<Utc>>,
     pub exit_code: Option<i32>,
 }
 
