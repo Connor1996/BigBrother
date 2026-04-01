@@ -182,6 +182,15 @@ const INDEX_HTML: &str = r#"<!doctype html>
       min-width: 280px;
     }
 
+    .metric-col,
+    .metric-cell {
+      text-align: center;
+    }
+
+    .metric-cell {
+      vertical-align: middle;
+    }
+
     .pr-title {
       margin-top: 6px;
       font-weight: 600;
@@ -231,9 +240,15 @@ const INDEX_HTML: &str = r#"<!doctype html>
 
     .pill {
       display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      box-sizing: border-box;
+      min-height: 1.9rem;
       padding: 4px 10px;
       border-radius: 999px;
       font-size: 0.84rem;
+      line-height: 1;
+      font-weight: 600;
       border: 1px solid var(--line);
       background: rgba(255, 255, 255, 0.7);
       white-space: nowrap;
@@ -248,16 +263,23 @@ const INDEX_HTML: &str = r#"<!doctype html>
       gap: 6px;
     }
 
+    .status-cell .status-stack,
+    .details-cell .details-stack {
+      justify-items: center;
+    }
+
     .status-note {
       color: var(--muted);
       font-size: 0.82rem;
       line-height: 1.4;
+      text-align: center;
       white-space: pre-wrap;
     }
 
     .summary {
       max-width: 34ch;
       color: var(--muted);
+      text-align: center;
       white-space: pre-wrap;
     }
 
@@ -302,8 +324,29 @@ const INDEX_HTML: &str = r#"<!doctype html>
       color: var(--ink);
       cursor: pointer;
       font: inherit;
+      font-weight: 600;
       padding: 6px 12px;
       transition: background 120ms ease, transform 120ms ease;
+    }
+
+    .action-button.pause-button {
+      background: rgba(183, 61, 61, 0.16);
+      border-color: rgba(183, 61, 61, 0.34);
+      color: #8b2f2f;
+    }
+
+    .action-button.pause-button:hover:not(:disabled) {
+      background: rgba(183, 61, 61, 0.24);
+    }
+
+    .action-button.resume-button {
+      background: rgba(29, 107, 87, 0.16);
+      border-color: rgba(29, 107, 87, 0.34);
+      color: #1d6b57;
+    }
+
+    .action-button.resume-button:hover:not(:disabled) {
+      background: rgba(29, 107, 87, 0.24);
     }
 
     .action-button:hover:not(:disabled) {
@@ -466,11 +509,11 @@ const INDEX_HTML: &str = r#"<!doctype html>
         <thead>
           <tr>
             <th class="description-col">PR</th>
-            <th>Status</th>
-            <th>CI</th>
-            <th>Reviews</th>
-            <th>Details</th>
-            <th>Action</th>
+            <th class="metric-col">Status</th>
+            <th class="metric-col">CI</th>
+            <th class="metric-col">Reviews</th>
+            <th class="metric-col">Details</th>
+            <th class="metric-col">Action</th>
           </tr>
         </thead>
         <tbody id="prs-table">
@@ -484,11 +527,11 @@ const INDEX_HTML: &str = r#"<!doctype html>
         <thead>
           <tr>
             <th class="description-col">PR</th>
-            <th>Status</th>
-            <th>CI</th>
-            <th>Reviews</th>
-            <th>Details</th>
-            <th>Action</th>
+            <th class="metric-col">Status</th>
+            <th class="metric-col">CI</th>
+            <th class="metric-col">Reviews</th>
+            <th class="metric-col">Details</th>
+            <th class="metric-col">Action</th>
           </tr>
         </thead>
         <tbody id="review-requests-table">
@@ -572,9 +615,10 @@ const INDEX_HTML: &str = r#"<!doctype html>
       const isPaused = effectivePaused(pr);
       const nextPaused = !isPaused;
       const label = pending ? "Updating..." : (isPaused ? "Resume" : "Pause");
+      const variantClass = isPaused ? "resume-button" : "pause-button";
       return `
         <button
-          class="action-button"
+          class="action-button ${variantClass}"
           ${pending ? "disabled" : ""}
           onclick="togglePause('${encodeURIComponent(pr.key)}', ${nextPaused})"
         >
@@ -688,11 +732,11 @@ const INDEX_HTML: &str = r#"<!doctype html>
             <div class="pr-title">${escapeHtml(pr.title)}</div>
             <div class="pr-meta">Updated ${escapeHtml(fmtTime(pr.updated_at))}</div>
           </td>
-          <td data-label="Status">${renderStatus(pr)}</td>
-          <td data-label="CI"><span class="${pillClass(pr.ci_status)}">${escapeHtml(pr.ci_status)}</span></td>
-          <td data-label="Reviews"><span class="${pillClass(pr.review_status)}">${escapeHtml(pr.review_status)}</span></td>
-          <td data-label="Details">${renderDetails(pr)}</td>
-          <td data-label="Action">${renderAction(pr)}</td>
+          <td class="metric-cell status-cell" data-label="Status">${renderStatus(pr)}</td>
+          <td class="metric-cell" data-label="CI"><span class="${pillClass(pr.ci_status)}">${escapeHtml(pr.ci_status)}</span></td>
+          <td class="metric-cell" data-label="Reviews"><span class="${pillClass(pr.review_status)}">${escapeHtml(pr.review_status)}</span></td>
+          <td class="metric-cell details-cell" data-label="Details">${renderDetails(pr)}</td>
+          <td class="metric-cell action-cell" data-label="Action">${renderAction(pr)}</td>
         </tr>
       `).join("");
     }
@@ -711,11 +755,11 @@ const INDEX_HTML: &str = r#"<!doctype html>
             <div class="pr-title">${escapeHtml(pr.title)}</div>
             <div class="pr-meta">Updated ${escapeHtml(fmtTime(pr.updated_at))}</div>
           </td>
-          <td data-label="Status">${renderStatus(pr, null)}</td>
-          <td data-label="CI"><span class="${pillClass(pr.ci_status)}">${escapeHtml(pr.ci_status)}</span></td>
-          <td data-label="Reviews"><span class="${pillClass(pr.review_status)}">${escapeHtml(pr.review_status)}</span></td>
-          <td data-label="Details">${renderDetails(pr)}</td>
-          <td data-label="Action">${renderReviewRequestAction(pr)}</td>
+          <td class="metric-cell status-cell" data-label="Status">${renderStatus(pr, null)}</td>
+          <td class="metric-cell" data-label="CI"><span class="${pillClass(pr.ci_status)}">${escapeHtml(pr.ci_status)}</span></td>
+          <td class="metric-cell" data-label="Reviews"><span class="${pillClass(pr.review_status)}">${escapeHtml(pr.review_status)}</span></td>
+          <td class="metric-cell details-cell" data-label="Details">${renderDetails(pr)}</td>
+          <td class="metric-cell action-cell" data-label="Action">${renderReviewRequestAction(pr)}</td>
         </tr>
       `).join("");
     }
@@ -789,7 +833,7 @@ const INDEX_HTML: &str = r#"<!doctype html>
       const activityPayload = await activityRes.json();
 
       document.getElementById("health-status").textContent = health.ok ? "Healthy" : "Attention needed";
-      document.getElementById("health-count").textContent = `${health.tracked_prs}/${health.all_prs}`;
+      document.getElementById("health-count").textContent = `${health.active_tracked_prs}/${health.all_prs}`;
       document.getElementById("health-running").textContent = String(health.running_prs);
       document.getElementById("health-poll").textContent = fmtTime(health.last_poll_finished_at);
       latestPrs = prsPayload.prs || [];
@@ -918,9 +962,15 @@ const PR_DETAIL_HTML: &str = r##"<!doctype html>
 
     .pill {
       display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      box-sizing: border-box;
+      min-height: 1.9rem;
       padding: 4px 10px;
       border-radius: 999px;
       font-size: 0.84rem;
+      line-height: 1;
+      font-weight: 600;
       border: 1px solid var(--line);
       background: rgba(255, 255, 255, 0.7);
       white-space: nowrap;
@@ -1120,6 +1170,7 @@ const PR_DETAIL_HTML: &str = r##"<!doctype html>
 struct HealthResponse {
     ok: bool,
     tracked_prs: usize,
+    active_tracked_prs: usize,
     all_prs: usize,
     running_prs: usize,
     last_poll_started_at: Option<DateTime<Utc>>,
@@ -1249,6 +1300,11 @@ async fn pr_detail_page() -> Html<&'static str> {
 async fn health(State(supervisor): State<Arc<Supervisor>>) -> Json<HealthResponse> {
     let snapshot = supervisor.snapshot();
     let tracked_prs = snapshot.tracked_prs.len();
+    let active_tracked_prs = snapshot
+        .tracked_prs
+        .values()
+        .filter(|pr| !pr.persisted.paused)
+        .count();
     let all_prs = snapshot
         .total_matching_prs
         .unwrap_or(tracked_prs)
@@ -1267,6 +1323,7 @@ async fn health(State(supervisor): State<Arc<Supervisor>>) -> Json<HealthRespons
     Json(HealthResponse {
         ok: snapshot.last_poll_error.is_none(),
         tracked_prs,
+        active_tracked_prs,
         all_prs,
         running_prs,
         last_poll_started_at: snapshot.last_poll_started_at,

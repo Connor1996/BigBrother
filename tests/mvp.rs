@@ -422,6 +422,7 @@ async fn mvp_flow_tracks_prs_runs_actionable_one_and_does_not_duplicate() {
 
     let health = get_json(supervisor, "/api/health").await;
     assert_eq!(health["tracked_prs"], 2);
+    assert_eq!(health["active_tracked_prs"], 2);
     assert_eq!(health["all_prs"], 2);
     assert_eq!(health["running_prs"], 0);
     assert!(health["ok"].as_bool().unwrap_or(false));
@@ -469,6 +470,10 @@ async fn pause_api_toggles_review_wait_state_for_a_tracked_pr() {
     let prs = prs_payload["prs"].as_array().expect("prs array");
     assert_eq!(status_for(prs, "openai/symphony#1"), Some("paused"));
     assert_eq!(is_paused_for(prs, "openai/symphony#1"), Some(true));
+    let paused_health = get_json(supervisor.clone(), "/api/health").await;
+    assert_eq!(paused_health["tracked_prs"], 1);
+    assert_eq!(paused_health["active_tracked_prs"], 0);
+    assert_eq!(paused_health["all_prs"], 1);
 
     let resumed = post_json(
         supervisor.clone(),
@@ -773,6 +778,20 @@ async fn dashboard_html_exposes_top_right_pr_review_request_and_activity_tabs() 
     assert!(
         !html.contains("<th>Attention</th>"),
         "dashboard should fold attention context into the status column instead of rendering a dedicated Attention column, got: {html}",
+    );
+    assert!(
+        html.contains("health.active_tracked_prs"),
+        "dashboard should render the tracked count using active non-paused PRs, got: {html}",
+    );
+    assert!(
+        html.contains(r#"<th class="metric-col">Status</th>"#)
+            && html.contains(r#"<th class="metric-col">Details</th>"#)
+            && html.contains(r#"<th class="metric-col">Action</th>"#),
+        "dashboard should center the non-description columns, got: {html}",
+    );
+    assert!(
+        html.contains("pause-button") && html.contains("resume-button"),
+        "dashboard should expose distinct pause and resume button styling hooks, got: {html}",
     );
 }
 
@@ -1527,6 +1546,7 @@ async fn health_keeps_total_matching_prs_after_targeted_resume_check() {
         .expect("initial poll should succeed");
     let initial_health = get_json(supervisor.clone(), "/api/health").await;
     assert_eq!(initial_health["tracked_prs"], 1);
+    assert_eq!(initial_health["active_tracked_prs"], 1);
     assert_eq!(initial_health["all_prs"], 7);
 
     supervisor
@@ -1544,6 +1564,7 @@ async fn health_keeps_total_matching_prs_after_targeted_resume_check() {
 
     let resumed_health = get_json(supervisor, "/api/health").await;
     assert_eq!(resumed_health["tracked_prs"], 1);
+    assert_eq!(resumed_health["active_tracked_prs"], 1);
     assert_eq!(resumed_health["all_prs"], 7);
     assert_eq!(
         provider.full_fetches.load(Ordering::SeqCst),
