@@ -965,6 +965,10 @@ const PR_DETAIL_HTML: &str = r##"<!doctype html>
       padding: 32px 20px 64px;
     }
 
+    a {
+      color: inherit;
+    }
+
     h1 {
       margin: 0 0 8px;
       font-size: clamp(2.2rem, 3vw, 3.4rem);
@@ -1183,7 +1187,6 @@ const PR_DETAIL_HTML: &str = r##"<!doctype html>
           </div>
           <div class="brand-copy">
             <h1>BigBrother</h1>
-            <p>PR run details and saved output.</p>
           </div>
         </div>
         <a class="detail-link" href="/">Back to dashboard</a>
