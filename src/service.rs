@@ -21,6 +21,14 @@ use crate::{
 pub trait GitHubProvider: Send + Sync {
     fn fetch_pull_requests(&self) -> BoxFuture<'_, Result<Vec<PullRequest>>>;
 
+    fn fetch_pull_requests_with_state(
+        &self,
+        previous_prs: Vec<PullRequest>,
+    ) -> BoxFuture<'_, Result<Vec<PullRequest>>> {
+        let _ = previous_prs;
+        Box::pin(async move { self.fetch_pull_requests().await })
+    }
+
     fn fetch_pull_request(&self, pr_key: String) -> BoxFuture<'_, Result<Option<PullRequest>>> {
         Box::pin(async move {
             Ok(self
@@ -461,7 +469,9 @@ impl Supervisor {
             }
         }
 
-        self.provider.fetch_pull_requests().await
+        self.provider
+            .fetch_pull_requests_with_state(current_snapshot_prs(&self.shared_state))
+            .await
     }
 }
 

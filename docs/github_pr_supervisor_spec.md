@@ -169,6 +169,12 @@ When CI fails or new actionable feedback appears:
 6. if the run fails, the daemon retries the same still-actionable signal on the next poll
 7. after five automatic retries for the same signal, the daemon auto-pauses that PR until resumed
 
+Scheduled GitHub polling should minimize rate-limit pressure by using two stages:
+
+- first fetch the authored PR list plus lightweight pull details needed for routing and workspace sync
+- then fetch reviews, comments, and check status only for candidate PRs whose lightweight state has
+  changed since the previous dashboard snapshot or whose prior CI status is still unsettled
+
 ### 6.3 Human Escalation
 
 When the agent cannot safely continue:

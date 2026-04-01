@@ -16,6 +16,8 @@ use crate::{
     service::GitHubProvider,
 };
 
+const SIGNAL_REFRESH_GRACE_PERIOD_SECS: i64 = 30 * 60;
+
 pub struct GitHubClient {
     http: Client,
     api_base_url: String,
@@ -50,10 +52,21 @@ impl GitHubClient {
     }
 
     pub async fn fetch_pull_requests(&self) -> Result<Vec<PullRequest>> {
+        self.fetch_pull_requests_with_state(Vec::new()).await
+    }
+
+    pub async fn fetch_pull_requests_with_state(
+        &self,
+        previous_prs: Vec<PullRequest>,
+    ) -> Result<Vec<PullRequest>> {
         let author = match &self.config.author {
             Some(author) => author.clone(),
             None => self.fetch_viewer_login().await?,
         };
+        let previous_prs = previous_prs
+            .into_iter()
+            .map(|pr| (pr.key.clone(), pr))
+            .collect::<HashMap<_, _>>();
 
         let query = build_search_query(&self.config, &author);
         let search: SearchResponse = self
@@ -68,13 +81,30 @@ impl GitHubClient {
             )
             .await?;
 
-        let prs = stream::iter(search.items.into_iter().map(|item| {
+        let light_prs = stream::iter(search.items.into_iter().map(|item| async move {
+            let repo = parse_repo_from_api_url(&item.repository_url)
+                .with_context(|| format!("failed to parse repo from {}", item.repository_url))?;
+            let detail = self.fetch_pull_detail(&repo, item.number).await?;
+            let pr = build_pull_request_from_detail(&repo, item.number, detail)?;
+            Ok::<_, anyhow::Error>((repo, pr))
+        }))
+        .buffer_unordered(6)
+        .try_collect::<Vec<_>>()
+        .await?;
+
+        let prs = stream::iter(light_prs.into_iter().map(|(repo, light_pr)| {
             let author = author.clone();
+            let previous_pr = previous_prs.get(&light_pr.key).cloned();
             async move {
-                let repo = parse_repo_from_api_url(&item.repository_url).with_context(|| {
-                    format!("failed to parse repo from {}", item.repository_url)
-                })?;
-                self.enrich_pull_request(&repo, item.number, &author).await
+                if should_refresh_signal_details(&light_pr, previous_pr.as_ref()) {
+                    self.hydrate_pull_request_signals(&repo, &author, light_pr)
+                        .await
+                } else if let Some(previous_pr) = previous_pr {
+                    Ok(reuse_cached_signal_details(light_pr, &previous_pr))
+                } else {
+                    self.hydrate_pull_request_signals(&repo, &author, light_pr)
+                        .await
+                }
             }
         }))
         .buffer_unordered(6)
@@ -93,7 +123,10 @@ impl GitHubClient {
             None => self.fetch_viewer_login().await?,
         };
 
-        self.enrich_pull_request(&repo, number, &author)
+        let detail = self.fetch_pull_detail(&repo, number).await?;
+        let pr = build_pull_request_from_detail(&repo, number, detail)?;
+
+        self.hydrate_pull_request_signals(&repo, &author, pr)
             .await
             .map(Some)
     }
@@ -103,28 +136,29 @@ impl GitHubClient {
         Ok(user.login)
     }
 
-    async fn enrich_pull_request(
+    async fn fetch_pull_detail(&self, repo: &str, number: u64) -> Result<PullDetail> {
+        self.get_json(&format!("repos/{repo}/pulls/{number}"), &[])
+            .await
+    }
+
+    async fn hydrate_pull_request_signals(
         &self,
         repo: &str,
-        number: u64,
         author: &str,
+        mut pr: PullRequest,
     ) -> Result<PullRequest> {
-        let detail: PullDetail = self
-            .get_json(&format!("repos/{repo}/pulls/{number}"), &[])
-            .await?;
-
-        let reviews_path = format!("repos/{repo}/pulls/{number}/reviews");
-        let review_comments_path = format!("repos/{repo}/pulls/{number}/comments");
-        let issue_comments_path = format!("repos/{repo}/issues/{number}/comments");
-        let check_runs_path = format!("repos/{repo}/commits/{}/check-runs", detail.head.sha);
-        let combined_status_path = format!("repos/{repo}/commits/{}/status", detail.head.sha);
         let per_page = vec![("per_page", "100".to_owned())];
+        let reviews_path = format!("repos/{repo}/pulls/{}/reviews", pr.number);
+        let review_comments_path = format!("repos/{repo}/pulls/{}/comments", pr.number);
+        let issue_comments_path = format!("repos/{repo}/issues/{}/comments", pr.number);
+        let check_runs_path = format!("repos/{repo}/commits/{}/check-runs", pr.head_sha);
+        let combined_status_path = format!("repos/{repo}/commits/{}/status", pr.head_sha);
 
         let (reviews, review_comments, issue_comments, check_runs, combined_status) = tokio::try_join!(
-            self.get_json::<Vec<Review>>(&reviews_path, &per_page,),
-            self.get_json::<Vec<ReviewComment>>(&review_comments_path, &per_page,),
-            self.get_json::<Vec<IssueComment>>(&issue_comments_path, &per_page,),
-            self.get_json::<CheckRunsResponse>(&check_runs_path, &per_page,),
+            self.get_json::<Vec<Review>>(&reviews_path, &per_page),
+            self.get_json::<Vec<ReviewComment>>(&review_comments_path, &per_page),
+            self.get_json::<Vec<IssueComment>>(&issue_comments_path, &per_page),
+            self.get_json::<CheckRunsResponse>(&check_runs_path, &per_page),
             self.get_json::<CombinedStatus>(&combined_status_path, &[]),
         )?;
 
@@ -134,54 +168,8 @@ impl GitHubClient {
             &combined_status.statuses,
             &combined_status.state,
         );
-        let repo_full_name = detail
-            .base
-            .repo
-            .as_ref()
-            .map(|repo| repo.full_name.clone())
-            .unwrap_or_else(|| repo.to_owned());
-        let head_repo = detail
-            .head
-            .repo
-            .clone()
-            .or_else(|| detail.base.repo.clone())
-            .ok_or_else(|| anyhow!("pull request {} is missing repository metadata", number))?;
-
-        Ok(PullRequest {
-            key: format!("{repo_full_name}#{number}"),
-            repo_full_name,
-            number,
-            title: detail.title,
-            body: detail.body,
-            url: detail.html_url,
-            author_login: detail.user.login,
-            labels: detail.labels.into_iter().map(|label| label.name).collect(),
-            created_at: detail.created_at,
-            updated_at: detail.updated_at,
-            head_sha: detail.head.sha,
-            head_ref: detail.head.reference,
-            base_sha: detail.base.sha,
-            base_ref: detail.base.reference,
-            clone_url: head_repo.clone_url,
-            ssh_url: head_repo.ssh_url,
-            ci_status: ci_summary.status,
-            ci_updated_at: ci_summary.updated_at,
-            review_decision: review_summary.decision,
-            approval_count: review_summary.approval_count,
-            review_comment_count: review_summary.review_comment_count,
-            issue_comment_count: review_summary.issue_comment_count,
-            latest_reviewer_activity_at: review_summary.latest_activity_at,
-            has_conflicts: detail.mergeable == Some(false)
-                || detail
-                    .mergeable_state
-                    .as_deref()
-                    .map(|value| value.eq_ignore_ascii_case("dirty"))
-                    .unwrap_or(false),
-            mergeable_state: detail.mergeable_state,
-            is_draft: detail.draft,
-            is_closed: detail.state.eq_ignore_ascii_case("closed") && detail.merged_at.is_none(),
-            is_merged: detail.merged_at.is_some(),
-        })
+        apply_signal_summary(&mut pr, review_summary, ci_summary);
+        Ok(pr)
     }
 
     async fn get_json<T>(&self, path: &str, query: &[(&str, String)]) -> Result<T>
@@ -216,6 +204,15 @@ impl GitHubClient {
 impl GitHubProvider for GitHubClient {
     fn fetch_pull_requests(&self) -> BoxFuture<'_, Result<Vec<PullRequest>>> {
         Box::pin(async move { GitHubClient::fetch_pull_requests(self).await })
+    }
+
+    fn fetch_pull_requests_with_state(
+        &self,
+        previous_prs: Vec<PullRequest>,
+    ) -> BoxFuture<'_, Result<Vec<PullRequest>>> {
+        Box::pin(
+            async move { GitHubClient::fetch_pull_requests_with_state(self, previous_prs).await },
+        )
     }
 
     fn fetch_pull_request(&self, pr_key: String) -> BoxFuture<'_, Result<Option<PullRequest>>> {
@@ -339,6 +336,120 @@ struct ReviewSummary {
 struct CiSummary {
     status: CiStatus,
     updated_at: Option<DateTime<Utc>>,
+}
+
+fn build_pull_request_from_detail(
+    repo: &str,
+    number: u64,
+    detail: PullDetail,
+) -> Result<PullRequest> {
+    let repo_full_name = detail
+        .base
+        .repo
+        .as_ref()
+        .map(|repo| repo.full_name.clone())
+        .unwrap_or_else(|| repo.to_owned());
+    let head_repo = detail
+        .head
+        .repo
+        .clone()
+        .or_else(|| detail.base.repo.clone())
+        .ok_or_else(|| anyhow!("pull request {} is missing repository metadata", number))?;
+
+    Ok(PullRequest {
+        key: format!("{repo_full_name}#{number}"),
+        repo_full_name,
+        number,
+        title: detail.title,
+        body: detail.body,
+        url: detail.html_url,
+        author_login: detail.user.login,
+        labels: detail.labels.into_iter().map(|label| label.name).collect(),
+        created_at: detail.created_at,
+        updated_at: detail.updated_at,
+        head_sha: detail.head.sha,
+        head_ref: detail.head.reference,
+        base_sha: detail.base.sha,
+        base_ref: detail.base.reference,
+        clone_url: head_repo.clone_url,
+        ssh_url: head_repo.ssh_url,
+        ci_status: CiStatus::Unknown,
+        ci_updated_at: None,
+        review_decision: ReviewDecision::Clean,
+        approval_count: 0,
+        review_comment_count: 0,
+        issue_comment_count: 0,
+        latest_reviewer_activity_at: None,
+        has_conflicts: detail.mergeable == Some(false)
+            || detail
+                .mergeable_state
+                .as_deref()
+                .map(|value| value.eq_ignore_ascii_case("dirty"))
+                .unwrap_or(false),
+        mergeable_state: detail.mergeable_state,
+        is_draft: detail.draft,
+        is_closed: detail.state.eq_ignore_ascii_case("closed") && detail.merged_at.is_none(),
+        is_merged: detail.merged_at.is_some(),
+    })
+}
+
+fn apply_signal_summary(
+    pr: &mut PullRequest,
+    review_summary: ReviewSummary,
+    ci_summary: CiSummary,
+) {
+    pr.ci_status = ci_summary.status;
+    pr.ci_updated_at = ci_summary.updated_at;
+    pr.review_decision = review_summary.decision;
+    pr.approval_count = review_summary.approval_count;
+    pr.review_comment_count = review_summary.review_comment_count;
+    pr.issue_comment_count = review_summary.issue_comment_count;
+    pr.latest_reviewer_activity_at = review_summary.latest_activity_at;
+}
+
+fn reuse_cached_signal_details(mut pr: PullRequest, previous: &PullRequest) -> PullRequest {
+    pr.ci_status = previous.ci_status;
+    pr.ci_updated_at = previous.ci_updated_at;
+    pr.review_decision = previous.review_decision;
+    pr.approval_count = previous.approval_count;
+    pr.review_comment_count = previous.review_comment_count;
+    pr.issue_comment_count = previous.issue_comment_count;
+    pr.latest_reviewer_activity_at = previous.latest_reviewer_activity_at;
+    pr
+}
+
+fn should_refresh_signal_details(current: &PullRequest, previous: Option<&PullRequest>) -> bool {
+    let Some(previous) = previous else {
+        return true;
+    };
+
+    if previous.updated_at != current.updated_at
+        || previous.head_sha != current.head_sha
+        || previous.head_ref != current.head_ref
+        || previous.base_sha != current.base_sha
+        || previous.base_ref != current.base_ref
+        || previous.has_conflicts != current.has_conflicts
+        || previous.mergeable_state != current.mergeable_state
+        || previous.is_draft != current.is_draft
+        || previous.is_closed != current.is_closed
+        || previous.is_merged != current.is_merged
+    {
+        return true;
+    }
+
+    if matches!(
+        previous.ci_status,
+        CiStatus::Pending | CiStatus::Failure | CiStatus::Unknown
+    ) {
+        return true;
+    }
+
+    previous
+        .ci_updated_at
+        .map(|updated_at| {
+            (Utc::now() - updated_at).num_seconds() <= SIGNAL_REFRESH_GRACE_PERIOD_SECS
+        })
+        .unwrap_or(false)
 }
 
 fn summarize_reviews(
@@ -543,4 +654,122 @@ fn parse_pr_key(pr_key: &str) -> Result<(String, u64)> {
     }
 
     Ok((repo.to_owned(), number))
+}
+
+#[cfg(test)]
+mod tests {
+    use chrono::{Duration, TimeZone};
+
+    use super::{reuse_cached_signal_details, should_refresh_signal_details};
+    use crate::model::{CiStatus, PullRequest, ReviewDecision};
+
+    fn sample_pull_request() -> PullRequest {
+        PullRequest {
+            key: "openai/symphony#7".to_owned(),
+            repo_full_name: "openai/symphony".to_owned(),
+            number: 7,
+            title: "Improve polling".to_owned(),
+            body: Some("Reduce GitHub load".to_owned()),
+            url: "https://github.com/openai/symphony/pull/7".to_owned(),
+            author_login: "author".to_owned(),
+            labels: vec!["automation".to_owned()],
+            created_at: chrono::Utc.with_ymd_and_hms(2026, 3, 31, 18, 0, 0).unwrap(),
+            updated_at: chrono::Utc
+                .with_ymd_and_hms(2026, 3, 31, 18, 30, 0)
+                .unwrap(),
+            head_sha: "abc123".to_owned(),
+            head_ref: "feature/polling".to_owned(),
+            base_sha: "def456".to_owned(),
+            base_ref: "main".to_owned(),
+            clone_url: "https://github.com/openai/symphony.git".to_owned(),
+            ssh_url: "git@github.com:openai/symphony.git".to_owned(),
+            ci_status: CiStatus::Success,
+            ci_updated_at: Some(
+                chrono::Utc
+                    .with_ymd_and_hms(2026, 3, 31, 18, 25, 0)
+                    .unwrap(),
+            ),
+            review_decision: ReviewDecision::Approved,
+            approval_count: 1,
+            review_comment_count: 0,
+            issue_comment_count: 0,
+            latest_reviewer_activity_at: Some(
+                chrono::Utc
+                    .with_ymd_and_hms(2026, 3, 31, 18, 20, 0)
+                    .unwrap(),
+            ),
+            has_conflicts: false,
+            mergeable_state: Some("clean".to_owned()),
+            is_draft: false,
+            is_closed: false,
+            is_merged: false,
+        }
+    }
+
+    #[test]
+    fn unchanged_stable_pr_reuses_cached_signal_details() {
+        let now = chrono::Utc::now();
+        let previous = PullRequest {
+            ci_updated_at: Some(now - Duration::hours(2)),
+            ..sample_pull_request()
+        };
+        let current = previous.clone();
+
+        assert!(
+            !should_refresh_signal_details(&current, Some(&previous)),
+            "unchanged PRs with stale-enough green CI should reuse cached signal details",
+        );
+    }
+
+    #[test]
+    fn updated_pr_forces_signal_refresh() {
+        let previous = sample_pull_request();
+        let mut current = previous.clone();
+        current.updated_at = previous.updated_at + Duration::minutes(5);
+
+        assert!(
+            should_refresh_signal_details(&current, Some(&previous)),
+            "updated PR metadata should force a fresh review/CI hydration",
+        );
+    }
+
+    #[test]
+    fn unstable_ci_keeps_refreshing_even_without_pr_metadata_changes() {
+        let previous = PullRequest {
+            ci_status: CiStatus::Pending,
+            ..sample_pull_request()
+        };
+        let current = previous.clone();
+
+        assert!(
+            should_refresh_signal_details(&current, Some(&previous)),
+            "pending CI should remain a candidate until it settles",
+        );
+    }
+
+    #[test]
+    fn reusing_cached_signal_details_preserves_lightweight_pr_fields() {
+        let previous = sample_pull_request();
+        let mut current = sample_pull_request();
+        current.title = "New title from light detail".to_owned();
+        current.body = Some("Light detail body".to_owned());
+        current.review_decision = ReviewDecision::Clean;
+        current.approval_count = 0;
+        current.ci_status = CiStatus::Unknown;
+        current.ci_updated_at = None;
+        current.latest_reviewer_activity_at = None;
+
+        let merged = reuse_cached_signal_details(current, &previous);
+
+        assert_eq!(merged.title, "New title from light detail");
+        assert_eq!(merged.body.as_deref(), Some("Light detail body"));
+        assert_eq!(merged.review_decision, previous.review_decision);
+        assert_eq!(merged.approval_count, previous.approval_count);
+        assert_eq!(merged.ci_status, previous.ci_status);
+        assert_eq!(merged.ci_updated_at, previous.ci_updated_at);
+        assert_eq!(
+            merged.latest_reviewer_activity_at,
+            previous.latest_reviewer_activity_at
+        );
+    }
 }

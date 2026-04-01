@@ -80,6 +80,39 @@ impl GitHubProvider for CountingTargetedGitHubProvider {
 }
 
 #[derive(Clone)]
+struct CountingStatefulGitHubProvider {
+    prs: Vec<PullRequest>,
+    full_fetches: Arc<AtomicUsize>,
+    stateful_fetches: Arc<AtomicUsize>,
+    last_previous_len: Arc<AtomicUsize>,
+}
+
+impl GitHubProvider for CountingStatefulGitHubProvider {
+    fn fetch_pull_requests(&self) -> BoxFuture<'_, Result<Vec<PullRequest>>> {
+        let prs = self.prs.clone();
+        let full_fetches = self.full_fetches.clone();
+        Box::pin(async move {
+            full_fetches.fetch_add(1, Ordering::SeqCst);
+            Ok(prs)
+        })
+    }
+
+    fn fetch_pull_requests_with_state(
+        &self,
+        previous_prs: Vec<PullRequest>,
+    ) -> BoxFuture<'_, Result<Vec<PullRequest>>> {
+        let prs = self.prs.clone();
+        let stateful_fetches = self.stateful_fetches.clone();
+        let last_previous_len = self.last_previous_len.clone();
+        Box::pin(async move {
+            stateful_fetches.fetch_add(1, Ordering::SeqCst);
+            last_previous_len.store(previous_prs.len(), Ordering::SeqCst);
+            Ok(prs)
+        })
+    }
+}
+
+#[derive(Clone)]
 struct FakeAgentRunner {
     invocations: Arc<AtomicUsize>,
     started: Arc<Semaphore>,
@@ -335,6 +368,66 @@ async fn activity_api_exposes_recent_daemon_events() {
                 && event["level"] == json!("info")
         }),
         "activity should include the idle poll summary: {events:?}",
+    );
+}
+
+#[tokio::test]
+async fn scheduled_poll_uses_stateful_fetch_with_dashboard_snapshot() {
+    let provider = CountingStatefulGitHubProvider {
+        prs: vec![idle_pr()],
+        full_fetches: Arc::new(AtomicUsize::new(0)),
+        stateful_fetches: Arc::new(AtomicUsize::new(0)),
+        last_previous_len: Arc::new(AtomicUsize::new(usize::MAX)),
+    };
+    let supervisor = Arc::new(
+        Supervisor::new(
+            sample_config(
+                unique_temp_path("state.json"),
+                unique_temp_path("workspaces"),
+            ),
+            Arc::new(provider.clone()),
+            Arc::new(FakeAgentRunner {
+                invocations: Arc::new(AtomicUsize::new(0)),
+                started: Arc::new(Semaphore::new(0)),
+                allow_finish: Arc::new(Semaphore::new(1)),
+            }),
+        )
+        .expect("supervisor should initialize"),
+    );
+
+    supervisor
+        .poll_once()
+        .await
+        .expect("first poll should succeed");
+    assert_eq!(
+        provider.stateful_fetches.load(Ordering::SeqCst),
+        1,
+        "scheduled poll should use the stateful fetch path",
+    );
+    assert_eq!(
+        provider.full_fetches.load(Ordering::SeqCst),
+        0,
+        "scheduled poll should not fall back to the legacy full fetch path",
+    );
+    assert_eq!(
+        provider.last_previous_len.load(Ordering::SeqCst),
+        0,
+        "first poll should start with an empty dashboard snapshot",
+    );
+
+    supervisor
+        .poll_once()
+        .await
+        .expect("second poll should also succeed");
+    assert_eq!(
+        provider.stateful_fetches.load(Ordering::SeqCst),
+        2,
+        "subsequent polls should keep using the stateful fetch path",
+    );
+    assert_eq!(
+        provider.last_previous_len.load(Ordering::SeqCst),
+        1,
+        "second poll should receive the tracked PR from the previous snapshot",
     );
 }
 
