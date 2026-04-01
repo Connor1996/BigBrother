@@ -174,6 +174,9 @@ Scheduled GitHub polling should minimize rate-limit pressure by using two stages
 - first fetch the authored PR list plus lightweight pull details needed for routing and workspace sync
 - then fetch reviews, comments, and check status only for candidate PRs whose lightweight state has
   changed since the previous dashboard snapshot or whose prior CI status is still unsettled
+- PRs that are manually paused should be treated as frozen dashboard snapshots during scheduled
+  polls: keep their last known PR state in the UI, do not refresh their review or CI-derived
+  status, and avoid redundant GitHub detail hydration for them until they are resumed
 
 ### 6.3 Human Escalation
 
@@ -393,6 +396,8 @@ Default v0 policy:
 - resuming a paused PR resets retry bookkeeping and triggers an immediate targeted re-check for that PR instead of waiting for the next daemon poll
 - the immediate resume re-check should prefer the resumed PR over unrelated actionable PRs, while still respecting the configured global concurrency
 - the immediate resume re-check should fetch only the resumed PR from GitHub rather than refreshing the entire authored PR set
+- while a PR remains paused, scheduled polls should preserve its last visible state instead of
+  updating it underneath the operator
 
 ## 13. Workspace Model
 
@@ -592,6 +597,7 @@ Current prototype-compatible action API:
 
 - `POST /api/prs/pause` with `{ "key": "<repo>#<number>", "paused": true|false }`
   When `paused` is `false`, the backend should queue an immediate background re-check for that PR.
+  When `paused` is `true`, scheduled polls should freeze that PR's visible state until resume.
 
 Potential richer follow-up actions:
 

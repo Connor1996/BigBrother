@@ -1,5 +1,5 @@
 use std::{
-    collections::HashMap,
+    collections::{HashMap, HashSet},
     sync::{
         atomic::{AtomicUsize, Ordering},
         Arc,
@@ -19,7 +19,7 @@ use serde::Deserialize;
 use crate::{
     config::{build_search_query, ResolvedGitHubConfig},
     model::{CiStatus, PullRequest, ReviewDecision},
-    service::{GitHubProvider, GitHubRequestStats},
+    service::{GitHubProvider, GitHubRequestStats, PollQueryState},
 };
 
 const SIGNAL_REFRESH_GRACE_PERIOD_SECS: i64 = 30 * 60;
@@ -58,33 +58,40 @@ impl GitHubClient {
     }
 
     pub async fn fetch_pull_requests(&self) -> Result<Vec<PullRequest>> {
-        self.fetch_pull_requests_with_state_and_stats(Vec::new())
+        self.fetch_pull_requests_with_state_and_stats(PollQueryState::default())
             .await
             .map(|(prs, _)| prs)
     }
 
     pub async fn fetch_pull_requests_with_state(
         &self,
-        previous_prs: Vec<PullRequest>,
+        poll_state: PollQueryState,
     ) -> Result<Vec<PullRequest>> {
-        self.fetch_pull_requests_with_state_and_stats(previous_prs)
+        self.fetch_pull_requests_with_state_and_stats(poll_state)
             .await
             .map(|(prs, _)| prs)
     }
 
     pub async fn fetch_pull_requests_with_state_and_stats(
         &self,
-        previous_prs: Vec<PullRequest>,
+        poll_state: PollQueryState,
     ) -> Result<(Vec<PullRequest>, GitHubRequestStats)> {
         let metrics = GitHubRequestMetrics::default();
         let author = match &self.config.author {
             Some(author) => author.clone(),
             None => self.fetch_viewer_login(&metrics).await?,
         };
-        let previous_prs = previous_prs
+        let previous_prs = poll_state
+            .previous_prs
             .into_iter()
             .map(|pr| (pr.key.clone(), pr))
             .collect::<HashMap<_, _>>();
+        let frozen_pr_keys = poll_state
+            .frozen_pr_keys
+            .into_iter()
+            .collect::<HashSet<_>>();
+        let previous_prs = Arc::new(previous_prs);
+        let frozen_pr_keys = Arc::new(frozen_pr_keys);
 
         let query = build_search_query(&self.config, &author);
         let search: SearchResponse = self
@@ -101,44 +108,64 @@ impl GitHubClient {
             )
             .await?;
 
-        let light_prs = stream::iter(search.items.into_iter().map(|item| {
+        let search_results = stream::iter(search.items.into_iter().map(|item| {
             let metrics = metrics.clone();
+            let previous_prs = previous_prs.clone();
+            let frozen_pr_keys = frozen_pr_keys.clone();
             async move {
-                let repo = parse_repo_from_api_url(&item.repository_url)
-                    .with_context(|| format!("failed to parse repo from {}", item.repository_url))?;
+                let repo = parse_repo_from_api_url(&item.repository_url).with_context(|| {
+                    format!("failed to parse repo from {}", item.repository_url)
+                })?;
+                let pr_key = format!("{repo}#{}", item.number);
+
+                if let Some(previous_pr) =
+                    reuse_frozen_pull_request(&pr_key, &frozen_pr_keys, &previous_prs)
+                {
+                    metrics.record_light_pr();
+                    metrics.record_reused_pr();
+                    return Ok::<_, anyhow::Error>(SearchResultPr::Frozen(previous_pr));
+                }
+
                 let detail = self.fetch_pull_detail(&repo, item.number, &metrics).await?;
                 let pr = build_pull_request_from_detail(&repo, item.number, detail)?;
                 metrics.record_light_pr();
-                Ok::<_, anyhow::Error>((repo, pr))
+                Ok::<_, anyhow::Error>(SearchResultPr::Light { repo, pr })
             }
         }))
         .buffer_unordered(6)
         .try_collect::<Vec<_>>()
         .await?;
 
-        let prs = stream::iter(light_prs.into_iter().map(|(repo, light_pr)| {
+        let prs = stream::iter(search_results.into_iter().map(|search_result| {
             let author = author.clone();
-            let previous_pr = previous_prs.get(&light_pr.key).cloned();
+            let previous_prs = previous_prs.clone();
             let metrics = metrics.clone();
             async move {
-                if should_refresh_signal_details(&light_pr, previous_pr.as_ref()) {
-                    let pr = self
-                        .hydrate_pull_request_signals(&repo, &author, light_pr, &metrics)
-                        .await?;
-                    metrics.record_hydrated_pr();
-                    Ok::<PullRequest, anyhow::Error>(pr)
-                } else if let Some(previous_pr) = previous_pr {
-                    metrics.record_reused_pr();
-                    Ok::<PullRequest, anyhow::Error>(reuse_cached_signal_details(
-                        light_pr,
-                        &previous_pr,
-                    ))
-                } else {
-                    let pr = self
-                        .hydrate_pull_request_signals(&repo, &author, light_pr, &metrics)
-                        .await?;
-                    metrics.record_hydrated_pr();
-                    Ok::<PullRequest, anyhow::Error>(pr)
+                match search_result {
+                    SearchResultPr::Frozen(pr) => Ok::<PullRequest, anyhow::Error>(pr),
+                    SearchResultPr::Light { repo, pr: light_pr } => {
+                        let previous_pr = previous_prs.get(&light_pr.key).cloned();
+
+                        if should_refresh_signal_details(&light_pr, previous_pr.as_ref()) {
+                            let pr = self
+                                .hydrate_pull_request_signals(&repo, &author, light_pr, &metrics)
+                                .await?;
+                            metrics.record_hydrated_pr();
+                            Ok::<PullRequest, anyhow::Error>(pr)
+                        } else if let Some(previous_pr) = previous_pr {
+                            metrics.record_reused_pr();
+                            Ok::<PullRequest, anyhow::Error>(reuse_cached_signal_details(
+                                light_pr,
+                                &previous_pr,
+                            ))
+                        } else {
+                            let pr = self
+                                .hydrate_pull_request_signals(&repo, &author, light_pr, &metrics)
+                                .await?;
+                            metrics.record_hydrated_pr();
+                            Ok::<PullRequest, anyhow::Error>(pr)
+                        }
+                    }
                 }
             }
         }))
@@ -303,19 +330,19 @@ impl GitHubProvider for GitHubClient {
 
     fn fetch_pull_requests_with_state(
         &self,
-        previous_prs: Vec<PullRequest>,
+        poll_state: PollQueryState,
     ) -> BoxFuture<'_, Result<Vec<PullRequest>>> {
         Box::pin(
-            async move { GitHubClient::fetch_pull_requests_with_state(self, previous_prs).await },
+            async move { GitHubClient::fetch_pull_requests_with_state(self, poll_state).await },
         )
     }
 
     fn fetch_pull_requests_with_state_and_stats(
         &self,
-        previous_prs: Vec<PullRequest>,
+        poll_state: PollQueryState,
     ) -> BoxFuture<'_, Result<(Vec<PullRequest>, GitHubRequestStats)>> {
         Box::pin(async move {
-            GitHubClient::fetch_pull_requests_with_state_and_stats(self, previous_prs).await
+            GitHubClient::fetch_pull_requests_with_state_and_stats(self, poll_state).await
         })
     }
 
@@ -525,6 +552,11 @@ struct CiSummary {
     updated_at: Option<DateTime<Utc>>,
 }
 
+enum SearchResultPr {
+    Frozen(PullRequest),
+    Light { repo: String, pr: PullRequest },
+}
+
 fn build_pull_request_from_detail(
     repo: &str,
     number: u64,
@@ -592,6 +624,17 @@ fn apply_signal_summary(
     pr.review_comment_count = review_summary.review_comment_count;
     pr.issue_comment_count = review_summary.issue_comment_count;
     pr.latest_reviewer_activity_at = review_summary.latest_activity_at;
+}
+
+fn reuse_frozen_pull_request(
+    pr_key: &str,
+    frozen_pr_keys: &HashSet<String>,
+    previous_prs: &HashMap<String, PullRequest>,
+) -> Option<PullRequest> {
+    frozen_pr_keys
+        .contains(pr_key)
+        .then(|| previous_prs.get(pr_key).cloned())
+        .flatten()
 }
 
 fn reuse_cached_signal_details(mut pr: PullRequest, previous: &PullRequest) -> PullRequest {
@@ -845,9 +888,13 @@ fn parse_pr_key(pr_key: &str) -> Result<(String, u64)> {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::{HashMap, HashSet};
+
     use chrono::{Duration, TimeZone};
 
-    use super::{reuse_cached_signal_details, should_refresh_signal_details};
+    use super::{
+        reuse_cached_signal_details, reuse_frozen_pull_request, should_refresh_signal_details,
+    };
     use crate::model::{CiStatus, PullRequest, ReviewDecision};
 
     fn sample_pull_request() -> PullRequest {
@@ -958,5 +1005,19 @@ mod tests {
             merged.latest_reviewer_activity_at,
             previous.latest_reviewer_activity_at
         );
+    }
+
+    #[test]
+    fn frozen_pr_reuses_the_previous_snapshot() {
+        let previous = sample_pull_request();
+        let previous_prs = HashMap::from([(previous.key.clone(), previous.clone())]);
+        let frozen_pr_keys = HashSet::from([previous.key.clone()]);
+
+        let reused = reuse_frozen_pull_request(&previous.key, &frozen_pr_keys, &previous_prs)
+            .expect("frozen PR should reuse its previous snapshot");
+
+        assert_eq!(reused.title, previous.title);
+        assert_eq!(reused.ci_status, previous.ci_status);
+        assert_eq!(reused.review_decision, previous.review_decision);
     }
 }

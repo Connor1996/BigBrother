@@ -3,7 +3,7 @@ use std::{
     path::PathBuf,
     sync::{
         atomic::{AtomicUsize, Ordering},
-        Arc,
+        Arc, Mutex,
     },
     time::{SystemTime, UNIX_EPOCH},
 };
@@ -27,7 +27,7 @@ use symphony_rs::{
     },
     prompt::build_prompt,
     runner::{RunOutcome, RunRequest, RunUpdate},
-    service::{AgentRunner, GitHubProvider, GitHubRequestStats, Supervisor},
+    service::{AgentRunner, GitHubProvider, GitHubRequestStats, PollQueryState, Supervisor},
     web,
 };
 use tokio::sync::Semaphore;
@@ -86,6 +86,7 @@ struct CountingStatefulGitHubProvider {
     full_fetches: Arc<AtomicUsize>,
     stateful_fetches: Arc<AtomicUsize>,
     last_previous_len: Arc<AtomicUsize>,
+    last_frozen_len: Arc<AtomicUsize>,
 }
 
 impl GitHubProvider for CountingStatefulGitHubProvider {
@@ -100,16 +101,77 @@ impl GitHubProvider for CountingStatefulGitHubProvider {
 
     fn fetch_pull_requests_with_state(
         &self,
-        previous_prs: Vec<PullRequest>,
+        poll_state: PollQueryState,
     ) -> BoxFuture<'_, Result<Vec<PullRequest>>> {
         let prs = self.prs.clone();
         let stateful_fetches = self.stateful_fetches.clone();
         let last_previous_len = self.last_previous_len.clone();
+        let last_frozen_len = self.last_frozen_len.clone();
         Box::pin(async move {
             stateful_fetches.fetch_add(1, Ordering::SeqCst);
-            last_previous_len.store(previous_prs.len(), Ordering::SeqCst);
+            last_previous_len.store(poll_state.previous_prs.len(), Ordering::SeqCst);
+            last_frozen_len.store(poll_state.frozen_pr_keys.len(), Ordering::SeqCst);
             Ok(prs)
         })
+    }
+}
+
+#[derive(Clone)]
+struct FreezingAwareMutableGitHubProvider {
+    prs: Arc<Mutex<Vec<PullRequest>>>,
+    last_frozen_len: Arc<AtomicUsize>,
+}
+
+impl GitHubProvider for FreezingAwareMutableGitHubProvider {
+    fn fetch_pull_requests(&self) -> BoxFuture<'_, Result<Vec<PullRequest>>> {
+        let prs = self
+            .prs
+            .lock()
+            .expect("provider prs mutex should not be poisoned")
+            .clone();
+        Box::pin(async move { Ok(prs) })
+    }
+
+    fn fetch_pull_requests_with_state(
+        &self,
+        poll_state: PollQueryState,
+    ) -> BoxFuture<'_, Result<Vec<PullRequest>>> {
+        let prs = self
+            .prs
+            .lock()
+            .expect("provider prs mutex should not be poisoned")
+            .clone();
+        let last_frozen_len = self.last_frozen_len.clone();
+        Box::pin(async move {
+            last_frozen_len.store(poll_state.frozen_pr_keys.len(), Ordering::SeqCst);
+            let previous_prs = poll_state
+                .previous_prs
+                .into_iter()
+                .map(|pr| (pr.key.clone(), pr))
+                .collect::<BTreeMap<_, _>>();
+
+            Ok(prs
+                .into_iter()
+                .map(|pr| {
+                    if poll_state.frozen_pr_keys.contains(&pr.key) {
+                        previous_prs.get(&pr.key).cloned().unwrap_or(pr)
+                    } else {
+                        pr
+                    }
+                })
+                .collect())
+        })
+    }
+
+    fn fetch_pull_request(&self, pr_key: String) -> BoxFuture<'_, Result<Option<PullRequest>>> {
+        let pr = self
+            .prs
+            .lock()
+            .expect("provider prs mutex should not be poisoned")
+            .iter()
+            .find(|pr| pr.key == pr_key)
+            .cloned();
+        Box::pin(async move { Ok(pr) })
     }
 }
 
@@ -127,7 +189,7 @@ impl GitHubProvider for StatsGitHubProvider {
 
     fn fetch_pull_requests_with_state_and_stats(
         &self,
-        _previous_prs: Vec<PullRequest>,
+        _poll_state: PollQueryState,
     ) -> BoxFuture<'_, Result<(Vec<PullRequest>, GitHubRequestStats)>> {
         let prs = self.prs.clone();
         let stats = self.stats.clone();
@@ -476,6 +538,7 @@ async fn scheduled_poll_uses_stateful_fetch_with_dashboard_snapshot() {
         full_fetches: Arc::new(AtomicUsize::new(0)),
         stateful_fetches: Arc::new(AtomicUsize::new(0)),
         last_previous_len: Arc::new(AtomicUsize::new(usize::MAX)),
+        last_frozen_len: Arc::new(AtomicUsize::new(usize::MAX)),
     };
     let supervisor = Arc::new(
         Supervisor::new(
@@ -526,6 +589,74 @@ async fn scheduled_poll_uses_stateful_fetch_with_dashboard_snapshot() {
         provider.last_previous_len.load(Ordering::SeqCst),
         1,
         "second poll should receive the tracked PR from the previous snapshot",
+    );
+    assert_eq!(
+        provider.last_frozen_len.load(Ordering::SeqCst),
+        0,
+        "non-paused dashboard snapshots should not mark any PRs as frozen",
+    );
+}
+
+#[tokio::test]
+async fn scheduled_poll_keeps_paused_pr_snapshot_frozen() {
+    let provider = FreezingAwareMutableGitHubProvider {
+        prs: Arc::new(Mutex::new(vec![idle_pr()])),
+        last_frozen_len: Arc::new(AtomicUsize::new(usize::MAX)),
+    };
+    let supervisor = Arc::new(
+        Supervisor::new(
+            sample_config(
+                unique_temp_path("state.json"),
+                unique_temp_path("workspaces"),
+            ),
+            Arc::new(provider.clone()),
+            Arc::new(FakeAgentRunner {
+                invocations: Arc::new(AtomicUsize::new(0)),
+                started: Arc::new(Semaphore::new(0)),
+                allow_finish: Arc::new(Semaphore::new(1)),
+            }),
+        )
+        .expect("supervisor should initialize"),
+    );
+
+    supervisor
+        .poll_once()
+        .await
+        .expect("initial poll should succeed");
+    supervisor
+        .set_pr_paused("openai/symphony#1", true)
+        .await
+        .expect("pause operation should succeed")
+        .expect("tracked PR should exist");
+
+    let mut changed = idle_pr();
+    changed.title = "Merged while paused".to_owned();
+    changed.is_merged = true;
+    changed.updated_at = changed.updated_at + chrono::Duration::minutes(30);
+    *provider
+        .prs
+        .lock()
+        .expect("provider prs mutex should not be poisoned") = vec![changed];
+
+    supervisor
+        .poll_once()
+        .await
+        .expect("paused poll should still succeed");
+
+    let shared_state = supervisor.shared_state();
+    let state = shared_state
+        .lock()
+        .expect("dashboard state mutex should not be poisoned");
+    let tracked = state
+        .tracked_prs
+        .get("openai/symphony#1")
+        .expect("paused PR should remain tracked");
+    assert_eq!(tracked.pull_request.title, "Keep polling healthy");
+    assert_eq!(tracked.status, TrackingStatus::Paused);
+    assert_eq!(
+        provider.last_frozen_len.load(Ordering::SeqCst),
+        1,
+        "scheduled polls should tell the provider which paused PRs are frozen",
     );
 }
 

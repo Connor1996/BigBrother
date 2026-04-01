@@ -1,5 +1,5 @@
 use std::{
-    collections::{BTreeMap, HashMap},
+    collections::{BTreeMap, BTreeSet, HashMap},
     sync::{Arc, Mutex},
 };
 
@@ -25,19 +25,19 @@ pub trait GitHubProvider: Send + Sync {
 
     fn fetch_pull_requests_with_state(
         &self,
-        previous_prs: Vec<PullRequest>,
+        poll_state: PollQueryState,
     ) -> BoxFuture<'_, Result<Vec<PullRequest>>> {
-        let _ = previous_prs;
+        let _ = poll_state;
         Box::pin(async move { self.fetch_pull_requests().await })
     }
 
     fn fetch_pull_requests_with_state_and_stats(
         &self,
-        previous_prs: Vec<PullRequest>,
+        poll_state: PollQueryState,
     ) -> BoxFuture<'_, Result<(Vec<PullRequest>, GitHubRequestStats)>> {
         Box::pin(async move {
             Ok((
-                self.fetch_pull_requests_with_state(previous_prs).await?,
+                self.fetch_pull_requests_with_state(poll_state).await?,
                 GitHubRequestStats::default(),
             ))
         })
@@ -68,6 +68,12 @@ pub trait GitHubProvider: Send + Sync {
 
 pub trait AgentRunner: Send + Sync {
     fn run(&self, request: RunRequest) -> BoxFuture<'static, RunOutcome>;
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct PollQueryState {
+    pub previous_prs: Vec<PullRequest>,
+    pub frozen_pr_keys: BTreeSet<String>,
 }
 
 const MAX_AUTOMATIC_RETRIES: u32 = 5;
@@ -619,7 +625,7 @@ impl Supervisor {
     ) -> Result<(Vec<PullRequest>, GitHubRequestStats)> {
         if let Some(pr_key) = preferred_pr_key {
             if !allow_fallback {
-                let mut prs = current_snapshot_prs(&self.shared_state);
+                let mut prs = current_poll_query_state(&self.shared_state).previous_prs;
                 let (fetched, stats) = self
                     .provider
                     .fetch_pull_request_with_stats(pr_key.to_owned())
@@ -630,7 +636,7 @@ impl Supervisor {
         }
 
         self.provider
-            .fetch_pull_requests_with_state_and_stats(current_snapshot_prs(&self.shared_state))
+            .fetch_pull_requests_with_state_and_stats(current_poll_query_state(&self.shared_state))
             .await
     }
 }
@@ -693,9 +699,8 @@ fn refresh_dashboard(
     active_runs: &HashMap<String, ActiveRun>,
     poll_interval_secs: u64,
 ) {
-    let tracked = build_tracked_prs(prs, persisted_state, active_runs);
-
     let mut state = shared_state.lock().expect("dashboard state mutex poisoned");
+    let tracked = build_tracked_prs(prs, persisted_state, active_runs, &state.tracked_prs);
     state.tracked_prs = tracked;
     state.next_poll_due_at = Some(
         Utc::now() + chrono::Duration::seconds(poll_interval_secs.min(i64::MAX as u64) as i64),
@@ -706,52 +711,85 @@ fn build_tracked_prs(
     prs: &[PullRequest],
     persisted_state: &PersistentStateFile,
     active_runs: &HashMap<String, ActiveRun>,
+    previous_tracked: &BTreeMap<String, TrackedPr>,
 ) -> BTreeMap<String, TrackedPr> {
     let mut tracked = BTreeMap::new();
 
     for pr in prs {
-        let persisted = persisted_state
-            .prs
-            .get(&pr.key)
-            .cloned()
-            .unwrap_or_default();
-        let attention_reason = determine_attention_reason(pr, &persisted);
-        let active_run = active_runs.get(&pr.key);
-
         tracked.insert(
             pr.key.clone(),
-            TrackedPr {
-                pull_request: pr.clone(),
-                status: derive_status(pr, &persisted, attention_reason, active_run.is_some()),
-                attention_reason,
-                persisted,
-                runner: active_run.map(|active| RunnerState {
-                    status: TrackingStatus::Running,
-                    started_at: active.started_at,
-                    finished_at: None,
-                    attempt: 1,
-                    trigger: active.trigger,
-                    summary: "waiting for Codex CLI transcript...".to_owned(),
-                    live_output: None,
-                    live_terminal: None,
-                    last_terminal_output_at: None,
-                    exit_code: None,
-                }),
-            },
+            build_tracked_pr(pr, persisted_state, active_runs),
+        );
+    }
+
+    for (pr_key, previous) in previous_tracked {
+        if tracked.contains_key(pr_key) {
+            continue;
+        }
+
+        let persisted = persisted_state.prs.get(pr_key).cloned().unwrap_or_default();
+        if !persisted.paused {
+            continue;
+        }
+
+        tracked.insert(
+            pr_key.clone(),
+            build_tracked_pr(&previous.pull_request, persisted_state, active_runs),
         );
     }
 
     tracked
 }
 
-fn current_snapshot_prs(shared_state: &Arc<Mutex<DashboardState>>) -> Vec<PullRequest> {
-    shared_state
-        .lock()
-        .expect("dashboard state mutex poisoned")
-        .tracked_prs
-        .values()
-        .map(|tracked| tracked.pull_request.clone())
-        .collect()
+fn build_tracked_pr(
+    pr: &PullRequest,
+    persisted_state: &PersistentStateFile,
+    active_runs: &HashMap<String, ActiveRun>,
+) -> TrackedPr {
+    let persisted = persisted_state
+        .prs
+        .get(&pr.key)
+        .cloned()
+        .unwrap_or_default();
+    let attention_reason = determine_attention_reason(pr, &persisted);
+    let active_run = active_runs.get(&pr.key);
+
+    TrackedPr {
+        pull_request: pr.clone(),
+        status: derive_status(pr, &persisted, attention_reason, active_run.is_some()),
+        attention_reason,
+        persisted,
+        runner: active_run.map(|active| RunnerState {
+            status: TrackingStatus::Running,
+            started_at: active.started_at,
+            finished_at: None,
+            attempt: 1,
+            trigger: active.trigger,
+            summary: "waiting for Codex CLI transcript...".to_owned(),
+            live_output: None,
+            live_terminal: None,
+            last_terminal_output_at: None,
+            exit_code: None,
+        }),
+    }
+}
+
+fn current_poll_query_state(shared_state: &Arc<Mutex<DashboardState>>) -> PollQueryState {
+    let state = shared_state.lock().expect("dashboard state mutex poisoned");
+
+    PollQueryState {
+        previous_prs: state
+            .tracked_prs
+            .values()
+            .map(|tracked| tracked.pull_request.clone())
+            .collect(),
+        frozen_pr_keys: state
+            .tracked_prs
+            .iter()
+            .filter(|(_, tracked)| tracked.persisted.paused)
+            .map(|(pr_key, _)| pr_key.clone())
+            .collect(),
+    }
 }
 
 fn merge_targeted_pr_into_list(
@@ -1011,7 +1049,10 @@ fn char_boundary(text: &str, char_index: usize) -> usize {
 
 #[cfg(test)]
 mod tests {
-    use std::{collections::HashMap, path::PathBuf};
+    use std::{
+        collections::{BTreeMap, HashMap},
+        path::PathBuf,
+    };
 
     use chrono::{TimeZone, Utc};
 
@@ -1230,6 +1271,36 @@ mod tests {
             derive_status(&pr, &persisted, Some(AttentionReason::CiFailed), true),
             TrackingStatus::Running
         );
+    }
+
+    #[test]
+    fn build_tracked_prs_preserves_paused_snapshot_when_poll_omits_it() {
+        let pr = sample_pr();
+        let persisted = PersistentPrState {
+            paused: true,
+            ..PersistentPrState::default()
+        };
+        let persisted_state = PersistentStateFile {
+            prs: [(pr.key.clone(), persisted.clone())].into_iter().collect(),
+        };
+        let previous_tracked = BTreeMap::from([(
+            pr.key.clone(),
+            TrackedPr {
+                pull_request: pr.clone(),
+                status: TrackingStatus::Paused,
+                attention_reason: None,
+                persisted,
+                runner: None,
+            },
+        )]);
+
+        let tracked = build_tracked_prs(&[], &persisted_state, &HashMap::new(), &previous_tracked);
+        let frozen = tracked
+            .get(&pr.key)
+            .expect("paused PR should be preserved from the previous snapshot");
+
+        assert_eq!(frozen.pull_request.title, pr.title);
+        assert_eq!(frozen.status, TrackingStatus::Paused);
     }
 
     #[test]
