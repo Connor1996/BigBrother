@@ -56,6 +56,7 @@ impl GitHubProvider for FakeGitHubProvider {
 #[derive(Clone)]
 struct CountingTargetedGitHubProvider {
     prs: Vec<PullRequest>,
+    total_matching_prs: Option<usize>,
     full_fetches: Arc<AtomicUsize>,
     targeted_fetches: Arc<AtomicUsize>,
 }
@@ -67,6 +68,25 @@ impl GitHubProvider for CountingTargetedGitHubProvider {
         Box::pin(async move {
             full_fetches.fetch_add(1, Ordering::SeqCst);
             Ok(prs)
+        })
+    }
+
+    fn fetch_pull_requests_with_state_and_stats(
+        &self,
+        _poll_state: PollQueryState,
+    ) -> BoxFuture<'_, Result<(Vec<PullRequest>, GitHubRequestStats)>> {
+        let prs = self.prs.clone();
+        let total_matching_prs = self.total_matching_prs;
+        let full_fetches = self.full_fetches.clone();
+        Box::pin(async move {
+            full_fetches.fetch_add(1, Ordering::SeqCst);
+            Ok((
+                prs,
+                GitHubRequestStats {
+                    total_matching_prs,
+                    ..GitHubRequestStats::default()
+                },
+            ))
         })
     }
 
@@ -362,6 +382,7 @@ async fn mvp_flow_tracks_prs_runs_actionable_one_and_does_not_duplicate() {
 
     let health = get_json(supervisor, "/api/health").await;
     assert_eq!(health["tracked_prs"], 2);
+    assert_eq!(health["all_prs"], 2);
     assert_eq!(health["running_prs"], 0);
     assert!(health["ok"].as_bool().unwrap_or(false));
 }
@@ -1240,6 +1261,7 @@ async fn paused_pr_does_not_auto_run_until_resumed() {
 async fn resume_targeted_check_fetches_only_the_resumed_pr() {
     let provider = CountingTargetedGitHubProvider {
         prs: vec![actionable_pr()],
+        total_matching_prs: None,
         full_fetches: Arc::new(AtomicUsize::new(0)),
         targeted_fetches: Arc::new(AtomicUsize::new(0)),
     };
@@ -1302,6 +1324,61 @@ async fn resume_targeted_check_fetches_only_the_resumed_pr() {
         provider.full_fetches.load(Ordering::SeqCst),
         0,
         "resume should not fall back to a full authored-PR refresh",
+    );
+}
+
+#[tokio::test]
+async fn health_keeps_total_matching_prs_after_targeted_resume_check() {
+    let provider = CountingTargetedGitHubProvider {
+        prs: vec![idle_pr()],
+        total_matching_prs: Some(7),
+        full_fetches: Arc::new(AtomicUsize::new(0)),
+        targeted_fetches: Arc::new(AtomicUsize::new(0)),
+    };
+    let supervisor = Arc::new(
+        Supervisor::new(
+            sample_config(
+                unique_temp_path("state.json"),
+                unique_temp_path("workspaces"),
+            ),
+            Arc::new(provider.clone()),
+            Arc::new(FakeAgentRunner {
+                invocations: Arc::new(AtomicUsize::new(0)),
+                started: Arc::new(Semaphore::new(0)),
+                allow_finish: Arc::new(Semaphore::new(0)),
+            }),
+        )
+        .expect("supervisor should initialize"),
+    );
+
+    supervisor
+        .poll_once()
+        .await
+        .expect("initial poll should succeed");
+    let initial_health = get_json(supervisor.clone(), "/api/health").await;
+    assert_eq!(initial_health["tracked_prs"], 1);
+    assert_eq!(initial_health["all_prs"], 7);
+
+    supervisor
+        .set_pr_paused("openai/symphony#1", true)
+        .await
+        .expect("pause operation should succeed")
+        .expect("tracked PR should exist");
+    supervisor
+        .set_pr_paused("openai/symphony#1", false)
+        .await
+        .expect("resume operation should succeed")
+        .expect("tracked PR should exist");
+
+    wait_for_invocations(&provider.targeted_fetches, 1).await;
+
+    let resumed_health = get_json(supervisor, "/api/health").await;
+    assert_eq!(resumed_health["tracked_prs"], 1);
+    assert_eq!(resumed_health["all_prs"], 7);
+    assert_eq!(
+        provider.full_fetches.load(Ordering::SeqCst),
+        1,
+        "targeted resume checks should preserve the prior full-poll total instead of forcing another full refresh",
     );
 }
 

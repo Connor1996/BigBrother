@@ -590,6 +590,13 @@ Optional for MVP:
 - `GET /api/prs/:repo/:number/runs`
 - `GET /api/config/redacted`
 
+Current prototype health payload should include:
+
+- `tracked_prs`
+- `all_prs`
+- `running_prs`
+- poll timestamps and the latest poll error, if any
+
 ### 19.2 Live Updates
 
 At least one of:
@@ -626,6 +633,7 @@ The MVP UI can be a single page that shows:
 
 - daemon health
 - last poll time
+- a `Tracked PRs` hero stat rendered as `tracked/all`, where `all` comes from the latest authored-PR search total and never drops below the number of rows currently shown
 - a right-aligned dashboard tab switch for `PRs` and `Activity`
 - current tracked PR rows
 - each PR’s status, CI state, review state, and latest action summary

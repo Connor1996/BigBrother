@@ -300,6 +300,7 @@ pub struct ActivityEvent {
 #[derive(Debug, Clone, Default)]
 pub struct DashboardState {
     pub tracked_prs: BTreeMap<String, TrackedPr>,
+    pub total_matching_prs: Option<usize>,
     pub activity: VecDeque<ActivityEvent>,
     pub last_poll_started_at: Option<DateTime<Utc>>,
     pub last_poll_finished_at: Option<DateTime<Utc>>,

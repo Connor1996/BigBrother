@@ -81,6 +81,7 @@ const MAX_LIVE_OUTPUT_CHARS: usize = 16_000;
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct GitHubRequestStats {
+    pub total_matching_prs: Option<usize>,
     pub viewer_requests: usize,
     pub search_requests: usize,
     pub pull_detail_requests: usize,
@@ -439,6 +440,7 @@ impl Supervisor {
                 &inner.persisted_state,
                 &inner.active_runs,
                 self.config.daemon.poll_interval_secs,
+                fetch_stats.total_matching_prs,
             );
 
             let selected = select_run_request(
@@ -465,6 +467,7 @@ impl Supervisor {
                     &inner.persisted_state,
                     &inner.active_runs,
                     self.config.daemon.poll_interval_secs,
+                    fetch_stats.total_matching_prs,
                 );
                 self.push_event(
                     EventLevel::Info,
@@ -583,6 +586,7 @@ impl Supervisor {
                 &inner.persisted_state,
                 &inner.active_runs,
                 self.config.daemon.poll_interval_secs,
+                fetch_stats.total_matching_prs,
             );
 
             self.push_event(
@@ -691,10 +695,18 @@ fn refresh_dashboard(
     persisted_state: &PersistentStateFile,
     active_runs: &HashMap<String, ActiveRun>,
     poll_interval_secs: u64,
+    total_matching_prs: Option<usize>,
 ) {
     let mut state = shared_state.lock().expect("dashboard state mutex poisoned");
     let tracked = build_tracked_prs(prs, persisted_state, active_runs, &state.tracked_prs);
+    let tracked_len = tracked.len();
+    let previous_total = state.total_matching_prs.unwrap_or(tracked_len);
     state.tracked_prs = tracked;
+    state.total_matching_prs = Some(
+        total_matching_prs
+            .unwrap_or(previous_total)
+            .max(tracked_len),
+    );
     state.next_poll_due_at = Some(
         Utc::now() + chrono::Duration::seconds(poll_interval_secs.min(i64::MAX as u64) as i64),
     );

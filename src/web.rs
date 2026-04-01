@@ -654,7 +654,7 @@ const INDEX_HTML: &str = r#"<!doctype html>
       const activityPayload = await activityRes.json();
 
       document.getElementById("health-status").textContent = health.ok ? "Healthy" : "Attention needed";
-      document.getElementById("health-count").textContent = String(health.tracked_prs);
+      document.getElementById("health-count").textContent = `${health.tracked_prs}/${health.all_prs}`;
       document.getElementById("health-running").textContent = String(health.running_prs);
       document.getElementById("health-poll").textContent = fmtTime(health.last_poll_finished_at);
       latestPrs = prsPayload.prs || [];
@@ -980,6 +980,7 @@ const PR_DETAIL_HTML: &str = r##"<!doctype html>
 struct HealthResponse {
     ok: bool,
     tracked_prs: usize,
+    all_prs: usize,
     running_prs: usize,
     last_poll_started_at: Option<DateTime<Utc>>,
     last_poll_finished_at: Option<DateTime<Utc>>,
@@ -1086,6 +1087,11 @@ async fn pr_detail_page() -> Html<&'static str> {
 
 async fn health(State(supervisor): State<Arc<Supervisor>>) -> Json<HealthResponse> {
     let snapshot = supervisor.snapshot();
+    let tracked_prs = snapshot.tracked_prs.len();
+    let all_prs = snapshot
+        .total_matching_prs
+        .unwrap_or(tracked_prs)
+        .max(tracked_prs);
     let running_prs = snapshot
         .tracked_prs
         .values()
@@ -1094,7 +1100,8 @@ async fn health(State(supervisor): State<Arc<Supervisor>>) -> Json<HealthRespons
 
     Json(HealthResponse {
         ok: snapshot.last_poll_error.is_none(),
-        tracked_prs: snapshot.tracked_prs.len(),
+        tracked_prs,
+        all_prs,
         running_prs,
         last_poll_started_at: snapshot.last_poll_started_at,
         last_poll_finished_at: snapshot.last_poll_finished_at,

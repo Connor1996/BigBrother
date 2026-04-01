@@ -107,6 +107,7 @@ impl GitHubClient {
                 RequestCategory::Search,
             )
             .await?;
+        let total_matching_prs = search.total_count;
 
         let search_results = stream::iter(search.items.into_iter().map(|item| {
             let metrics = metrics.clone();
@@ -175,7 +176,9 @@ impl GitHubClient {
 
         let mut prs = prs;
         prs.sort_by(|left, right| right.updated_at.cmp(&left.updated_at));
-        Ok((prs, metrics.snapshot()))
+        let mut stats = metrics.snapshot();
+        stats.total_matching_prs = Some(total_matching_prs);
+        Ok((prs, stats))
     }
 
     pub async fn fetch_pull_request_by_key(&self, pr_key: &str) -> Result<Option<PullRequest>> {
@@ -405,6 +408,7 @@ impl GitHubRequestMetrics {
 
     fn snapshot(&self) -> GitHubRequestStats {
         GitHubRequestStats {
+            total_matching_prs: None,
             viewer_requests: self.inner.viewer_requests.load(Ordering::Relaxed),
             search_requests: self.inner.search_requests.load(Ordering::Relaxed),
             pull_detail_requests: self.inner.pull_detail_requests.load(Ordering::Relaxed),
@@ -426,6 +430,8 @@ struct ViewerResponse {
 
 #[derive(Debug, Deserialize)]
 struct SearchResponse {
+    #[serde(default)]
+    total_count: usize,
     items: Vec<SearchItem>,
 }
 
