@@ -386,6 +386,7 @@ Default v0 policy:
 - allow up to five automatic retries after the initial failed run, then auto-pause the PR
 - resuming a paused PR resets retry bookkeeping and triggers an immediate targeted re-check for that PR instead of waiting for the next daemon poll
 - the immediate resume re-check should prefer the resumed PR over unrelated actionable PRs, while still respecting the configured global concurrency
+- the immediate resume re-check should fetch only the resumed PR from GitHub rather than refreshing the entire authored PR set
 
 ## 13. Workspace Model
 

@@ -70,7 +70,12 @@ impl GitHubClient {
 
         let prs = stream::iter(search.items.into_iter().map(|item| {
             let author = author.clone();
-            async move { self.enrich_pull_request(item, &author).await }
+            async move {
+                let repo = parse_repo_from_api_url(&item.repository_url).with_context(|| {
+                    format!("failed to parse repo from {}", item.repository_url)
+                })?;
+                self.enrich_pull_request(&repo, item.number, &author).await
+            }
         }))
         .buffer_unordered(6)
         .try_collect::<Vec<_>>()
@@ -81,22 +86,36 @@ impl GitHubClient {
         Ok(prs)
     }
 
+    pub async fn fetch_pull_request_by_key(&self, pr_key: &str) -> Result<Option<PullRequest>> {
+        let (repo, number) = parse_pr_key(pr_key)?;
+        let author = match &self.config.author {
+            Some(author) => author.clone(),
+            None => self.fetch_viewer_login().await?,
+        };
+
+        self.enrich_pull_request(&repo, number, &author)
+            .await
+            .map(Some)
+    }
+
     async fn fetch_viewer_login(&self) -> Result<String> {
         let user: ViewerResponse = self.get_json("user", &[]).await?;
         Ok(user.login)
     }
 
-    async fn enrich_pull_request(&self, item: SearchItem, author: &str) -> Result<PullRequest> {
-        let repo = parse_repo_from_api_url(&item.repository_url)
-            .with_context(|| format!("failed to parse repo from {}", item.repository_url))?;
-
+    async fn enrich_pull_request(
+        &self,
+        repo: &str,
+        number: u64,
+        author: &str,
+    ) -> Result<PullRequest> {
         let detail: PullDetail = self
-            .get_json(&format!("repos/{repo}/pulls/{}", item.number), &[])
+            .get_json(&format!("repos/{repo}/pulls/{number}"), &[])
             .await?;
 
-        let reviews_path = format!("repos/{repo}/pulls/{}/reviews", item.number);
-        let review_comments_path = format!("repos/{repo}/pulls/{}/comments", item.number);
-        let issue_comments_path = format!("repos/{repo}/issues/{}/comments", item.number);
+        let reviews_path = format!("repos/{repo}/pulls/{number}/reviews");
+        let review_comments_path = format!("repos/{repo}/pulls/{number}/comments");
+        let issue_comments_path = format!("repos/{repo}/issues/{number}/comments");
         let check_runs_path = format!("repos/{repo}/commits/{}/check-runs", detail.head.sha);
         let combined_status_path = format!("repos/{repo}/commits/{}/status", detail.head.sha);
         let per_page = vec![("per_page", "100".to_owned())];
@@ -120,23 +139,18 @@ impl GitHubClient {
             .repo
             .as_ref()
             .map(|repo| repo.full_name.clone())
-            .unwrap_or_else(|| repo.clone());
+            .unwrap_or_else(|| repo.to_owned());
         let head_repo = detail
             .head
             .repo
             .clone()
             .or_else(|| detail.base.repo.clone())
-            .ok_or_else(|| {
-                anyhow!(
-                    "pull request {} is missing repository metadata",
-                    item.number
-                )
-            })?;
+            .ok_or_else(|| anyhow!("pull request {} is missing repository metadata", number))?;
 
         Ok(PullRequest {
-            key: format!("{repo_full_name}#{}", item.number),
+            key: format!("{repo_full_name}#{number}"),
             repo_full_name,
-            number: item.number,
+            number,
             title: detail.title,
             body: detail.body,
             url: detail.html_url,
@@ -202,6 +216,10 @@ impl GitHubClient {
 impl GitHubProvider for GitHubClient {
     fn fetch_pull_requests(&self) -> BoxFuture<'_, Result<Vec<PullRequest>>> {
         Box::pin(async move { GitHubClient::fetch_pull_requests(self).await })
+    }
+
+    fn fetch_pull_request(&self, pr_key: String) -> BoxFuture<'_, Result<Option<PullRequest>>> {
+        Box::pin(async move { self.fetch_pull_request_by_key(&pr_key).await })
     }
 }
 
@@ -510,4 +528,19 @@ fn parse_repo_from_api_url(url: &str) -> Result<String> {
     }
 
     Ok(format!("{}/{}", parts[1], parts[0]))
+}
+
+fn parse_pr_key(pr_key: &str) -> Result<(String, u64)> {
+    let (repo, number) = pr_key
+        .rsplit_once('#')
+        .ok_or_else(|| anyhow!("unsupported PR key format: {pr_key}"))?;
+    let number = number
+        .parse::<u64>()
+        .with_context(|| format!("failed to parse PR number from {pr_key}"))?;
+
+    if repo.trim().is_empty() {
+        return Err(anyhow!("unsupported PR key format: {pr_key}"));
+    }
+
+    Ok((repo.to_owned(), number))
 }

@@ -45,6 +45,38 @@ impl GitHubProvider for FakeGitHubProvider {
         let prs = self.prs.clone();
         Box::pin(async move { Ok(prs) })
     }
+
+    fn fetch_pull_request(&self, pr_key: String) -> BoxFuture<'_, Result<Option<PullRequest>>> {
+        let pr = self.prs.iter().find(|pr| pr.key == pr_key).cloned();
+        Box::pin(async move { Ok(pr) })
+    }
+}
+
+#[derive(Clone)]
+struct CountingTargetedGitHubProvider {
+    prs: Vec<PullRequest>,
+    full_fetches: Arc<AtomicUsize>,
+    targeted_fetches: Arc<AtomicUsize>,
+}
+
+impl GitHubProvider for CountingTargetedGitHubProvider {
+    fn fetch_pull_requests(&self) -> BoxFuture<'_, Result<Vec<PullRequest>>> {
+        let prs = self.prs.clone();
+        let full_fetches = self.full_fetches.clone();
+        Box::pin(async move {
+            full_fetches.fetch_add(1, Ordering::SeqCst);
+            Ok(prs)
+        })
+    }
+
+    fn fetch_pull_request(&self, pr_key: String) -> BoxFuture<'_, Result<Option<PullRequest>>> {
+        let pr = self.prs.iter().find(|pr| pr.key == pr_key).cloned();
+        let targeted_fetches = self.targeted_fetches.clone();
+        Box::pin(async move {
+            targeted_fetches.fetch_add(1, Ordering::SeqCst);
+            Ok(pr)
+        })
+    }
 }
 
 #[derive(Clone)]
@@ -725,6 +757,75 @@ async fn paused_pr_does_not_auto_run_until_resumed() {
         runner.invocations.load(Ordering::SeqCst),
         1,
         "resumed actionable PR should trigger the runner immediately",
+    );
+}
+
+#[tokio::test]
+async fn resume_targeted_check_fetches_only_the_resumed_pr() {
+    let provider = CountingTargetedGitHubProvider {
+        prs: vec![actionable_pr()],
+        full_fetches: Arc::new(AtomicUsize::new(0)),
+        targeted_fetches: Arc::new(AtomicUsize::new(0)),
+    };
+    let runner = FakeAgentRunner {
+        invocations: Arc::new(AtomicUsize::new(0)),
+        started: Arc::new(Semaphore::new(0)),
+        allow_finish: Arc::new(Semaphore::new(0)),
+    };
+    let supervisor = Arc::new(
+        Supervisor::new(
+            sample_config(
+                unique_temp_path("state.json"),
+                unique_temp_path("workspaces"),
+            ),
+            Arc::new(provider.clone()),
+            Arc::new(runner.clone()),
+        )
+        .expect("supervisor should initialize"),
+    );
+
+    {
+        let shared_state = supervisor.shared_state();
+        let mut state = shared_state
+            .lock()
+            .expect("dashboard state mutex should not be poisoned");
+        let pr = actionable_pr();
+        state.tracked_prs.insert(
+            pr.key.clone(),
+            TrackedPr {
+                pull_request: pr.clone(),
+                status: TrackingStatus::WaitingReview,
+                attention_reason: None,
+                persisted: PersistentPrState::default(),
+                runner: None,
+            },
+        );
+    }
+
+    supervisor
+        .set_pr_paused("openai/symphony#7", true)
+        .await
+        .expect("pause operation should succeed")
+        .expect("tracked PR should exist");
+
+    let resumed = supervisor
+        .set_pr_paused("openai/symphony#7", false)
+        .await
+        .expect("resume operation should succeed")
+        .expect("tracked PR should exist");
+    assert_eq!(resumed.status, TrackingStatus::NeedsAttention);
+
+    wait_for_runner_start(&runner.started).await;
+    wait_for_invocations(&provider.targeted_fetches, 1).await;
+    assert_eq!(
+        provider.targeted_fetches.load(Ordering::SeqCst),
+        1,
+        "resume should perform exactly one targeted GitHub fetch for the resumed PR",
+    );
+    assert_eq!(
+        provider.full_fetches.load(Ordering::SeqCst),
+        0,
+        "resume should not fall back to a full authored-PR refresh",
     );
 }
 

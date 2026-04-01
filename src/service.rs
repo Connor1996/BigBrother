@@ -20,6 +20,16 @@ use crate::{
 
 pub trait GitHubProvider: Send + Sync {
     fn fetch_pull_requests(&self) -> BoxFuture<'_, Result<Vec<PullRequest>>>;
+
+    fn fetch_pull_request(&self, pr_key: String) -> BoxFuture<'_, Result<Option<PullRequest>>> {
+        Box::pin(async move {
+            Ok(self
+                .fetch_pull_requests()
+                .await?
+                .into_iter()
+                .find(|pr| pr.key == pr_key))
+        })
+    }
 }
 
 pub trait AgentRunner: Send + Sync {
@@ -266,7 +276,9 @@ impl Supervisor {
             },
         );
 
-        let prs = self.provider.fetch_pull_requests().await?;
+        let prs = self
+            .fetch_prs_for_poll(preferred_pr_key, allow_fallback)
+            .await?;
 
         let selected_request = {
             let mut inner = self.inner.lock().await;
@@ -434,6 +446,23 @@ impl Supervisor {
 
         Ok(())
     }
+
+    async fn fetch_prs_for_poll(
+        &self,
+        preferred_pr_key: Option<&str>,
+        allow_fallback: bool,
+    ) -> Result<Vec<PullRequest>> {
+        if let Some(pr_key) = preferred_pr_key {
+            if !allow_fallback {
+                let mut prs = current_snapshot_prs(&self.shared_state);
+                let fetched = self.provider.fetch_pull_request(pr_key.to_owned()).await?;
+                merge_targeted_pr_into_list(&mut prs, pr_key, fetched);
+                return Ok(prs);
+            }
+        }
+
+        self.provider.fetch_pull_requests().await
+    }
 }
 
 fn select_run_request<'a>(
@@ -541,6 +570,33 @@ fn build_tracked_prs(
     }
 
     tracked
+}
+
+fn current_snapshot_prs(shared_state: &Arc<Mutex<DashboardState>>) -> Vec<PullRequest> {
+    shared_state
+        .lock()
+        .expect("dashboard state mutex poisoned")
+        .tracked_prs
+        .values()
+        .map(|tracked| tracked.pull_request.clone())
+        .collect()
+}
+
+fn merge_targeted_pr_into_list(
+    prs: &mut Vec<PullRequest>,
+    pr_key: &str,
+    fetched: Option<PullRequest>,
+) {
+    match fetched {
+        Some(pull_request) => {
+            if let Some(existing) = prs.iter_mut().find(|pr| pr.key == pr_key) {
+                *existing = pull_request;
+            } else {
+                prs.push(pull_request);
+            }
+        }
+        None => prs.retain(|pr| pr.key != pr_key),
+    }
 }
 
 pub fn determine_attention_reason(
