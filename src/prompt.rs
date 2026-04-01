@@ -42,11 +42,13 @@ pub fn build_prompt(pr: &PullRequest, reason: AttentionReason, extra: Option<&st
          \n\
          Working rules:\n\
          - Work only inside the current repository checkout.\n\
-         - Start by checking the latest CI failures and review comments for this PR.\n\
+         - Start by checking the current branch state, latest CI failures, and latest review comments for this PR.\n\
+         - If the base and head branches differ, fetch and merge the latest base branch into the PR branch yourself before addressing the trigger-specific issue.\n\
+         - If that merge produces conflicts, resolve them first, then continue addressing the original trigger.\n\
          - If code changes are needed, make them, run targeted validation, commit, and push back to the same PR branch.\n\
          - If reviewer feedback needs a textual response, leave a concise response on the PR thread when tooling is available.\n\
          - If you are blocked by missing auth, missing secrets, or ambiguous product decisions, stop and explain the blocker clearly.\n\
-         - Final output should summarize what changed, what was validated, and any remaining blocker.\n\
+         - Final output should summarize whether you merged base, how conflicts were resolved if any, what changed, what was validated, and any remaining blocker.\n\
          {extra}",
         trigger = reason.label(),
         repo = pr.repo_full_name,
@@ -67,4 +69,60 @@ pub fn build_prompt(pr: &PullRequest, reason: AttentionReason, extra: Option<&st
         body = body,
         extra = extra
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use chrono::{TimeZone, Utc};
+
+    use super::build_prompt;
+    use crate::model::{AttentionReason, CiStatus, PullRequest, ReviewDecision};
+
+    fn sample_pr() -> PullRequest {
+        PullRequest {
+            key: "openai/symphony#7".to_owned(),
+            repo_full_name: "openai/symphony".to_owned(),
+            number: 7,
+            title: "Prompt test".to_owned(),
+            body: Some("Test body".to_owned()),
+            url: "https://github.com/openai/symphony/pull/7".to_owned(),
+            author_login: "connor".to_owned(),
+            labels: vec![],
+            created_at: Utc.with_ymd_and_hms(2026, 3, 31, 12, 0, 0).unwrap(),
+            updated_at: Utc.with_ymd_and_hms(2026, 3, 31, 13, 0, 0).unwrap(),
+            head_sha: "head123".to_owned(),
+            head_ref: "feature/test".to_owned(),
+            base_sha: "base456".to_owned(),
+            base_ref: "main".to_owned(),
+            clone_url: "https://github.com/openai/symphony.git".to_owned(),
+            ssh_url: "git@github.com:openai/symphony.git".to_owned(),
+            ci_status: CiStatus::Failure,
+            ci_updated_at: None,
+            review_decision: ReviewDecision::ChangesRequested,
+            approval_count: 0,
+            review_comment_count: 2,
+            issue_comment_count: 1,
+            latest_reviewer_activity_at: Some(Utc.with_ymd_and_hms(2026, 3, 31, 13, 5, 0).unwrap()),
+            has_conflicts: true,
+            mergeable_state: Some("dirty".to_owned()),
+            is_draft: false,
+            is_closed: false,
+            is_merged: false,
+        }
+    }
+
+    #[test]
+    fn build_prompt_instructs_agent_to_merge_and_resolve_conflicts() {
+        let prompt = build_prompt(
+            &sample_pr(),
+            AttentionReason::CiFailed,
+            Some("- Extra operator note."),
+        );
+
+        assert!(prompt.contains("Trigger: CI failed"));
+        assert!(prompt.contains("merge the latest base branch into the PR branch yourself"));
+        assert!(prompt.contains("If that merge produces conflicts, resolve them first"));
+        assert!(prompt.contains("whether you merged base"));
+        assert!(prompt.contains("Additional operator instructions:\n- Extra operator note."));
+    }
 }

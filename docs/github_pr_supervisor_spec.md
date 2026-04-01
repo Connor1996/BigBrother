@@ -410,10 +410,11 @@ Rules:
 - automatically discovered paths must stay under `workspace.root`
 - the daemon must sync the tracked PR branch before each run
 - the daemon must also fetch the latest base branch before each run
-- the daemon should attempt to merge the fetched base branch into the checked-out PR branch before
-  launching the agent
-- if that merge produces conflicts, the daemon should keep the conflicted merge state in the
-  workspace so the agent can resolve it, instead of failing immediately
+- the daemon should not merge the base branch into the checked-out PR branch before launching the
+  agent
+- the agent should perform the base-branch merge itself inside the prepared workspace
+- if the agent leaves a conflicted merge state behind, a later run should keep that conflicted
+  workspace available so the agent can resume resolving it instead of starting over
 - if a later run sees the same PR head SHA, the same base SHA in `MERGE_HEAD`, and unresolved
   paths already present in the working tree, it should resume from that conflict workspace instead
   of rejecting it as a generic dirty checkout
@@ -432,7 +433,7 @@ Each run includes:
 - trigger reason
 - PR context
 - workspace path
-- workspace sync / base-merge result
+- workspace sync result
 - agent command
 - timeout
 - stdout and stderr capture
@@ -447,8 +448,11 @@ The agent prompt must include:
 - current base and head refs
 - current base and head SHAs
 - current head SHA
-- whether the base branch was auto-merged into the workspace before the run
-- whether merge conflicts are already present in the working tree
+- whether the daemon resumed an existing unresolved conflict workspace
+- explicit instruction that the agent itself should merge the latest base branch into the PR branch
+  when needed
+- explicit instruction that merge conflicts must be resolved before the trigger-specific fix is
+  considered complete
 - explicit instruction to work only in the synced workspace
 - explicit instruction to push only to the PR branch when safe
 - explicit instruction to stop and explain blockers when unsafe

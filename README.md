@@ -86,14 +86,14 @@ When Symphony RS detects a PR that needs attention, it:
 
 1. resolves an existing local repository checkout for the PR
 2. syncs the PR head branch into that checkout
-3. fetches and attempts to merge the latest base branch into the local PR branch
-4. if that base-branch merge conflicts, leaves the conflict state in the workspace for the agent to resolve
-5. if a later retry sees the same unresolved merge-conflict workspace for the same PR head/base pair, it resumes from that workspace instead of rejecting it as a generic dirty checkout
+3. fetches the latest base branch refs into that checkout without merging them
+4. if a later retry sees the same unresolved merge-conflict workspace for the same PR head/base pair, it resumes from that workspace instead of rejecting it as a generic dirty checkout
+5. asks the agent to merge the latest base branch, resolve conflicts if needed, and then continue with the CI or review fix
 6. builds an execution prompt from the PR context and trigger reason
 7. pipes that prompt to the configured agent command
 8. updates the UI and persisted state with the result
 
-The default prompt asks the agent to inspect GitHub feedback and CI, fix code in-place, run targeted validation, and push back to the PR branch if it can.
+The default prompt asks the agent to inspect GitHub feedback and CI, merge the latest base branch itself when needed, resolve conflicts before declaring success, fix code in-place, run targeted validation, and push back to the PR branch if it can.
 
 ## Current Assumptions
 

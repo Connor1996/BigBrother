@@ -43,8 +43,8 @@ pub struct RunOutcome {
 
 #[derive(Debug, Clone, Default)]
 struct WorkspaceSyncReport {
-    merged_base_branch: bool,
-    merge_conflicts_present: bool,
+    fetched_pr_branch: bool,
+    fetched_base_branch: bool,
     resumed_conflict_workspace: bool,
 }
 
@@ -52,15 +52,11 @@ impl WorkspaceSyncReport {
     fn prompt_note(&self) -> Option<&'static str> {
         if self.resumed_conflict_workspace {
             Some(
-                "- Workspace preparation detected an unresolved merge-conflict workspace from a previous run for this same PR.\n- Continue from the existing conflict markers in the working tree, then run validation, commit the resolution, and push if safe.",
+                "- Workspace preparation detected an unresolved merge-conflict workspace from a previous run for this same PR.\n- Continue from the existing conflict markers in the working tree, finish the base-branch merge yourself, then continue with the trigger-specific fix, validation, and push if safe.",
             )
-        } else if self.merge_conflicts_present {
+        } else if self.fetched_pr_branch || self.fetched_base_branch {
             Some(
-                "- Workspace preparation already merged the latest base branch into the local PR branch and Git reported merge conflicts.\n- Start by resolving the existing conflicts in the working tree, then run validation, commit the resolution, and push if safe.",
-            )
-        } else if self.merged_base_branch {
-            Some(
-                "- Workspace preparation already merged the latest base branch into the local PR branch before this run.\n- Validate the merged result, make any required follow-up fixes, then commit and push if safe.",
+                "- Workspace preparation fetched the PR head branch and latest base branch refs and checked out the PR branch locally.\n- If the base and head branches differ, you must merge the latest base branch into the PR branch yourself before addressing the trigger-specific issue.",
             )
         } else {
             None
@@ -114,8 +110,8 @@ async fn run_inner(request: &RunRequest) -> Result<(Option<i32>, String, Option<
     let workspace_path = checkout.path;
     let sync_report = if checkout.resumed_conflict_workspace {
         WorkspaceSyncReport {
-            merged_base_branch: true,
-            merge_conflicts_present: true,
+            fetched_pr_branch: false,
+            fetched_base_branch: false,
             resumed_conflict_workspace: true,
         }
     } else {
@@ -170,9 +166,10 @@ async fn run_inner(request: &RunRequest) -> Result<(Option<i32>, String, Option<
         "SYMPHONY_WORKSPACE",
         workspace_path.to_string_lossy().to_string(),
     );
+    command.env("SYMPHONY_BASE_BRANCH_MERGED", "0");
     command.env(
-        "SYMPHONY_BASE_BRANCH_MERGED",
-        if sync_report.merged_base_branch {
+        "SYMPHONY_BASE_BRANCH_FETCHED",
+        if sync_report.fetched_base_branch {
             "1"
         } else {
             "0"
@@ -180,7 +177,7 @@ async fn run_inner(request: &RunRequest) -> Result<(Option<i32>, String, Option<
     );
     command.env(
         "SYMPHONY_WORKSPACE_CONFLICTS_PRESENT",
-        if sync_report.merge_conflicts_present {
+        if sync_report.resumed_conflict_workspace {
             "1"
         } else {
             "0"
@@ -390,7 +387,11 @@ async fn sync_workspace(
     .await
     .context("failed to set PR branch upstream")?;
 
-    merge_base_branch(workspace, remote_name, pr).await
+    Ok(WorkspaceSyncReport {
+        fetched_pr_branch: true,
+        fetched_base_branch: true,
+        resumed_conflict_workspace: false,
+    })
 }
 
 async fn run_command(program: &str, args: &[&str], cwd: Option<&Path>) -> Result<()> {
@@ -445,46 +446,6 @@ async fn run_command_output(
         .with_context(|| format!("failed running {program}"))
 }
 
-async fn merge_base_branch(
-    workspace: &Path,
-    remote_name: &str,
-    pr: &PullRequest,
-) -> Result<WorkspaceSyncReport> {
-    if pr.base_ref == pr.head_ref {
-        return Ok(WorkspaceSyncReport::default());
-    }
-
-    let merge_target = format!("{remote_name}/{}", pr.base_ref);
-    let output = run_command_output(
-        "git",
-        &["merge", "--no-edit", "--no-ff", &merge_target],
-        Some(workspace),
-    )
-    .await
-    .context("failed to run git merge for base branch")?;
-    let summary = summarize_command_result(&output);
-
-    if output.status.success() {
-        return Ok(WorkspaceSyncReport {
-            merged_base_branch: !is_merge_already_up_to_date(&summary),
-            merge_conflicts_present: false,
-            resumed_conflict_workspace: false,
-        });
-    }
-
-    if has_unmerged_paths(workspace).await? {
-        return Ok(WorkspaceSyncReport {
-            merged_base_branch: true,
-            merge_conflicts_present: true,
-            resumed_conflict_workspace: false,
-        });
-    }
-
-    Err(anyhow!(
-        "failed to merge base branch {merge_target}: {summary}"
-    ))
-}
-
 async fn has_unmerged_paths(workspace: &Path) -> Result<bool> {
     let output = run_command_capture(
         "git",
@@ -495,17 +456,6 @@ async fn has_unmerged_paths(workspace: &Path) -> Result<bool> {
     .context("failed to detect unmerged paths")?;
 
     Ok(!output.trim().is_empty())
-}
-
-fn summarize_command_result(output: &std::process::Output) -> String {
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    let stderr = String::from_utf8_lossy(&output.stderr);
-    summarize_output(&stdout, &stderr)
-}
-
-fn is_merge_already_up_to_date(summary: &str) -> bool {
-    let normalized = summary.to_ascii_lowercase();
-    normalized.contains("already up to date")
 }
 
 fn combine_operator_instructions(base: Option<&str>, extra: Option<&str>) -> Option<String> {
@@ -528,14 +478,6 @@ fn repo_dir_name(repo_full_name: &str) -> &str {
         .unwrap_or(repo_full_name)
 }
 
-fn summarize_output(stdout: &str, stderr: &str) -> String {
-    let Some(combined) = combine_output(stdout, stderr) else {
-        return "agent completed without output".to_owned();
-    };
-
-    summarize_captured_output(&combined)
-}
-
 fn summarize_captured_output(output: &str) -> String {
     let lines = output.lines().collect::<Vec<_>>();
     let tail = lines.iter().rev().take(12).copied().collect::<Vec<_>>();
@@ -547,19 +489,6 @@ fn normalize_output(output: &str) -> Option<String> {
         None
     } else {
         Some(output.to_owned())
-    }
-}
-
-fn combine_output(stdout: &str, stderr: &str) -> Option<String> {
-    let combined = [stdout.trim(), stderr.trim()]
-        .into_iter()
-        .filter(|part| !part.is_empty())
-        .collect::<Vec<_>>()
-        .join("\n");
-    if combined.is_empty() {
-        None
-    } else {
-        Some(combined)
     }
 }
 
@@ -857,6 +786,45 @@ mod tests {
         (sample_workspace(root), pr)
     }
 
+    async fn simulate_agent_merge_conflict(workspace_repo: &Path, pr: &PullRequest) {
+        run_command(
+            "git",
+            &[
+                "checkout",
+                "-B",
+                &pr.head_ref,
+                &format!("origin/{}", pr.head_ref),
+            ],
+            Some(workspace_repo),
+        )
+        .await
+        .expect("feature branch should check out in workspace");
+
+        let merge_result = run_command_output(
+            "git",
+            &[
+                "merge",
+                "--no-edit",
+                "--no-ff",
+                &format!("origin/{}", pr.base_ref),
+            ],
+            Some(workspace_repo),
+        )
+        .await
+        .expect("git merge should execute");
+
+        assert!(
+            !merge_result.status.success(),
+            "test setup expects a conflicting merge"
+        );
+        assert!(
+            has_unmerged_paths(workspace_repo)
+                .await
+                .expect("unmerged path detection should work"),
+            "test setup should leave merge conflicts behind",
+        );
+    }
+
     #[tokio::test]
     async fn resolve_checkout_uses_explicit_repo_map_first() {
         let root = unique_temp_path("root");
@@ -949,13 +917,7 @@ mod tests {
         let (workspace, pr) = prepare_workspace_scenario(true).await;
         let repo = workspace.root.join("symphony");
 
-        let report = sync_workspace(&repo, workspace.git_transport, &pr)
-            .await
-            .expect("conflicted merge should still return a sync report");
-        assert!(
-            report.merge_conflicts_present,
-            "workspace should contain merge conflicts"
-        );
+        simulate_agent_merge_conflict(&repo, &pr).await;
 
         let resolved = resolve_checkout(&workspace, &pr)
             .await
@@ -971,60 +933,41 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn sync_workspace_merges_base_branch_when_merge_is_clean() {
+    async fn sync_workspace_fetches_branches_and_checks_out_pr_branch_without_merging_base() {
         let (workspace, pr) = prepare_workspace_scenario(false).await;
         let repo = workspace.root.join("symphony");
 
         let report = sync_workspace(&repo, workspace.git_transport, &pr)
             .await
-            .expect("clean merge should succeed");
+            .expect("workspace sync should succeed");
 
-        assert!(report.merged_base_branch, "base branch should be merged");
         assert!(
-            !report.merge_conflicts_present,
-            "clean merge should not leave conflicts behind"
+            report.fetched_pr_branch,
+            "workspace sync should fetch and reset the PR branch"
         );
         assert!(
-            repo.join("base.txt").exists(),
-            "workspace should contain the file introduced on main after the merge"
+            report.fetched_base_branch,
+            "workspace sync should fetch the latest base branch ref"
+        );
+        assert!(
+            !report.resumed_conflict_workspace,
+            "a clean sync should not look like a resumed conflict workspace",
+        );
+        assert!(
+            !repo.join("base.txt").exists(),
+            "runner should not merge the base branch into the workspace anymore",
         );
         assert!(
             !has_unmerged_paths(&repo)
                 .await
                 .expect("unmerged path detection should work"),
-            "clean merge should leave no unmerged paths",
+            "plain workspace sync should not leave merge conflicts behind",
         );
-    }
 
-    #[tokio::test]
-    async fn sync_workspace_keeps_conflict_markers_for_agent_resolution() {
-        let (workspace, pr) = prepare_workspace_scenario(true).await;
-        let repo = workspace.root.join("symphony");
-
-        let report = sync_workspace(&repo, workspace.git_transport, &pr)
-            .await
-            .expect("conflicted merge should still return a sync report");
-
-        assert!(
-            report.merged_base_branch,
-            "merge attempt should have happened"
-        );
-        assert!(
-            report.merge_conflicts_present,
-            "conflicted merge should be reported back to the runner"
-        );
-        assert!(
-            has_unmerged_paths(&repo)
+        let current_branch =
+            run_command_capture("git", &["rev-parse", "--abbrev-ref", "HEAD"], Some(&repo))
                 .await
-                .expect("unmerged path detection should work"),
-            "workspace should keep the unmerged files for the agent",
-        );
-
-        let conflict_contents =
-            fs::read_to_string(repo.join("shared.txt")).expect("conflicted file should exist");
-        assert!(
-            conflict_contents.contains("<<<<<<<"),
-            "conflicted file should include Git conflict markers",
-        );
+                .expect("current branch should resolve");
+        assert_eq!(current_branch, pr.head_ref);
     }
 }

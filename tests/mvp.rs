@@ -832,7 +832,10 @@ async fn saved_run_timestamp_is_exposed_in_pr_list() {
         .find(|pr| pr["key"] == json!("openai/symphony#7"))
         .expect("tracked PR should be visible");
     assert_eq!(pr["details_label"], json!("Last run"));
-    assert_eq!(pr["details_at"], json!(finished_at.to_rfc3339_opts(chrono::SecondsFormat::Secs, true)));
+    assert_eq!(
+        pr["details_at"],
+        json!(finished_at.to_rfc3339_opts(chrono::SecondsFormat::Secs, true))
+    );
 }
 
 #[tokio::test]
