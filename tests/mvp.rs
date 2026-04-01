@@ -487,7 +487,6 @@ async fn activity_api_includes_github_request_metrics_for_scheduled_polls() {
                     review_comment_requests: 1,
                     issue_comment_requests: 1,
                     check_run_requests: 1,
-                    combined_status_requests: 1,
                     light_prs: 2,
                     hydrated_prs: 1,
                     reused_prs: 1,
@@ -516,7 +515,7 @@ async fn activity_api_includes_github_request_metrics_for_scheduled_polls() {
             event["message"]
                 .as_str()
                 .map(|message| {
-                    message.contains("scheduled poll fetched 2 PRs using 8 GitHub requests")
+                    message.contains("scheduled poll fetched 2 PRs using 7 GitHub requests")
                 })
                 .unwrap_or(false)
         })
@@ -527,6 +526,8 @@ async fn activity_api_includes_github_request_metrics_for_scheduled_polls() {
         .expect("metrics event message should be a string");
     assert!(message.contains("search 1"));
     assert!(message.contains("pull detail 2"));
+    assert!(message.contains("check runs 1"));
+    assert!(!message.contains("combined status"));
     assert!(message.contains("hydrated PR 1"));
     assert!(message.contains("reused PR 1"));
 }

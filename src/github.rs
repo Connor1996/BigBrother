@@ -242,9 +242,8 @@ impl GitHubClient {
         let review_comments_path = format!("repos/{repo}/pulls/{}/comments", pr.number);
         let issue_comments_path = format!("repos/{repo}/issues/{}/comments", pr.number);
         let check_runs_path = format!("repos/{repo}/commits/{}/check-runs", pr.head_sha);
-        let combined_status_path = format!("repos/{repo}/commits/{}/status", pr.head_sha);
 
-        let (reviews, review_comments, issue_comments, check_runs, combined_status) = tokio::try_join!(
+        let (reviews, review_comments, issue_comments, check_runs) = tokio::try_join!(
             self.get_json::<Vec<Review>>(
                 &reviews_path,
                 &per_page,
@@ -269,20 +268,10 @@ impl GitHubClient {
                 metrics,
                 RequestCategory::CheckRuns
             ),
-            self.get_json::<CombinedStatus>(
-                &combined_status_path,
-                &[],
-                metrics,
-                RequestCategory::CombinedStatus
-            ),
         )?;
 
         let review_summary = summarize_reviews(author, &reviews, &review_comments, &issue_comments);
-        let ci_summary = summarize_ci(
-            &check_runs.check_runs,
-            &combined_status.statuses,
-            &combined_status.state,
-        );
+        let ci_summary = summarize_ci(&check_runs.check_runs);
         apply_signal_summary(&mut pr, review_summary, ci_summary);
         Ok(pr)
     }
@@ -367,7 +356,6 @@ enum RequestCategory {
     ReviewComments,
     IssueComments,
     CheckRuns,
-    CombinedStatus,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -384,7 +372,6 @@ struct GitHubRequestMetricsInner {
     review_comment_requests: AtomicUsize,
     issue_comment_requests: AtomicUsize,
     check_run_requests: AtomicUsize,
-    combined_status_requests: AtomicUsize,
     light_prs: AtomicUsize,
     hydrated_prs: AtomicUsize,
     reused_prs: AtomicUsize,
@@ -400,7 +387,6 @@ impl GitHubRequestMetrics {
             RequestCategory::ReviewComments => &self.inner.review_comment_requests,
             RequestCategory::IssueComments => &self.inner.issue_comment_requests,
             RequestCategory::CheckRuns => &self.inner.check_run_requests,
-            RequestCategory::CombinedStatus => &self.inner.combined_status_requests,
         };
         counter.fetch_add(1, Ordering::Relaxed);
     }
@@ -426,7 +412,6 @@ impl GitHubRequestMetrics {
             review_comment_requests: self.inner.review_comment_requests.load(Ordering::Relaxed),
             issue_comment_requests: self.inner.issue_comment_requests.load(Ordering::Relaxed),
             check_run_requests: self.inner.check_run_requests.load(Ordering::Relaxed),
-            combined_status_requests: self.inner.combined_status_requests.load(Ordering::Relaxed),
             light_prs: self.inner.light_prs.load(Ordering::Relaxed),
             hydrated_prs: self.inner.hydrated_prs.load(Ordering::Relaxed),
             reused_prs: self.inner.reused_prs.load(Ordering::Relaxed),
@@ -524,19 +509,6 @@ struct CheckRun {
     conclusion: Option<String>,
     started_at: Option<DateTime<Utc>>,
     completed_at: Option<DateTime<Utc>>,
-}
-
-#[derive(Debug, Deserialize)]
-struct CombinedStatus {
-    state: String,
-    #[serde(default)]
-    statuses: Vec<StatusContext>,
-}
-
-#[derive(Debug, Deserialize)]
-struct StatusContext {
-    state: String,
-    updated_at: DateTime<Utc>,
 }
 
 struct ReviewSummary {
@@ -768,27 +740,8 @@ fn summarize_reviews(
     }
 }
 
-fn summarize_ci(
-    check_runs: &[CheckRun],
-    statuses: &[StatusContext],
-    combined_state: &str,
-) -> CiSummary {
-    let checks_status = collapse_check_runs(check_runs);
-    let status_context_status = collapse_status_contexts(statuses, combined_state);
-
-    let status = match (checks_status.0, status_context_status.0) {
-        (CiStatus::Failure, _) | (_, CiStatus::Failure) => CiStatus::Failure,
-        (CiStatus::Pending, _) | (_, CiStatus::Pending) => CiStatus::Pending,
-        (CiStatus::Success, _) | (_, CiStatus::Success) => CiStatus::Success,
-        _ => CiStatus::Unknown,
-    };
-
-    let updated_at = checks_status
-        .1
-        .into_iter()
-        .chain(status_context_status.1)
-        .max();
-
+fn summarize_ci(check_runs: &[CheckRun]) -> CiSummary {
+    let (status, updated_at) = collapse_check_runs(check_runs);
     CiSummary { status, updated_at }
 }
 
@@ -816,32 +769,6 @@ fn collapse_check_runs(check_runs: &[CheckRun]) -> (CiStatus, Option<DateTime<Ut
         };
 
         status = merge_ci_status(status, current);
-    }
-
-    (status, updated_at)
-}
-
-fn collapse_status_contexts(
-    statuses: &[StatusContext],
-    combined_state: &str,
-) -> (CiStatus, Option<DateTime<Utc>>) {
-    let mut status = match combined_state.to_ascii_lowercase().as_str() {
-        "failure" | "error" => CiStatus::Failure,
-        "pending" => CiStatus::Pending,
-        "success" => CiStatus::Success,
-        _ => CiStatus::Unknown,
-    };
-    let mut updated_at = statuses.iter().map(|status| status.updated_at).max();
-
-    for context in statuses {
-        let current = match context.state.to_ascii_lowercase().as_str() {
-            "failure" | "error" => CiStatus::Failure,
-            "pending" => CiStatus::Pending,
-            "success" => CiStatus::Success,
-            _ => CiStatus::Unknown,
-        };
-        status = merge_ci_status(status, current);
-        updated_at = updated_at.into_iter().chain(Some(context.updated_at)).max();
     }
 
     (status, updated_at)
@@ -890,10 +817,11 @@ fn parse_pr_key(pr_key: &str) -> Result<(String, u64)> {
 mod tests {
     use std::collections::{HashMap, HashSet};
 
-    use chrono::{Duration, TimeZone};
+    use chrono::{Duration, TimeZone, Utc};
 
     use super::{
         reuse_cached_signal_details, reuse_frozen_pull_request, should_refresh_signal_details,
+        summarize_ci, CheckRun,
     };
     use crate::model::{CiStatus, PullRequest, ReviewDecision};
 
@@ -1019,5 +947,31 @@ mod tests {
         assert_eq!(reused.title, previous.title);
         assert_eq!(reused.ci_status, previous.ci_status);
         assert_eq!(reused.review_decision, previous.review_decision);
+    }
+
+    #[test]
+    fn summarize_ci_uses_check_runs_as_the_source_of_truth() {
+        let check_runs = vec![
+            CheckRun {
+                status: "completed".to_owned(),
+                conclusion: Some("success".to_owned()),
+                started_at: Some(Utc.with_ymd_and_hms(2026, 4, 1, 6, 9, 10).unwrap()),
+                completed_at: Some(Utc.with_ymd_and_hms(2026, 4, 1, 6, 10, 11).unwrap()),
+            },
+            CheckRun {
+                status: "completed".to_owned(),
+                conclusion: Some("success".to_owned()),
+                started_at: Some(Utc.with_ymd_and_hms(2026, 4, 1, 6, 9, 10).unwrap()),
+                completed_at: Some(Utc.with_ymd_and_hms(2026, 4, 1, 6, 15, 58).unwrap()),
+            },
+        ];
+
+        let summary = summarize_ci(&check_runs);
+
+        assert_eq!(summary.status, CiStatus::Success);
+        assert_eq!(
+            summary.updated_at,
+            Some(Utc.with_ymd_and_hms(2026, 4, 1, 6, 15, 58).unwrap())
+        );
     }
 }

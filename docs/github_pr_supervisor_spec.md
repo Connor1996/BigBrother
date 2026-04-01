@@ -172,7 +172,8 @@ When CI fails or new actionable feedback appears:
 Scheduled GitHub polling should minimize rate-limit pressure by using two stages:
 
 - first fetch the authored PR list plus lightweight pull details needed for routing and workspace sync
-- then fetch reviews, comments, and check status only for candidate PRs whose lightweight state has
+- then fetch reviews, comments, and GitHub check runs only for candidate PRs whose lightweight
+  state has
   changed since the previous dashboard snapshot or whose prior CI status is still unsettled
 - PRs that are manually paused should be treated as frozen dashboard snapshots during scheduled
   polls: keep their last known PR state in the UI, do not refresh their review or CI-derived

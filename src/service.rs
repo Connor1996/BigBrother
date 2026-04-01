@@ -88,7 +88,6 @@ pub struct GitHubRequestStats {
     pub review_comment_requests: usize,
     pub issue_comment_requests: usize,
     pub check_run_requests: usize,
-    pub combined_status_requests: usize,
     pub light_prs: usize,
     pub hydrated_prs: usize,
     pub reused_prs: usize,
@@ -110,7 +109,6 @@ impl GitHubRequestStats {
             + self.review_comment_requests
             + self.issue_comment_requests
             + self.check_run_requests
-            + self.combined_status_requests
     }
 
     pub fn activity_message(
@@ -149,11 +147,6 @@ impl GitHubRequestStats {
             self.issue_comment_requests,
         );
         push_metric_part(&mut request_parts, "check runs", self.check_run_requests);
-        push_metric_part(
-            &mut request_parts,
-            "combined status",
-            self.combined_status_requests,
-        );
 
         let mut outcome_parts = Vec::new();
         push_metric_part(&mut outcome_parts, "hydrated PR", self.hydrated_prs);
