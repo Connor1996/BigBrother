@@ -19,6 +19,8 @@ pub struct AppConfig {
     #[serde(default)]
     pub ui: UiConfig,
     #[serde(default)]
+    pub notifications: NotificationsConfig,
+    #[serde(default)]
     pub state_path: Option<String>,
 }
 
@@ -80,6 +82,23 @@ pub struct UiConfig {
     pub refresh_hz: u64,
 }
 
+#[derive(Debug, Clone, Default, Deserialize)]
+pub struct NotificationsConfig {
+    #[serde(default)]
+    pub feishu: Option<FeishuNotificationsConfig>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct FeishuNotificationsConfig {
+    pub webhook_url: String,
+    #[serde(default)]
+    pub keyword: Option<String>,
+    #[serde(default)]
+    pub label: Option<String>,
+    #[serde(default = "default_notification_timeout_secs")]
+    pub timeout_secs: u64,
+}
+
 #[derive(Debug, Clone)]
 pub struct ResolvedConfig {
     pub github: ResolvedGitHubConfig,
@@ -87,6 +106,7 @@ pub struct ResolvedConfig {
     pub workspace: ResolvedWorkspaceConfig,
     pub agent: AgentConfig,
     pub ui: UiConfig,
+    pub notifications: ResolvedNotificationsConfig,
     pub state_path: PathBuf,
 }
 
@@ -104,6 +124,19 @@ pub struct ResolvedWorkspaceConfig {
     pub root: PathBuf,
     pub repo_map: BTreeMap<String, PathBuf>,
     pub git_transport: GitTransport,
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct ResolvedNotificationsConfig {
+    pub feishu: Option<ResolvedFeishuNotificationsConfig>,
+}
+
+#[derive(Debug, Clone)]
+pub struct ResolvedFeishuNotificationsConfig {
+    pub webhook_url: String,
+    pub keyword: Option<String>,
+    pub label: String,
+    pub timeout_secs: u64,
 }
 
 impl AppConfig {
@@ -133,6 +166,7 @@ impl AppConfig {
             .as_deref()
             .map(|value| resolve_path(value, &config_dir))
             .unwrap_or_else(|| config_dir.join("symphony-rs-state.json"));
+        let notifications = resolve_notifications(self.notifications, &config_dir)?;
 
         Ok(ResolvedConfig {
             github: ResolvedGitHubConfig {
@@ -170,6 +204,7 @@ impl AppConfig {
                     .map(|value| resolve_literal(value, None)),
             },
             ui: self.ui,
+            notifications,
             state_path,
         })
     }
@@ -315,6 +350,50 @@ fn default_refresh_hz() -> u64 {
     2
 }
 
+fn default_notification_timeout_secs() -> u64 {
+    10
+}
+
+fn default_feishu_notification_label() -> String {
+    "symphony-rs".to_owned()
+}
+
+fn resolve_notifications(
+    config: NotificationsConfig,
+    _config_dir: &Path,
+) -> Result<ResolvedNotificationsConfig> {
+    let feishu = match config.feishu {
+        Some(raw) => {
+            let webhook_url = resolve_secret(Some(raw.webhook_url), &[])?
+                .trim()
+                .to_owned();
+            if webhook_url.is_empty() {
+                return Err(anyhow!("notifications.feishu.webhook_url cannot be empty"));
+            }
+
+            let keyword = raw
+                .keyword
+                .map(|value| resolve_literal(value, None))
+                .filter(|value| !value.is_empty());
+            let label = raw
+                .label
+                .map(|value| resolve_literal(value, Some(default_feishu_notification_label())))
+                .filter(|value| !value.is_empty())
+                .unwrap_or_else(default_feishu_notification_label);
+
+            Some(ResolvedFeishuNotificationsConfig {
+                webhook_url,
+                keyword,
+                label,
+                timeout_secs: raw.timeout_secs.max(1),
+            })
+        }
+        None => None,
+    };
+
+    Ok(ResolvedNotificationsConfig { feishu })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -409,5 +488,44 @@ dangerously_bypass_approvals_and_sandbox = true
         let resolved = AppConfig::load(&config_path).expect("config should load");
 
         assert!(resolved.agent.dangerously_bypass_approvals_and_sandbox);
+    }
+
+    #[test]
+    fn load_resolves_feishu_notification_settings() {
+        let unique = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("time")
+            .as_nanos();
+        let dir = std::env::temp_dir().join(format!("symphony-rs-config-{unique}"));
+        std::fs::create_dir_all(&dir).expect("temp config dir should create");
+        let config_path = dir.join("symphony-rs.toml");
+        std::fs::write(
+            &config_path,
+            r#"
+[github]
+api_token = "token"
+
+[notifications.feishu]
+webhook_url = "https://open.feishu.cn/open-apis/bot/v2/hook/test"
+keyword = "Symphony"
+label = "connor-mbp"
+timeout_secs = 17
+"#,
+        )
+        .expect("config fixture should write");
+
+        let resolved = AppConfig::load(&config_path).expect("config should load");
+        let feishu = resolved
+            .notifications
+            .feishu
+            .expect("feishu notifications should resolve");
+
+        assert_eq!(
+            feishu.webhook_url,
+            "https://open.feishu.cn/open-apis/bot/v2/hook/test"
+        );
+        assert_eq!(feishu.keyword.as_deref(), Some("Symphony"));
+        assert_eq!(feishu.label, "connor-mbp");
+        assert_eq!(feishu.timeout_secs, 17);
     }
 }

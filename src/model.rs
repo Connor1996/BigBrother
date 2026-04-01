@@ -286,7 +286,7 @@ pub struct ReviewRequestPr {
     pub runner: Option<RunnerState>,
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum EventLevel {
     Info,
     Error,

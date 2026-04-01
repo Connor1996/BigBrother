@@ -32,3 +32,12 @@ additional_instructions = """
 # The current MVP serves a local web dashboard and does not use native UI refresh settings.
 [ui]
 refresh_hz = 2
+
+# Optional one-way Feishu notifications via a custom bot webhook.
+# This first pass only pushes daemon run state and results outward; it does not receive commands.
+#
+# [notifications.feishu]
+# webhook_url = "$FEISHU_BOT_WEBHOOK_URL"
+# keyword = "Symphony"
+# label = "connor-mbp"
+# timeout_secs = 10

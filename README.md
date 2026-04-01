@@ -88,6 +88,33 @@ For long-running local use, prefer `target/release/symphony-rs` over `cargo run`
 stays on the optimized release build. The binary is already server-only in this MVP. `--headless`
 is kept as a compatibility no-op for older command lines.
 
+## Optional Feishu Notifications
+
+The first Feishu integration is a one-way notification sink for daemon activity. It sends key
+automatic-run and manual deep-review updates to a Feishu custom bot webhook, but it does not yet
+accept Feishu commands or replies.
+
+Add this optional section to `symphony-rs.toml`:
+
+```toml
+[notifications.feishu]
+webhook_url = "$FEISHU_BOT_WEBHOOK_URL"
+keyword = "Symphony"
+label = "connor-mbp"
+timeout_secs = 10
+```
+
+Current Feishu notifications cover:
+
+- automatic agent run start
+- automatic agent run completion or failure
+- auto-pause after repeated failures
+- manual deep review start and completion
+- daemon poll failures
+
+`label` is included in each message so multiple daemon instances can share the same Feishu chat
+without losing source context.
+
 ## How The Agent Loop Works
 
 When Symphony RS detects a PR that needs attention, it:

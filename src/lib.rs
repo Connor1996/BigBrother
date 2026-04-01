@@ -2,6 +2,7 @@ pub mod config;
 pub mod daemon;
 pub mod github;
 pub mod model;
+pub mod notify;
 pub mod prompt;
 pub mod runner;
 pub mod service;

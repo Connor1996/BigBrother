@@ -18,8 +18,8 @@ use futures::future::BoxFuture;
 use serde_json::{json, Value};
 use symphony_rs::{
     config::{
-        AgentConfig, DaemonConfig, ResolvedConfig, ResolvedGitHubConfig, ResolvedWorkspaceConfig,
-        UiConfig,
+        AgentConfig, DaemonConfig, ResolvedConfig, ResolvedGitHubConfig,
+        ResolvedNotificationsConfig, ResolvedWorkspaceConfig, UiConfig,
     },
     model::{
         AttentionReason, CiStatus, PersistentPrState, PullRequest, ReviewDecision, RunnerState,
@@ -1875,6 +1875,7 @@ fn sample_config(state_path: PathBuf, workspace_root: PathBuf) -> ResolvedConfig
             additional_instructions: None,
         },
         ui: UiConfig::default(),
+        notifications: ResolvedNotificationsConfig::default(),
         state_path,
     }
 }

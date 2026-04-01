@@ -492,6 +492,16 @@ Notification sinks should be pluggable. Initial sinks:
 - local desktop notification
 - webhook-based sink
 
+Current first-pass remote sink behavior:
+
+- support a Feishu custom-bot webhook sink as a concrete webhook implementation
+- keep the first Feishu integration outbound-only; no command handling or chat-driven control flow
+- include a configurable instance label in each outbound Feishu message so multiple daemons can
+  share a notification chat safely
+- emit Feishu notifications for automatic run start, automatic run completion or failure,
+  auto-pause after repeated failures, manual deep review start and completion, and daemon poll
+  failures
+
 Lifecycle transition notifications should also be supported for:
 
 - PR entered `waiting_review`
@@ -500,7 +510,7 @@ Lifecycle transition notifications should also be supported for:
 Potential later sinks:
 
 - Feishu CLI-backed sink
-- Feishu
+- Feishu bidirectional bot or app gateway
 - Slack
 - email
 

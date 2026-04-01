@@ -14,6 +14,7 @@ use crate::{
         AttentionReason, DashboardState, EventLevel, PersistentPrState, PullRequest,
         ReviewRequestPr, RunnerState, TrackedPr, TrackingStatus,
     },
+    notify::{build_notification_sink, Notification, NotificationSink},
     runner::{
         RunOutcome, RunRequest, RunUpdate, OUTPUT_TRANSCRIPT_HEADER, PROMPT_TRANSCRIPT_HEADER,
     },
@@ -246,6 +247,7 @@ pub struct Supervisor {
     config: ResolvedConfig,
     provider: Arc<dyn GitHubProvider>,
     runner: Arc<dyn AgentRunner>,
+    notifier: Box<dyn NotificationSink>,
     store: StateStore,
     shared_state: Arc<Mutex<DashboardState>>,
     inner: AsyncMutex<SupervisorInner>,
@@ -258,6 +260,16 @@ impl Supervisor {
         provider: Arc<dyn GitHubProvider>,
         runner: Arc<dyn AgentRunner>,
     ) -> Result<Self> {
+        let notifier = build_notification_sink(&config)?;
+        Self::new_with_notifier(config, provider, runner, notifier)
+    }
+
+    pub fn new_with_notifier(
+        config: ResolvedConfig,
+        provider: Arc<dyn GitHubProvider>,
+        runner: Arc<dyn AgentRunner>,
+        notifier: Box<dyn NotificationSink>,
+    ) -> Result<Self> {
         let store = StateStore::new(&config.state_path);
         let persisted_state = store.load()?;
 
@@ -265,6 +277,7 @@ impl Supervisor {
             config,
             provider,
             runner,
+            notifier,
             store,
             shared_state: Arc::new(Mutex::new(DashboardState::default())),
             inner: AsyncMutex::new(SupervisorInner {
@@ -273,6 +286,16 @@ impl Supervisor {
             }),
             poll_lock: AsyncMutex::new(()),
         })
+    }
+
+    async fn send_notification(&self, pr_key: Option<&str>, notification: Notification) {
+        if let Err(error) = self.notifier.send(notification).await {
+            self.push_event(
+                EventLevel::Error,
+                pr_key.map(str::to_owned),
+                format!("failed to deliver notification: {error:#}"),
+            );
+        }
     }
 
     pub fn poll_interval_secs(&self) -> u64 {
@@ -466,6 +489,11 @@ impl Supervisor {
             Some(pr_key.to_owned()),
             format!("starting manual deep review for {pr_key}"),
         );
+        self.send_notification(
+            Some(&pr_key),
+            manual_deep_review_started_notification(&pull_request),
+        )
+        .await;
 
         let supervisor = Arc::clone(self);
         let workspace = self.config.workspace.clone();
@@ -513,22 +541,31 @@ impl Supervisor {
             + chrono::Duration::seconds(
                 self.config.daemon.poll_interval_secs.min(i64::MAX as u64) as i64
             );
+        let mut poll_failure_notification = None;
 
-        let mut state = self
-            .shared_state
-            .lock()
-            .expect("dashboard state mutex poisoned");
-        state.last_poll_finished_at = Some(finished_at);
-        state.next_poll_due_at = Some(next_poll_due_at);
+        {
+            let mut state = self
+                .shared_state
+                .lock()
+                .expect("dashboard state mutex poisoned");
+            state.last_poll_finished_at = Some(finished_at);
+            state.next_poll_due_at = Some(next_poll_due_at);
 
-        match &result {
-            Ok(()) => {
-                state.last_poll_error = None;
+            match &result {
+                Ok(()) => {
+                    state.last_poll_error = None;
+                }
+                Err(error) => {
+                    state.last_poll_error = Some(error.to_string());
+                    state.push_event(EventLevel::Error, None, format!("poll failed: {error:#}"));
+                    poll_failure_notification =
+                        Some(poll_failed_notification(preferred_pr_key, error));
+                }
             }
-            Err(error) => {
-                state.last_poll_error = Some(error.to_string());
-                state.push_event(EventLevel::Error, None, format!("poll failed: {error:#}"));
-            }
+        }
+
+        if let Some(notification) = poll_failure_notification {
+            self.send_notification(preferred_pr_key, notification).await;
         }
 
         result
@@ -645,6 +682,11 @@ impl Supervisor {
                 )
             },
         );
+        self.send_notification(
+            Some(&pr_key),
+            manual_deep_review_finished_notification(&request.pull_request, &outcome),
+        )
+        .await;
     }
 
     async fn poll_once_inner(
@@ -725,13 +767,16 @@ impl Supervisor {
                     ),
                 );
 
-                Some(RunRequest {
-                    pull_request: pr.clone(),
-                    trigger,
-                    workspace: self.config.workspace.clone(),
-                    agent: self.config.agent.clone(),
-                    output_updates: None,
-                })
+                Some((
+                    RunRequest {
+                        pull_request: pr.clone(),
+                        trigger,
+                        workspace: self.config.workspace.clone(),
+                        agent: self.config.agent.clone(),
+                        output_updates: None,
+                    },
+                    automatic_run_started_notification(pr, trigger),
+                ))
             } else {
                 if let Some(pr_key) = preferred_pr_key {
                     self.push_event(
@@ -768,8 +813,10 @@ impl Supervisor {
             }
         };
 
-        if let Some(request) = selected_request {
+        if let Some((request, start_notification)) = selected_request {
             let pr_key = request.pull_request.key.clone();
+            self.send_notification(Some(&pr_key), start_notification)
+                .await;
             let (output_tx, mut output_rx) = mpsc::unbounded_channel::<RunUpdate>();
             let mut runner_request = request.clone();
             runner_request.output_updates = Some(output_tx);
@@ -828,6 +875,11 @@ impl Supervisor {
                     format!("agent run failed for {pr_key}: {}", outcome.summary)
                 },
             );
+            self.send_notification(
+                Some(&pr_key),
+                automatic_run_finished_notification(&request, &outcome),
+            )
+            .await;
 
             if auto_paused {
                 self.push_event(
@@ -835,6 +887,11 @@ impl Supervisor {
                     Some(pr_key.clone()),
                     format!("auto-paused {pr_key} after {MAX_AUTOMATIC_RETRIES} retry attempts"),
                 );
+                self.send_notification(
+                    Some(&pr_key),
+                    automatic_run_auto_paused_notification(&request.pull_request),
+                )
+                .await;
             }
         }
 
@@ -1399,6 +1456,111 @@ fn deep_review_comment_failure(mut outcome: RunOutcome, error: &str) -> RunOutco
     outcome
 }
 
+fn poll_failed_notification(preferred_pr_key: Option<&str>, error: &anyhow::Error) -> Notification {
+    let title = preferred_pr_key
+        .map(|pr_key| format!("targeted daemon check failed for {pr_key}"))
+        .unwrap_or_else(|| "scheduled daemon poll failed".to_owned());
+
+    Notification::new(EventLevel::Error, title, format!("Error: {error:#}"))
+}
+
+fn manual_deep_review_started_notification(pr: &PullRequest) -> Notification {
+    Notification::new(
+        EventLevel::Info,
+        format!("starting manual deep review for {}", pr.key),
+        pr_notification_body(pr, &[format!("Result URL: {}", pr.url)]),
+    )
+}
+
+fn manual_deep_review_finished_notification(
+    pr: &PullRequest,
+    outcome: &RunOutcome,
+) -> Notification {
+    Notification::new(
+        if outcome.success {
+            EventLevel::Info
+        } else {
+            EventLevel::Error
+        },
+        if outcome.success {
+            format!("manual deep review completed for {}", pr.key)
+        } else {
+            format!("manual deep review failed for {}", pr.key)
+        },
+        pr_notification_body(
+            pr,
+            &[
+                format!("Summary: {}", outcome.summary),
+                format!("Result URL: {}", pr.url),
+            ],
+        ),
+    )
+}
+
+fn automatic_run_started_notification(pr: &PullRequest, trigger: AttentionReason) -> Notification {
+    Notification::new(
+        EventLevel::Info,
+        format!("starting agent run for {}", pr.key),
+        pr_notification_body(
+            pr,
+            &[
+                format!("Reason: {}", trigger.label()),
+                format!("Status: {}", TrackingStatus::Running.label()),
+                format!("Result URL: {}", pr.url),
+            ],
+        ),
+    )
+}
+
+fn automatic_run_finished_notification(request: &RunRequest, outcome: &RunOutcome) -> Notification {
+    Notification::new(
+        if outcome.success {
+            EventLevel::Info
+        } else {
+            EventLevel::Error
+        },
+        if outcome.success {
+            format!("agent run completed for {}", request.pull_request.key)
+        } else {
+            format!("agent run failed for {}", request.pull_request.key)
+        },
+        pr_notification_body(
+            &request.pull_request,
+            &[
+                format!("Reason: {}", request.trigger.label()),
+                format!("Summary: {}", outcome.summary),
+                format!("Result URL: {}", request.pull_request.url),
+            ],
+        ),
+    )
+}
+
+fn automatic_run_auto_paused_notification(pr: &PullRequest) -> Notification {
+    Notification::new(
+        EventLevel::Error,
+        format!("auto-paused {}", pr.key),
+        pr_notification_body(
+            pr,
+            &[
+                format!(
+                    "Reason: automatic retries reached the limit of {} attempts",
+                    MAX_AUTOMATIC_RETRIES
+                ),
+                format!("Result URL: {}", pr.url),
+            ],
+        ),
+    )
+}
+
+fn pr_notification_body(pr: &PullRequest, extra_lines: &[String]) -> String {
+    let mut lines = vec![
+        format!("PR: {} ({})", pr.key, pr.title),
+        format!("Repo: {}", pr.repo_full_name),
+    ];
+    lines.extend(extra_lines.iter().cloned());
+    lines.join("\n")
+}
+
 fn append_live_output(buffer: &mut String, chunk: &str) {
     buffer.push_str(chunk);
 
@@ -1456,6 +1618,7 @@ mod tests {
     use std::{
         collections::{BTreeMap, HashMap},
         path::PathBuf,
+        sync::{Arc, Mutex},
     };
 
     use chrono::{TimeZone, Utc};
@@ -1464,9 +1627,10 @@ mod tests {
     use crate::{
         config::{
             AgentConfig, DaemonConfig, GitTransport, ResolvedConfig, ResolvedGitHubConfig,
-            ResolvedWorkspaceConfig, UiConfig,
+            ResolvedNotificationsConfig, ResolvedWorkspaceConfig, UiConfig,
         },
-        model::{CiStatus, PullRequest, ReviewDecision},
+        model::{CiStatus, EventLevel, PullRequest, ReviewDecision},
+        notify::{Notification, NotificationSink},
         state_store::PersistentStateFile,
     };
 
@@ -1504,6 +1668,10 @@ mod tests {
     }
 
     fn sample_config() -> ResolvedConfig {
+        let unique = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("time")
+            .as_nanos();
         ResolvedConfig {
             github: ResolvedGitHubConfig {
                 api_token: "token".to_owned(),
@@ -1528,7 +1696,60 @@ mod tests {
                 additional_instructions: None,
             },
             ui: UiConfig::default(),
-            state_path: PathBuf::from("/tmp/state.json"),
+            notifications: ResolvedNotificationsConfig::default(),
+            state_path: std::env::temp_dir()
+                .join(format!("symphony-rs-service-test-{unique}.json")),
+        }
+    }
+
+    #[derive(Clone, Default)]
+    struct RecordingNotificationSink {
+        notifications: Arc<Mutex<Vec<Notification>>>,
+    }
+
+    impl RecordingNotificationSink {
+        fn snapshot(&self) -> Vec<Notification> {
+            self.notifications
+                .lock()
+                .expect("notifications mutex should not be poisoned")
+                .clone()
+        }
+    }
+
+    impl NotificationSink for RecordingNotificationSink {
+        fn send(&self, notification: Notification) -> BoxFuture<'static, Result<()>> {
+            let notifications = self.notifications.clone();
+            Box::pin(async move {
+                notifications
+                    .lock()
+                    .expect("notifications mutex should not be poisoned")
+                    .push(notification);
+                Ok(())
+            })
+        }
+    }
+
+    #[derive(Clone)]
+    struct StaticGitHubProvider {
+        prs: Vec<PullRequest>,
+    }
+
+    impl GitHubProvider for StaticGitHubProvider {
+        fn fetch_pull_requests(&self) -> BoxFuture<'_, Result<Vec<PullRequest>>> {
+            let prs = self.prs.clone();
+            Box::pin(async move { Ok(prs) })
+        }
+    }
+
+    #[derive(Clone)]
+    struct StaticRunner {
+        outcome: RunOutcome,
+    }
+
+    impl AgentRunner for StaticRunner {
+        fn run(&self, _request: RunRequest) -> BoxFuture<'static, RunOutcome> {
+            let outcome = self.outcome.clone();
+            Box::pin(async move { outcome })
         }
     }
 
@@ -1909,5 +2130,83 @@ mod tests {
             derive_status(&pr, &persisted, Some(AttentionReason::MergeConflict), false,),
             TrackingStatus::Conflict
         );
+    }
+
+    #[tokio::test]
+    async fn successful_agent_run_emits_start_and_completion_notifications() {
+        let mut pr = sample_pr();
+        pr.ci_status = CiStatus::Failure;
+        pr.ci_updated_at = Some(Utc.with_ymd_and_hms(2026, 3, 30, 18, 5, 0).unwrap());
+
+        let outcome = RunOutcome {
+            started_at: Utc::now(),
+            finished_at: Utc::now(),
+            success: true,
+            exit_code: Some(0),
+            summary: "fixed CI".to_owned(),
+            captured_output: None,
+            captured_terminal: None,
+            last_terminal_output_at: None,
+            processed_comment_at: None,
+            processed_ci_at: pr.ci_updated_at,
+            processed_head_sha: pr.head_sha.clone(),
+        };
+        let sink = RecordingNotificationSink::default();
+        let supervisor = Supervisor::new_with_notifier(
+            sample_config(),
+            Arc::new(StaticGitHubProvider { prs: vec![pr] }),
+            Arc::new(StaticRunner { outcome }),
+            Box::new(sink.clone()),
+        )
+        .expect("supervisor should construct");
+
+        supervisor.poll_once().await.expect("poll should succeed");
+
+        let notifications = sink.snapshot();
+        assert_eq!(notifications.len(), 2);
+        assert_eq!(notifications[0].level, EventLevel::Info);
+        assert!(notifications[0].title.contains("starting agent run"));
+        assert_eq!(notifications[1].level, EventLevel::Info);
+        assert!(notifications[1].title.contains("agent run completed"));
+    }
+
+    #[tokio::test]
+    async fn poll_failures_emit_error_notifications() {
+        #[derive(Clone)]
+        struct FailingProvider;
+
+        impl GitHubProvider for FailingProvider {
+            fn fetch_pull_requests(&self) -> BoxFuture<'_, Result<Vec<PullRequest>>> {
+                Box::pin(async move { Err(anyhow::anyhow!("boom")) })
+            }
+        }
+
+        #[derive(Clone)]
+        struct UnusedRunner;
+
+        impl AgentRunner for UnusedRunner {
+            fn run(&self, _request: RunRequest) -> BoxFuture<'static, RunOutcome> {
+                Box::pin(async move { panic!("runner should not be called") })
+            }
+        }
+
+        let sink = RecordingNotificationSink::default();
+        let supervisor = Supervisor::new_with_notifier(
+            sample_config(),
+            Arc::new(FailingProvider),
+            Arc::new(UnusedRunner),
+            Box::new(sink.clone()),
+        )
+        .expect("supervisor should construct");
+
+        let error = supervisor.poll_once().await.expect_err("poll should fail");
+        assert!(error.to_string().contains("boom"));
+
+        let notifications = sink.snapshot();
+        assert_eq!(notifications.len(), 1);
+        assert_eq!(notifications[0].level, EventLevel::Error);
+        assert!(notifications[0]
+            .title
+            .contains("scheduled daemon poll failed"));
     }
 }
