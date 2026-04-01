@@ -11,8 +11,8 @@ use tokio::sync::{mpsc, Mutex as AsyncMutex};
 use crate::{
     config::ResolvedConfig,
     model::{
-        AttentionReason, DashboardState, EventLevel, PersistentPrState, PullRequest, RunnerState,
-        TrackedPr, TrackingStatus,
+        AttentionReason, DashboardState, EventLevel, PersistentPrState, PullRequest,
+        ReviewRequestPr, RunnerState, TrackedPr, TrackingStatus,
     },
     runner::{
         RunOutcome, RunRequest, RunUpdate, OUTPUT_TRANSCRIPT_HEADER, PROMPT_TRANSCRIPT_HEADER,
@@ -22,6 +22,10 @@ use crate::{
 
 pub trait GitHubProvider: Send + Sync {
     fn fetch_pull_requests(&self) -> BoxFuture<'_, Result<Vec<PullRequest>>>;
+
+    fn fetch_review_requests(&self) -> BoxFuture<'_, Result<Vec<PullRequest>>> {
+        Box::pin(async move { Ok(Vec::new()) })
+    }
 
     fn fetch_pull_requests_with_state(
         &self,
@@ -38,6 +42,17 @@ pub trait GitHubProvider: Send + Sync {
         Box::pin(async move {
             Ok((
                 self.fetch_pull_requests_with_state(poll_state).await?,
+                GitHubRequestStats::default(),
+            ))
+        })
+    }
+
+    fn fetch_review_requests_with_stats(
+        &self,
+    ) -> BoxFuture<'_, Result<(Vec<PullRequest>, GitHubRequestStats)>> {
+        Box::pin(async move {
+            Ok((
+                self.fetch_review_requests().await?,
                 GitHubRequestStats::default(),
             ))
         })
@@ -64,6 +79,22 @@ pub trait GitHubProvider: Send + Sync {
             ))
         })
     }
+
+    fn post_issue_comment(&self, pr_key: String, body: String) -> BoxFuture<'_, Result<()>> {
+        Box::pin(async move {
+            let _ = (pr_key, body);
+            Err(anyhow::anyhow!(
+                "posting issue comments is not supported by this provider"
+            ))
+        })
+    }
+}
+
+#[derive(Debug, Clone, Default)]
+struct PollResult {
+    tracked_prs: Vec<PullRequest>,
+    review_requests: Vec<PullRequest>,
+    fetch_stats: GitHubRequestStats,
 }
 
 pub trait AgentRunner: Send + Sync {
@@ -95,6 +126,22 @@ pub struct GitHubRequestStats {
 }
 
 impl GitHubRequestStats {
+    pub fn merge(&mut self, other: &GitHubRequestStats) {
+        self.viewer_requests += other.viewer_requests;
+        self.search_requests += other.search_requests;
+        self.pull_detail_requests += other.pull_detail_requests;
+        self.review_requests += other.review_requests;
+        self.review_comment_requests += other.review_comment_requests;
+        self.issue_comment_requests += other.issue_comment_requests;
+        self.check_run_requests += other.check_run_requests;
+        self.light_prs += other.light_prs;
+        self.hydrated_prs += other.hydrated_prs;
+        self.reused_prs += other.reused_prs;
+        if self.total_matching_prs.is_none() {
+            self.total_matching_prs = other.total_matching_prs;
+        }
+    }
+
     pub fn has_metrics(&self) -> bool {
         self.total_requests() > 0
             || self.light_prs > 0
@@ -338,6 +385,106 @@ impl Supervisor {
         Ok(Some(updated))
     }
 
+    pub async fn trigger_deep_review(
+        self: &Arc<Self>,
+        pr_key: &str,
+    ) -> Result<Option<ReviewRequestPr>> {
+        {
+            let state = self
+                .shared_state
+                .lock()
+                .expect("dashboard state mutex poisoned");
+            if !state.review_requests.contains_key(pr_key) {
+                return Ok(None);
+            }
+        }
+
+        let (pull_request, _) = self
+            .provider
+            .fetch_pull_request_with_stats(pr_key.to_owned())
+            .await?;
+        let Some(pull_request) = pull_request else {
+            return Ok(None);
+        };
+
+        let started_at = Utc::now();
+        let updated = {
+            let mut inner = self.inner.lock().await;
+            if inner.active_runs.contains_key(pr_key) {
+                return Err(anyhow::anyhow!("a run is already active for {pr_key}"));
+            }
+            if inner.active_runs.len() >= self.config.daemon.max_concurrent_runs {
+                return Err(anyhow::anyhow!(
+                    "no runner slots are available for deep review ({}/{})",
+                    inner.active_runs.len(),
+                    self.config.daemon.max_concurrent_runs
+                ));
+            }
+
+            inner.active_runs.insert(
+                pr_key.to_owned(),
+                ActiveRun {
+                    started_at,
+                    trigger: AttentionReason::DeepReview,
+                },
+            );
+
+            let persisted = inner
+                .persisted_state
+                .prs
+                .get(pr_key)
+                .cloned()
+                .unwrap_or_default();
+            let mut state = self
+                .shared_state
+                .lock()
+                .expect("dashboard state mutex poisoned");
+            let review_request = ReviewRequestPr {
+                pull_request: pull_request.clone(),
+                persisted,
+                runner: Some(RunnerState {
+                    status: TrackingStatus::Running,
+                    started_at,
+                    finished_at: None,
+                    attempt: 1,
+                    trigger: AttentionReason::DeepReview,
+                    summary: AttentionReason::DeepReview.active_summary().to_owned(),
+                    live_output: None,
+                    live_terminal: None,
+                    last_terminal_output_at: None,
+                    exit_code: None,
+                }),
+            };
+            state
+                .review_requests
+                .insert(pr_key.to_owned(), review_request.clone());
+            review_request
+        };
+
+        self.push_event(
+            EventLevel::Info,
+            Some(pr_key.to_owned()),
+            format!("starting manual deep review for {pr_key}"),
+        );
+
+        let supervisor = Arc::clone(self);
+        let workspace = self.config.workspace.clone();
+        let agent = self.config.agent.clone();
+        tokio::spawn(async move {
+            supervisor
+                .run_manual_request(RunRequest {
+                    pull_request,
+                    trigger: AttentionReason::DeepReview,
+                    workspace,
+                    agent,
+                    output_updates: None,
+                })
+                .await;
+        });
+
+        Ok(Some(updated))
+    }
+
     pub async fn poll_once(&self) -> Result<()> {
         self.poll_once_with_selection(None, true).await
     }
@@ -406,6 +553,100 @@ impl Supervisor {
         });
     }
 
+    async fn run_manual_request(self: Arc<Self>, request: RunRequest) {
+        let pr_key = request.pull_request.key.clone();
+        let (output_tx, mut output_rx) = mpsc::unbounded_channel::<RunUpdate>();
+        let mut runner_request = request.clone();
+        runner_request.output_updates = Some(output_tx);
+        let output_pr_key = pr_key.clone();
+        let shared_state = self.shared_state.clone();
+        let output_forwarder = tokio::spawn(async move {
+            let mut buffered_output = String::new();
+            while let Some(update) = output_rx.recv().await {
+                let mut state = shared_state.lock().expect("dashboard state mutex poisoned");
+                update_runner_output(&mut state, &output_pr_key, &mut buffered_output, update);
+            }
+        });
+
+        let outcome = self.runner.run(runner_request).await;
+        output_forwarder.await.ok();
+        let mut outcome = outcome;
+        let mut posted_comment = false;
+        if outcome.success {
+            let comment_body = deep_review_comment_body(outcome.captured_output.as_deref());
+            match self
+                .provider
+                .post_issue_comment(pr_key.clone(), comment_body)
+                .await
+            {
+                Ok(()) => {
+                    posted_comment = true;
+                }
+                Err(error) => {
+                    outcome = deep_review_comment_failure(outcome, &error.to_string());
+                }
+            }
+        }
+
+        let persisted = {
+            let mut inner = self.inner.lock().await;
+            let active_run = inner.active_runs.remove(&pr_key);
+            let persisted = inner.persisted_state.prs.entry(pr_key.clone()).or_default();
+            persist_run_metadata(
+                persisted,
+                active_run.as_ref().map(|run| run.trigger),
+                &outcome,
+            );
+            let persisted = persisted.clone();
+
+            if let Err(error) = self.store.save(&inner.persisted_state) {
+                self.push_event(
+                    EventLevel::Error,
+                    Some(pr_key.clone()),
+                    format!("failed to persist deep review state for {pr_key}: {error:#}"),
+                );
+            }
+
+            persisted
+        };
+
+        {
+            let mut state = self
+                .shared_state
+                .lock()
+                .expect("dashboard state mutex poisoned");
+            if let Some(review_request) = state.review_requests.get_mut(&pr_key) {
+                review_request.persisted = persisted;
+                review_request.runner = None;
+            }
+        }
+
+        if posted_comment {
+            self.push_event(
+                EventLevel::Info,
+                Some(pr_key.clone()),
+                format!("posted deep review comment for {pr_key}"),
+            );
+        }
+
+        self.push_event(
+            if outcome.success {
+                EventLevel::Info
+            } else {
+                EventLevel::Error
+            },
+            Some(pr_key.clone()),
+            if outcome.success {
+                format!("manual deep review completed for {pr_key}")
+            } else {
+                format!(
+                    "manual deep review failed for {pr_key}: {}",
+                    outcome.summary
+                )
+            },
+        );
+    }
+
     async fn poll_once_inner(
         &self,
         preferred_pr_key: Option<&str>,
@@ -420,14 +661,17 @@ impl Supervisor {
             },
         );
 
-        let (prs, fetch_stats) = self
+        let poll_result = self
             .fetch_prs_for_poll(preferred_pr_key, allow_fallback)
             .await?;
+        let prs = &poll_result.tracked_prs;
+        let review_requests = &poll_result.review_requests;
+        let fetch_stats = &poll_result.fetch_stats;
         if fetch_stats.has_metrics() {
             self.push_event(
                 EventLevel::Info,
                 preferred_pr_key.map(str::to_owned),
-                fetch_stats.activity_message(prs.len(), preferred_pr_key),
+                fetch_stats.activity_message(prs.len() + review_requests.len(), preferred_pr_key),
             );
         }
 
@@ -437,6 +681,7 @@ impl Supervisor {
             refresh_dashboard(
                 &self.shared_state,
                 &prs,
+                &review_requests,
                 &inner.persisted_state,
                 &inner.active_runs,
                 self.config.daemon.poll_interval_secs,
@@ -464,6 +709,7 @@ impl Supervisor {
                 refresh_dashboard(
                     &self.shared_state,
                     &prs,
+                    &review_requests,
                     &inner.persisted_state,
                     &inner.active_runs,
                     self.config.daemon.poll_interval_secs,
@@ -533,23 +779,7 @@ impl Supervisor {
                 let mut buffered_output = String::new();
                 while let Some(update) = output_rx.recv().await {
                     let mut state = shared_state.lock().expect("dashboard state mutex poisoned");
-                    if let Some(tracked) = state.tracked_prs.get_mut(&output_pr_key) {
-                        if let Some(runner) = tracked.runner.as_mut() {
-                            match update {
-                                RunUpdate::TranscriptChunk(chunk) => {
-                                    append_live_output(&mut buffered_output, &chunk);
-                                    runner.live_output = Some(buffered_output.clone());
-                                }
-                                RunUpdate::TerminalSnapshot {
-                                    screen,
-                                    last_output_at,
-                                } => {
-                                    runner.live_terminal = Some(screen);
-                                    runner.last_terminal_output_at = Some(last_output_at);
-                                }
-                            }
-                        }
-                    }
+                    update_runner_output(&mut state, &output_pr_key, &mut buffered_output, update);
                 }
             });
 
@@ -561,16 +791,11 @@ impl Supervisor {
             let mut auto_paused = false;
             {
                 let persisted = inner.persisted_state.prs.entry(pr_key.clone()).or_default();
-                persisted.last_run_started_at = Some(outcome.started_at);
-                persisted.last_run_finished_at = Some(outcome.finished_at);
-                persisted.last_run_status =
-                    Some(if outcome.success { "success" } else { "error" }.to_owned());
-                persisted.last_run_summary = Some(outcome.summary.clone());
-                persisted.last_run_output = capped_run_output(outcome.captured_output.as_deref());
-                persisted.last_run_terminal =
-                    capped_run_output(outcome.captured_terminal.as_deref());
-                persisted.last_terminal_output_at = outcome.last_terminal_output_at;
-                persisted.last_run_trigger = active_run.as_ref().map(|run| run.trigger);
+                persist_run_metadata(
+                    persisted,
+                    active_run.as_ref().map(|run| run.trigger),
+                    &outcome,
+                );
                 if outcome.success {
                     record_successful_run(persisted, &request, &outcome);
                 } else {
@@ -583,6 +808,7 @@ impl Supervisor {
             refresh_dashboard(
                 &self.shared_state,
                 &prs,
+                &review_requests,
                 &inner.persisted_state,
                 &inner.active_runs,
                 self.config.daemon.poll_interval_secs,
@@ -619,22 +845,37 @@ impl Supervisor {
         &self,
         preferred_pr_key: Option<&str>,
         allow_fallback: bool,
-    ) -> Result<(Vec<PullRequest>, GitHubRequestStats)> {
+    ) -> Result<PollResult> {
         if let Some(pr_key) = preferred_pr_key {
             if !allow_fallback {
                 let mut prs = current_poll_query_state(&self.shared_state).previous_prs;
+                let review_requests = current_review_requests(&self.shared_state);
                 let (fetched, stats) = self
                     .provider
                     .fetch_pull_request_with_stats(pr_key.to_owned())
                     .await?;
                 merge_targeted_pr_into_list(&mut prs, pr_key, fetched);
-                return Ok((prs, stats));
+                return Ok(PollResult {
+                    tracked_prs: prs,
+                    review_requests,
+                    fetch_stats: stats,
+                });
             }
         }
 
-        self.provider
+        let tracked = self
+            .provider
             .fetch_pull_requests_with_state_and_stats(current_poll_query_state(&self.shared_state))
-            .await
+            .await?;
+        let review_requests = self.provider.fetch_review_requests_with_stats().await?;
+        let mut combined_stats = tracked.1.clone();
+        combined_stats.merge(&review_requests.1);
+
+        Ok(PollResult {
+            tracked_prs: tracked.0,
+            review_requests: review_requests.0,
+            fetch_stats: combined_stats,
+        })
     }
 }
 
@@ -692,6 +933,7 @@ fn selectable_run_request<'a>(
 fn refresh_dashboard(
     shared_state: &Arc<Mutex<DashboardState>>,
     prs: &[PullRequest],
+    review_requests: &[PullRequest],
     persisted_state: &PersistentStateFile,
     active_runs: &HashMap<String, ActiveRun>,
     poll_interval_secs: u64,
@@ -699,9 +941,16 @@ fn refresh_dashboard(
 ) {
     let mut state = shared_state.lock().expect("dashboard state mutex poisoned");
     let tracked = build_tracked_prs(prs, persisted_state, active_runs, &state.tracked_prs);
+    let review_requests = build_review_requests(
+        review_requests,
+        persisted_state,
+        active_runs,
+        &state.review_requests,
+    );
     let tracked_len = tracked.len();
     let previous_total = state.total_matching_prs.unwrap_or(tracked_len);
     state.tracked_prs = tracked;
+    state.review_requests = review_requests;
     state.total_matching_prs = Some(
         total_matching_prs
             .unwrap_or(previous_total)
@@ -746,6 +995,37 @@ fn build_tracked_prs(
     tracked
 }
 
+fn build_review_requests(
+    prs: &[PullRequest],
+    persisted_state: &PersistentStateFile,
+    active_runs: &HashMap<String, ActiveRun>,
+    previous_review_requests: &BTreeMap<String, ReviewRequestPr>,
+) -> BTreeMap<String, ReviewRequestPr> {
+    let mut review_requests = BTreeMap::new();
+
+    for pr in prs {
+        review_requests.insert(
+            pr.key.clone(),
+            build_review_request(pr, persisted_state, active_runs),
+        );
+    }
+
+    for (pr_key, previous) in previous_review_requests {
+        if review_requests.contains_key(pr_key) {
+            continue;
+        }
+
+        if previous.runner.is_some() {
+            review_requests.insert(
+                pr_key.clone(),
+                build_review_request(&previous.pull_request, persisted_state, active_runs),
+            );
+        }
+    }
+
+    review_requests
+}
+
 fn build_tracked_pr(
     pr: &PullRequest,
     persisted_state: &PersistentStateFile,
@@ -779,6 +1059,38 @@ fn build_tracked_pr(
     }
 }
 
+fn build_review_request(
+    pr: &PullRequest,
+    persisted_state: &PersistentStateFile,
+    active_runs: &HashMap<String, ActiveRun>,
+) -> ReviewRequestPr {
+    let persisted = persisted_state
+        .prs
+        .get(&pr.key)
+        .cloned()
+        .unwrap_or_default();
+    let active_run = active_runs.get(&pr.key);
+
+    ReviewRequestPr {
+        pull_request: pr.clone(),
+        persisted,
+        runner: active_run
+            .filter(|active| active.trigger == AttentionReason::DeepReview)
+            .map(|active| RunnerState {
+                status: TrackingStatus::Running,
+                started_at: active.started_at,
+                finished_at: None,
+                attempt: 1,
+                trigger: active.trigger,
+                summary: active.trigger.active_summary().to_owned(),
+                live_output: None,
+                live_terminal: None,
+                last_terminal_output_at: None,
+                exit_code: None,
+            }),
+    }
+}
+
 fn current_poll_query_state(shared_state: &Arc<Mutex<DashboardState>>) -> PollQueryState {
     let state = shared_state.lock().expect("dashboard state mutex poisoned");
 
@@ -795,6 +1107,15 @@ fn current_poll_query_state(shared_state: &Arc<Mutex<DashboardState>>) -> PollQu
             .map(|(pr_key, _)| pr_key.clone())
             .collect(),
     }
+}
+
+fn current_review_requests(shared_state: &Arc<Mutex<DashboardState>>) -> Vec<PullRequest> {
+    let state = shared_state.lock().expect("dashboard state mutex poisoned");
+    state
+        .review_requests
+        .values()
+        .map(|review_request| review_request.pull_request.clone())
+        .collect()
 }
 
 fn merge_targeted_pr_into_list(
@@ -938,6 +1259,7 @@ fn retry_signal_matches(
             persisted.retry_comment_at == pr.latest_reviewer_activity_at
         }
         AttentionReason::CiFailed => persisted.retry_ci_at == pr.ci_updated_at,
+        AttentionReason::DeepReview => false,
     }
 }
 
@@ -979,10 +1301,102 @@ fn record_successful_run(
             persisted.last_processed_ci_at = outcome.processed_ci_at;
             persisted.last_processed_head_sha = Some(outcome.processed_head_sha.clone());
         }
-        AttentionReason::MergeConflict => {}
+        AttentionReason::MergeConflict | AttentionReason::DeepReview => {}
     }
 
     persisted.clear_retry_state();
+}
+
+fn update_runner_output(
+    state: &mut DashboardState,
+    pr_key: &str,
+    buffered_output: &mut String,
+    update: RunUpdate,
+) {
+    let Some(runner) = runner_for_pr_mut(state, pr_key) else {
+        return;
+    };
+
+    match update {
+        RunUpdate::TranscriptChunk(chunk) => {
+            append_live_output(buffered_output, &chunk);
+            runner.live_output = Some(buffered_output.clone());
+        }
+        RunUpdate::TerminalSnapshot {
+            screen,
+            last_output_at,
+        } => {
+            runner.live_terminal = Some(screen);
+            runner.last_terminal_output_at = Some(last_output_at);
+        }
+    }
+}
+
+fn runner_for_pr_mut<'a>(
+    state: &'a mut DashboardState,
+    pr_key: &str,
+) -> Option<&'a mut RunnerState> {
+    if let Some(tracked) = state.tracked_prs.get_mut(pr_key) {
+        return tracked.runner.as_mut();
+    }
+
+    if let Some(review_request) = state.review_requests.get_mut(pr_key) {
+        return review_request.runner.as_mut();
+    }
+
+    None
+}
+
+fn persist_run_metadata(
+    persisted: &mut PersistentPrState,
+    trigger: Option<AttentionReason>,
+    outcome: &RunOutcome,
+) {
+    persisted.last_run_started_at = Some(outcome.started_at);
+    persisted.last_run_finished_at = Some(outcome.finished_at);
+    persisted.last_run_status = Some(if outcome.success { "success" } else { "error" }.to_owned());
+    persisted.last_run_summary = Some(outcome.summary.clone());
+    persisted.last_run_output = capped_run_output(outcome.captured_output.as_deref());
+    persisted.last_run_terminal = capped_run_output(outcome.captured_terminal.as_deref());
+    persisted.last_terminal_output_at = outcome.last_terminal_output_at;
+    persisted.last_run_trigger = trigger;
+}
+
+fn deep_review_comment_body(output: Option<&str>) -> String {
+    let review_body = output
+        .and_then(strip_output_transcript_preamble)
+        .filter(|body| !body.trim().is_empty())
+        .unwrap_or("No findings.".to_owned());
+    format!("## Deep Review\n\n{review_body}")
+}
+
+fn strip_output_transcript_preamble(output: &str) -> Option<String> {
+    let output = output
+        .find(OUTPUT_TRANSCRIPT_HEADER)
+        .map(|offset| &output[offset + OUTPUT_TRANSCRIPT_HEADER.len()..])
+        .unwrap_or(output)
+        .trim();
+
+    if output.is_empty() {
+        None
+    } else {
+        Some(output.to_owned())
+    }
+}
+
+fn deep_review_comment_failure(mut outcome: RunOutcome, error: &str) -> RunOutcome {
+    let mut captured_output =
+        strip_output_transcript_preamble(outcome.captured_output.as_deref().unwrap_or(""))
+            .unwrap_or_default();
+    if !captured_output.is_empty() {
+        captured_output.push_str("\n\n");
+    }
+    captured_output.push_str(&format!("failed to post deep review comment: {error}"));
+    outcome.success = false;
+    outcome.exit_code = None;
+    outcome.summary = AttentionReason::DeepReview.failure_summary().to_owned();
+    outcome.captured_output = Some(captured_output);
+    outcome
 }
 
 fn append_live_output(buffer: &mut String, chunk: &str) {

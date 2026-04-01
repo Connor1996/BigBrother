@@ -48,6 +48,7 @@ pub enum AttentionReason {
     CiFailed,
     ReviewFeedback,
     MergeConflict,
+    DeepReview,
 }
 
 impl AttentionReason {
@@ -56,6 +57,7 @@ impl AttentionReason {
             Self::CiFailed => "CI failed",
             Self::ReviewFeedback => "new review feedback",
             Self::MergeConflict => "merge conflict with base branch",
+            Self::DeepReview => "manual deep review",
         }
     }
 
@@ -64,6 +66,7 @@ impl AttentionReason {
             Self::CiFailed => "investigating CI failure",
             Self::ReviewFeedback => "addressing review feedback",
             Self::MergeConflict => "resolving merge conflict",
+            Self::DeepReview => "running deep review",
         }
     }
 
@@ -72,6 +75,7 @@ impl AttentionReason {
             Self::CiFailed => "CI failure handling completed",
             Self::ReviewFeedback => "review feedback handling completed",
             Self::MergeConflict => "merge conflict handling completed",
+            Self::DeepReview => "deep review completed",
         }
     }
 
@@ -80,6 +84,7 @@ impl AttentionReason {
             Self::CiFailed => "CI failure handling failed",
             Self::ReviewFeedback => "review feedback handling failed",
             Self::MergeConflict => "merge conflict handling failed",
+            Self::DeepReview => "deep review failed",
         }
     }
 }
@@ -274,6 +279,13 @@ pub struct TrackedPr {
     pub runner: Option<RunnerState>,
 }
 
+#[derive(Debug, Clone)]
+pub struct ReviewRequestPr {
+    pub pull_request: PullRequest,
+    pub persisted: PersistentPrState,
+    pub runner: Option<RunnerState>,
+}
+
 #[derive(Debug, Clone, Copy)]
 pub enum EventLevel {
     Info,
@@ -300,6 +312,7 @@ pub struct ActivityEvent {
 #[derive(Debug, Clone, Default)]
 pub struct DashboardState {
     pub tracked_prs: BTreeMap<String, TrackedPr>,
+    pub review_requests: BTreeMap<String, ReviewRequestPr>,
     pub total_matching_prs: Option<usize>,
     pub activity: VecDeque<ActivityEvent>,
     pub last_poll_started_at: Option<DateTime<Utc>>,

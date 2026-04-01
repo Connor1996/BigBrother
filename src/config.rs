@@ -220,6 +220,10 @@ pub fn build_search_query(config: &ResolvedGitHubConfig, author: &str) -> String
     }
 }
 
+pub fn build_review_request_query(reviewer: &str) -> String {
+    format!("is:pr is:open archived:false review-requested:{reviewer}")
+}
+
 fn resolve_secret(value: Option<String>, fallbacks: &[&str]) -> Result<String> {
     if let Some(value) = value {
         if value.trim().starts_with('$') {

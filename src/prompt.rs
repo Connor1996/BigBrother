@@ -1,6 +1,10 @@
 use crate::model::{AttentionReason, PullRequest};
 
 pub fn build_prompt(pr: &PullRequest, reason: AttentionReason, extra: Option<&str>) -> String {
+    if reason == AttentionReason::DeepReview {
+        return build_deep_review_prompt(pr, extra);
+    }
+
     let reviewer_activity = pr
         .latest_reviewer_activity_at
         .map(|value| value.to_rfc3339())
@@ -74,6 +78,63 @@ pub fn build_prompt(pr: &PullRequest, reason: AttentionReason, extra: Option<&st
     )
 }
 
+fn build_deep_review_prompt(pr: &PullRequest, extra: Option<&str>) -> String {
+    let body = pr
+        .body
+        .as_deref()
+        .filter(|value| !value.trim().is_empty())
+        .unwrap_or("No PR body provided.");
+    let extra = extra
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(|value| format!("\nAdditional operator instructions:\n{value}\n"))
+        .unwrap_or_default();
+
+    format!(
+        "You are performing a deep code review for an existing GitHub pull request.\n\
+         \n\
+         Trigger: {trigger}\n\
+         Repository: {repo}\n\
+         PR: #{number}\n\
+         URL: {url}\n\
+         Title: {title}\n\
+         Base branch: {base_ref}\n\
+         Base SHA: {base_sha}\n\
+         Head branch: {head_ref}\n\
+         Head SHA: {head_sha}\n\
+         CI status: {ci_status}\n\
+         Review status: {review_status}\n\
+         Mergeable state: {mergeable_state}\n\
+         \n\
+         PR body:\n\
+         {body}\n\
+         \n\
+         Working rules:\n\
+         - Work only inside the current repository checkout.\n\
+         - Treat this as a read-only review pass: do not edit files, commit, push, or leave GitHub comments.\n\
+         - Inspect the PR diff against the latest fetched base branch, then read any surrounding code needed to validate behavior.\n\
+         - You may run targeted read-only commands or tests when they help confirm a finding.\n\
+         - Focus on bugs, regressions, risky assumptions, missing validation, and missing tests.\n\
+         - Final output must be a concise review report ordered by severity with file references when possible.\n\
+         - If you find no actionable issues, say `No findings.` and briefly note any residual risk.\n\
+         {extra}",
+        trigger = AttentionReason::DeepReview.label(),
+        repo = pr.repo_full_name,
+        number = pr.number,
+        url = pr.url,
+        title = pr.title,
+        base_ref = pr.base_ref,
+        base_sha = pr.base_sha,
+        head_ref = pr.head_ref,
+        head_sha = pr.head_sha,
+        ci_status = pr.ci_status.label(),
+        review_status = pr.review_decision.label(),
+        mergeable_state = pr.mergeable_state.as_deref().unwrap_or("unknown"),
+        body = body,
+        extra = extra
+    )
+}
+
 fn trigger_specific_rules(reason: AttentionReason) -> &'static str {
     match reason {
         AttentionReason::CiFailed => {
@@ -81,7 +142,9 @@ fn trigger_specific_rules(reason: AttentionReason) -> &'static str {
              - In that unrelated/flaky case, leave a concise PR comment containing exactly `/retest` when tooling and auth are available, then summarize why you chose a retest.\n\
              - If you cannot tell with reasonable confidence whether the failure is unrelated, stop and explain the uncertainty instead of guessing.\n"
         }
-        AttentionReason::ReviewFeedback | AttentionReason::MergeConflict => "",
+        AttentionReason::ReviewFeedback
+        | AttentionReason::MergeConflict
+        | AttentionReason::DeepReview => "",
     }
 }
 
@@ -147,5 +210,15 @@ mod tests {
 
         assert!(!prompt.contains("`/retest`"));
         assert!(!prompt.contains("do not make speculative code changes"));
+    }
+
+    #[test]
+    fn build_prompt_uses_read_only_review_instructions_for_manual_deep_review() {
+        let prompt = build_prompt(&sample_pr(), AttentionReason::DeepReview, None);
+
+        assert!(prompt.contains("You are performing a deep code review"));
+        assert!(prompt.contains("do not edit files, commit, push, or leave GitHub comments"));
+        assert!(prompt.contains("If you find no actionable issues, say `No findings.`"));
+        assert!(!prompt.contains("merge the latest base branch into the PR branch yourself"));
     }
 }

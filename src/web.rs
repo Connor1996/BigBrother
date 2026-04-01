@@ -19,7 +19,7 @@ use serde::{Deserialize, Serialize};
 use tokio::net::TcpListener;
 
 use crate::{
-    model::{ActivityEvent, PersistentPrState, TrackedPr},
+    model::{ActivityEvent, AttentionReason, PersistentPrState, ReviewRequestPr, TrackedPr},
     runner::OUTPUT_TRANSCRIPT_HEADER,
     service::Supervisor,
 };
@@ -406,6 +406,7 @@ const INDEX_HTML: &str = r#"<!doctype html>
         </div>
         <div class="view-tabs" role="tablist" aria-label="Dashboard views">
           <button id="tab-prs" class="view-tab active" type="button" data-view="prs" aria-selected="true">PRs</button>
+          <button id="tab-review-requests" class="view-tab" type="button" data-view="review-requests" aria-selected="false">Review Requests</button>
           <button id="tab-activity" class="view-tab" type="button" data-view="activity" aria-selected="false">Activity</button>
         </div>
       </div>
@@ -448,6 +449,24 @@ const INDEX_HTML: &str = r#"<!doctype html>
       </table>
     </section>
 
+    <section id="view-review-requests" class="panel dashboard-view is-hidden">
+      <table>
+        <thead>
+          <tr>
+            <th>PR</th>
+            <th>Status</th>
+            <th>CI</th>
+            <th>Reviews</th>
+            <th>Details</th>
+            <th>Action</th>
+          </tr>
+        </thead>
+        <tbody id="review-requests-table">
+          <tr><td colspan="6" class="empty">Loading requested reviews...</td></tr>
+        </tbody>
+      </table>
+    </section>
+
     <section id="view-activity" class="panel dashboard-view is-hidden">
       <div class="panel-header">
         <h2 class="panel-title">Daemon Activity</h2>
@@ -461,9 +480,11 @@ const INDEX_HTML: &str = r#"<!doctype html>
 
   <script>
     const pendingPauseKeys = new Set();
+    const pendingDeepReviewKeys = new Set();
     const optimisticPausedStates = new Map();
     const dashboardViewStorageKey = "symphony-rs.dashboard-view";
     let latestPrs = [];
+    let latestReviewRequests = [];
     let currentView = "prs";
 
     function fmtTime(value) {
@@ -532,6 +553,21 @@ const INDEX_HTML: &str = r#"<!doctype html>
       `;
     }
 
+    function renderReviewRequestAction(pr) {
+      const pending = pendingDeepReviewKeys.has(pr.key);
+      const running = pr.status === "running";
+      const label = pending ? "Starting..." : (running ? "Running..." : "Deep Review");
+      return `
+        <button
+          class="action-button"
+          ${(pending || running) ? "disabled" : ""}
+          onclick="triggerDeepReview('${encodeURIComponent(pr.key)}')"
+        >
+          ${label}
+        </button>
+      `;
+    }
+
     async function togglePause(encodedKey, paused) {
       const key = decodeURIComponent(encodedKey);
       pendingPauseKeys.add(key);
@@ -568,6 +604,36 @@ const INDEX_HTML: &str = r#"<!doctype html>
       }
     }
 
+    async function triggerDeepReview(encodedKey) {
+      const key = decodeURIComponent(encodedKey);
+      pendingDeepReviewKeys.add(key);
+      renderReviewRequests(latestReviewRequests);
+
+      try {
+        const response = await fetch("/api/review-requests/deep-review", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json"
+          },
+          body: JSON.stringify({ key })
+        });
+
+        if (!response.ok) {
+          const message = await response.text();
+          throw new Error(message || `HTTP ${response.status}`);
+        }
+
+        const payload = await response.json();
+        latestReviewRequests = latestReviewRequests.map((pr) => pr.key === key ? payload.pr : pr);
+        renderReviewRequests(latestReviewRequests);
+      } catch (error) {
+        window.alert(`Failed to start deep review: ${error.message}`);
+      } finally {
+        pendingDeepReviewKeys.delete(key);
+        refresh().catch(() => {});
+      }
+    }
+
     function renderPrs(prs) {
       const tbody = document.getElementById("prs-table");
       if (!prs.length) {
@@ -592,18 +658,46 @@ const INDEX_HTML: &str = r#"<!doctype html>
       `).join("");
     }
 
+    function renderReviewRequests(prs) {
+      const tbody = document.getElementById("review-requests-table");
+      if (!prs.length) {
+        tbody.innerHTML = '<tr><td colspan="6" class="empty">No PRs are currently requesting your review.</td></tr>';
+        return;
+      }
+
+      tbody.innerHTML = prs.map((pr) => `
+        <tr class="${rowClass(pr)}">
+          <td data-label="PR">
+            <a href="${pr.url}" target="_blank" rel="noreferrer">${escapeHtml(pr.repo_full_name)} #${pr.number}</a>
+            <div>${escapeHtml(pr.title)}</div>
+            <div style="color: var(--muted); font-size: 0.9rem;">Updated ${escapeHtml(fmtTime(pr.updated_at))}</div>
+          </td>
+          <td data-label="Status"><span class="${pillClass(pr.status)}">${escapeHtml(pr.status)}</span></td>
+          <td data-label="CI"><span class="${pillClass(pr.ci_status)}">${escapeHtml(pr.ci_status)}</span></td>
+          <td data-label="Reviews"><span class="${pillClass(pr.review_status)}">${escapeHtml(pr.review_status)}</span></td>
+          <td data-label="Details">${renderDetails(pr)}</td>
+          <td data-label="Action">${renderReviewRequestAction(pr)}</td>
+        </tr>
+      `).join("");
+    }
+
     function setDashboardView(view, persist = true) {
-      currentView = view === "activity" ? "activity" : "prs";
+      currentView = ["prs", "review-requests", "activity"].includes(view) ? view : "prs";
       document.getElementById("view-prs").classList.toggle("is-hidden", currentView !== "prs");
+      document.getElementById("view-review-requests").classList.toggle("is-hidden", currentView !== "review-requests");
       document.getElementById("view-activity").classList.toggle("is-hidden", currentView !== "activity");
 
       const prTab = document.getElementById("tab-prs");
+      const reviewRequestsTab = document.getElementById("tab-review-requests");
       const activityTab = document.getElementById("tab-activity");
       prTab.classList.toggle("active", currentView === "prs");
+      reviewRequestsTab.classList.toggle("active", currentView === "review-requests");
       activityTab.classList.toggle("active", currentView === "activity");
       prTab.setAttribute("aria-selected", String(currentView === "prs"));
+      reviewRequestsTab.setAttribute("aria-selected", String(currentView === "review-requests"));
       activityTab.setAttribute("aria-selected", String(currentView === "activity"));
       prTab.setAttribute("tabindex", currentView === "prs" ? "0" : "-1");
+      reviewRequestsTab.setAttribute("tabindex", currentView === "review-requests" ? "0" : "-1");
       activityTab.setAttribute("tabindex", currentView === "activity" ? "0" : "-1");
 
       if (persist) {
@@ -643,14 +737,16 @@ const INDEX_HTML: &str = r#"<!doctype html>
     }
 
     async function refresh() {
-      const [healthRes, prsRes, activityRes] = await Promise.all([
+      const [healthRes, prsRes, reviewRequestsRes, activityRes] = await Promise.all([
         fetch("/api/health"),
         fetch("/api/prs"),
+        fetch("/api/review-requests"),
         fetch("/api/activity")
       ]);
 
       const health = await healthRes.json();
       const prsPayload = await prsRes.json();
+      const reviewRequestsPayload = await reviewRequestsRes.json();
       const activityPayload = await activityRes.json();
 
       document.getElementById("health-status").textContent = health.ok ? "Healthy" : "Attention needed";
@@ -658,17 +754,22 @@ const INDEX_HTML: &str = r#"<!doctype html>
       document.getElementById("health-running").textContent = String(health.running_prs);
       document.getElementById("health-poll").textContent = fmtTime(health.last_poll_finished_at);
       latestPrs = prsPayload.prs || [];
+      latestReviewRequests = reviewRequestsPayload.prs || [];
       renderPrs(latestPrs);
+      renderReviewRequests(latestReviewRequests);
       renderActivity(activityPayload.events || []);
     }
 
     setDashboardView(restoreDashboardView(), false);
     document.getElementById("tab-prs").addEventListener("click", () => setDashboardView("prs"));
+    document.getElementById("tab-review-requests").addEventListener("click", () => setDashboardView("review-requests"));
     document.getElementById("tab-activity").addEventListener("click", () => setDashboardView("activity"));
 
     refresh().catch((error) => {
       document.getElementById("prs-table").innerHTML =
         `<tr><td colspan="7" class="empty">Failed to load dashboard: ${error.message}</td></tr>`;
+      document.getElementById("review-requests-table").innerHTML =
+        `<tr><td colspan="6" class="empty">Failed to load review requests: ${error.message}</td></tr>`;
       document.getElementById("activity-feed").innerHTML =
         `<div class="empty">Failed to load daemon activity: ${error.message}</div>`;
     });
@@ -994,6 +1095,11 @@ struct PullRequestsResponse {
 }
 
 #[derive(Debug, Serialize)]
+struct ReviewRequestsResponse {
+    prs: Vec<PullRequestSummary>,
+}
+
+#[derive(Debug, Serialize)]
 struct ActivityResponse {
     events: Vec<ActivitySummary>,
 }
@@ -1038,8 +1144,19 @@ struct PauseRequest {
     paused: bool,
 }
 
+#[derive(Debug, Deserialize)]
+struct DeepReviewRequest {
+    key: String,
+}
+
 #[derive(Debug, Serialize)]
 struct PauseResponse {
+    ok: bool,
+    pr: PullRequestSummary,
+}
+
+#[derive(Debug, Serialize)]
+struct DeepReviewResponse {
     ok: bool,
     pr: PullRequestSummary,
 }
@@ -1055,8 +1172,13 @@ pub fn router(supervisor: Arc<Supervisor>) -> Router {
         .route("/api/health", get(health))
         .route("/api/activity", get(activity))
         .route("/api/prs", get(list_prs))
+        .route("/api/review-requests", get(list_review_requests))
         .route("/api/pr", get(get_pr))
         .route("/api/prs/pause", post(set_pr_paused))
+        .route(
+            "/api/review-requests/deep-review",
+            post(trigger_deep_review),
+        )
         .with_state(supervisor)
 }
 
@@ -1096,7 +1218,12 @@ async fn health(State(supervisor): State<Arc<Supervisor>>) -> Json<HealthRespons
         .tracked_prs
         .values()
         .filter(|pr| pr.status == crate::model::TrackingStatus::Running)
-        .count();
+        .count()
+        + snapshot
+            .review_requests
+            .values()
+            .filter(|pr| pr.runner.is_some())
+            .count();
 
     Json(HealthResponse {
         ok: snapshot.last_poll_error.is_none(),
@@ -1130,19 +1257,37 @@ async fn list_prs(State(supervisor): State<Arc<Supervisor>>) -> Json<PullRequest
     Json(PullRequestsResponse { prs })
 }
 
+async fn list_review_requests(
+    State(supervisor): State<Arc<Supervisor>>,
+) -> Json<ReviewRequestsResponse> {
+    let snapshot = supervisor.snapshot();
+    let mut prs = snapshot
+        .review_requests
+        .values()
+        .map(summarize_review_request)
+        .collect::<Vec<_>>();
+
+    prs.sort_by(|left, right| right.updated_at.cmp(&left.updated_at));
+
+    Json(ReviewRequestsResponse { prs })
+}
+
 async fn get_pr(
     State(supervisor): State<Arc<Supervisor>>,
     Query(query): Query<PrQuery>,
 ) -> Result<Json<PullRequestSummary>, (StatusCode, String)> {
     let snapshot = supervisor.snapshot();
-    let Some(tracked) = snapshot.tracked_prs.get(&query.key) else {
+    if let Some(tracked) = snapshot.tracked_prs.get(&query.key) {
+        return Ok(Json(summarize_pr(tracked)));
+    }
+    let Some(review_request) = snapshot.review_requests.get(&query.key) else {
         return Err((
             StatusCode::NOT_FOUND,
             format!("unknown PR key: {}", query.key),
         ));
     };
 
-    Ok(Json(summarize_pr(tracked)))
+    Ok(Json(summarize_review_request(review_request)))
 }
 
 async fn set_pr_paused(
@@ -1169,6 +1314,33 @@ async fn set_pr_paused(
     Ok(Json(PauseResponse {
         ok: true,
         pr: summarize_pr(&tracked),
+    }))
+}
+
+async fn trigger_deep_review(
+    State(supervisor): State<Arc<Supervisor>>,
+    Json(request): Json<DeepReviewRequest>,
+) -> Result<Json<DeepReviewResponse>, (StatusCode, String)> {
+    let updated = supervisor
+        .trigger_deep_review(&request.key)
+        .await
+        .map_err(|error| {
+            (
+                StatusCode::CONFLICT,
+                format!("failed starting deep review: {error:#}"),
+            )
+        })?;
+
+    let Some(review_request) = updated else {
+        return Err((
+            StatusCode::NOT_FOUND,
+            format!("unknown review request PR key: {}", request.key),
+        ));
+    };
+
+    Ok(Json(DeepReviewResponse {
+        ok: true,
+        pr: summarize_review_request(&review_request),
     }))
 }
 
@@ -1216,6 +1388,47 @@ fn summarize_pr(tracked: &TrackedPr) -> PullRequestSummary {
     }
 }
 
+fn summarize_review_request(review_request: &ReviewRequestPr) -> PullRequestSummary {
+    let (details_label, details_at) = review_request_detail_timestamps(review_request);
+
+    PullRequestSummary {
+        key: review_request.pull_request.key.clone(),
+        repo_full_name: review_request.pull_request.repo_full_name.clone(),
+        number: review_request.pull_request.number,
+        title: review_request.pull_request.title.clone(),
+        url: review_request.pull_request.url.clone(),
+        status: review_request_status(review_request).to_owned(),
+        ci_status: review_request.pull_request.ci_status.label().to_owned(),
+        review_status: review_request
+            .pull_request
+            .review_decision
+            .label()
+            .to_owned(),
+        is_paused: false,
+        can_toggle_pause: false,
+        attention_reason: Some("requested reviewer".to_owned()),
+        updated_at: review_request.pull_request.updated_at,
+        latest_summary: latest_review_request_summary(review_request),
+        detail_output: latest_review_request_output(review_request),
+        last_terminal_output_at: review_request
+            .runner
+            .as_ref()
+            .and_then(|runner| runner.last_terminal_output_at)
+            .or_else(|| {
+                if review_request.runner.is_none()
+                    && review_request.persisted.last_run_trigger
+                        == Some(AttentionReason::DeepReview)
+                {
+                    review_request.persisted.last_terminal_output_at
+                } else {
+                    None
+                }
+            }),
+        details_label,
+        details_at,
+    }
+}
+
 fn latest_detail_output(tracked: &TrackedPr) -> Option<String> {
     tracked
         .runner
@@ -1236,6 +1449,76 @@ fn latest_operator_summary(tracked: &TrackedPr) -> Option<String> {
         .as_ref()
         .map(|runner| runner.summary.clone())
         .or_else(|| summarize_persisted_run(&tracked.persisted))
+}
+
+fn latest_review_request_summary(review_request: &ReviewRequestPr) -> Option<String> {
+    review_request
+        .runner
+        .as_ref()
+        .filter(|runner| runner.trigger == AttentionReason::DeepReview)
+        .map(|runner| runner.summary.clone())
+        .or_else(|| summarize_deep_review_persisted_run(&review_request.persisted))
+}
+
+fn latest_review_request_output(review_request: &ReviewRequestPr) -> Option<String> {
+    review_request
+        .runner
+        .as_ref()
+        .filter(|runner| runner.trigger == AttentionReason::DeepReview)
+        .and_then(|runner| runner.live_terminal.clone())
+        .or_else(|| {
+            if review_request.runner.is_none()
+                && review_request.persisted.last_run_trigger == Some(AttentionReason::DeepReview)
+            {
+                persisted_run_output(review_request.persisted.last_run_output.as_deref())
+            } else {
+                None
+            }
+        })
+}
+
+fn summarize_deep_review_persisted_run(persisted: &PersistentPrState) -> Option<String> {
+    if persisted.last_run_trigger != Some(AttentionReason::DeepReview) {
+        return None;
+    }
+
+    summarize_persisted_run(persisted)
+}
+
+fn review_request_detail_timestamps(
+    review_request: &ReviewRequestPr,
+) -> (Option<String>, Option<DateTime<Utc>>) {
+    if let Some(runner) = review_request.runner.as_ref() {
+        (Some("Started".to_owned()), Some(runner.started_at))
+    } else if review_request.persisted.last_run_trigger == Some(AttentionReason::DeepReview) {
+        if let Some(finished_at) = review_request.persisted.last_run_finished_at {
+            (Some("Last run".to_owned()), Some(finished_at))
+        } else if let Some(started_at) = review_request.persisted.last_run_started_at {
+            (Some("Last run".to_owned()), Some(started_at))
+        } else {
+            (None, None)
+        }
+    } else {
+        (None, None)
+    }
+}
+
+fn review_request_status(review_request: &ReviewRequestPr) -> &'static str {
+    if review_request
+        .runner
+        .as_ref()
+        .is_some_and(|runner| runner.trigger == AttentionReason::DeepReview)
+    {
+        "running"
+    } else if review_request.persisted.last_run_trigger == Some(AttentionReason::DeepReview) {
+        match review_request.persisted.last_run_status.as_deref() {
+            Some("success") => "reviewed",
+            Some("error") => "review failed",
+            _ => "requested review",
+        }
+    } else {
+        "requested review"
+    }
 }
 
 fn summarize_persisted_run(persisted: &PersistentPrState) -> Option<String> {

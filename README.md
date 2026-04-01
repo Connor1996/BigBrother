@@ -13,6 +13,7 @@ Current status:
 The current MVP combines:
 
 - a background polling daemon that watches your authored GitHub PRs
+- a lightweight review-request inbox for PRs that currently request your review
 - a configurable agent runner that can try to fix CI or reviewer feedback automatically
 - a local web dashboard served from the same Rust process
 
@@ -34,7 +35,7 @@ For each open PR authored by you, Symphony RS polls GitHub and computes a live s
 - `blocked`: the last agent run failed
 - `draft`, `closed`, `merged`: terminal or non-actionable states
 
-The UI shows the PR list, CI/review state, attention reason, timestamps, top-right dashboard tabs for switching between the PR view and live daemon activity, a dedicated run-details page that streams live Codex CLI output for active runs and preserves the latest run output after completion, and a visibly subdued row state when a PR is paused.
+The UI shows the authored PR list, a `Review Requests` tab for PRs that currently request your review, CI/review state, attention reason, timestamps, top-right dashboard tabs for switching between the PR view, review inbox, and live daemon activity, a dedicated run-details page that streams live Codex CLI output for active runs and preserves the latest run output after completion, and a visibly subdued row state when a PR is paused.
 
 ## Requirements
 
@@ -98,6 +99,8 @@ When Symphony RS detects a PR that needs attention, it:
 8. updates the UI and persisted state with the result
 
 The default prompt asks the agent to inspect GitHub feedback and CI, merge the latest base branch itself when needed, resolve conflicts before declaring success, fix code in-place, run targeted validation, and push back to the PR branch if it can.
+
+Manual deep reviews use a separate read-only prompt: they inspect the diff, produce a concise review report, and the backend posts that report back to the PR as a comment when the run succeeds.
 
 ## Current Assumptions
 

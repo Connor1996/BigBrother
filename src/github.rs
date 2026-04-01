@@ -14,10 +14,10 @@ use reqwest::{
     Client,
 };
 use serde::de::DeserializeOwned;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
 use crate::{
-    config::{build_search_query, ResolvedGitHubConfig},
+    config::{build_review_request_query, build_search_query, ResolvedGitHubConfig},
     model::{CiStatus, PullRequest, ReviewDecision},
     service::{GitHubProvider, GitHubRequestStats, PollQueryState},
 };
@@ -94,6 +94,42 @@ impl GitHubClient {
         let frozen_pr_keys = Arc::new(frozen_pr_keys);
 
         let query = build_search_query(&self.config, &author);
+        self.fetch_pull_requests_for_query_with_stats(
+            &author,
+            query,
+            previous_prs,
+            frozen_pr_keys,
+            &metrics,
+        )
+        .await
+    }
+
+    pub async fn fetch_review_requests_with_stats(
+        &self,
+    ) -> Result<(Vec<PullRequest>, GitHubRequestStats)> {
+        let metrics = GitHubRequestMetrics::default();
+        let reviewer = match &self.config.author {
+            Some(author) => author.clone(),
+            None => self.fetch_viewer_login(&metrics).await?,
+        };
+        self.fetch_pull_requests_for_query_with_stats(
+            &reviewer,
+            build_review_request_query(&reviewer),
+            Arc::new(HashMap::new()),
+            Arc::new(HashSet::new()),
+            &metrics,
+        )
+        .await
+    }
+
+    async fn fetch_pull_requests_for_query_with_stats(
+        &self,
+        author: &str,
+        query: String,
+        previous_prs: Arc<HashMap<String, PullRequest>>,
+        frozen_pr_keys: Arc<HashSet<String>>,
+        metrics: &GitHubRequestMetrics,
+    ) -> Result<(Vec<PullRequest>, GitHubRequestStats)> {
         let search: SearchResponse = self
             .get_json(
                 "search/issues",
@@ -103,7 +139,7 @@ impl GitHubClient {
                     ("order", "desc".to_owned()),
                     ("per_page", self.config.max_prs.to_string()),
                 ],
-                &metrics,
+                metrics,
                 RequestCategory::Search,
             )
             .await?;
@@ -138,7 +174,7 @@ impl GitHubClient {
         .await?;
 
         let prs = stream::iter(search_results.into_iter().map(|search_result| {
-            let author = author.clone();
+            let author = author.to_owned();
             let previous_prs = previous_prs.clone();
             let metrics = metrics.clone();
             async move {
@@ -313,6 +349,31 @@ impl GitHubClient {
             .await
             .with_context(|| format!("failed to decode GitHub response from {url}"))
     }
+
+    async fn post_json<B>(&self, path: &str, body: &B) -> Result<()>
+    where
+        B: Serialize + ?Sized,
+    {
+        let url = format!("{}/{}", self.api_base_url, path.trim_start_matches('/'));
+        let response = self
+            .http
+            .post(url.clone())
+            .json(body)
+            .send()
+            .await
+            .with_context(|| format!("GitHub request failed for {url}"))?;
+
+        if response.status().is_success() {
+            Ok(())
+        } else {
+            let status = response.status();
+            let body = response
+                .text()
+                .await
+                .unwrap_or_else(|_| "<body unavailable>".to_owned());
+            Err(anyhow!("GitHub request {url} failed with {status}: {body}"))
+        }
+    }
 }
 
 impl GitHubProvider for GitHubClient {
@@ -338,6 +399,12 @@ impl GitHubProvider for GitHubClient {
         })
     }
 
+    fn fetch_review_requests_with_stats(
+        &self,
+    ) -> BoxFuture<'_, Result<(Vec<PullRequest>, GitHubRequestStats)>> {
+        Box::pin(async move { GitHubClient::fetch_review_requests_with_stats(self).await })
+    }
+
     fn fetch_pull_request(&self, pr_key: String) -> BoxFuture<'_, Result<Option<PullRequest>>> {
         Box::pin(async move { self.fetch_pull_request_by_key(&pr_key).await })
     }
@@ -347,6 +414,17 @@ impl GitHubProvider for GitHubClient {
         pr_key: String,
     ) -> BoxFuture<'_, Result<(Option<PullRequest>, GitHubRequestStats)>> {
         Box::pin(async move { self.fetch_pull_request_by_key_with_stats(&pr_key).await })
+    }
+
+    fn post_issue_comment(&self, pr_key: String, body: String) -> BoxFuture<'_, Result<()>> {
+        Box::pin(async move {
+            let (repo, number) = parse_pr_key(&pr_key)?;
+            self.post_json(
+                &format!("repos/{repo}/issues/{number}/comments"),
+                &IssueCommentRequest { body },
+            )
+            .await
+        })
     }
 }
 
@@ -515,6 +593,11 @@ struct CheckRun {
     conclusion: Option<String>,
     started_at: Option<DateTime<Utc>>,
     completed_at: Option<DateTime<Utc>>,
+}
+
+#[derive(Debug, Serialize)]
+struct IssueCommentRequest {
+    body: String,
 }
 
 struct ReviewSummary {

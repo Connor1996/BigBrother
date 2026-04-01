@@ -54,6 +54,46 @@ impl GitHubProvider for FakeGitHubProvider {
 }
 
 #[derive(Clone)]
+struct ReviewRequestGitHubProvider {
+    prs: Vec<PullRequest>,
+    review_requests: Vec<PullRequest>,
+    comments: Arc<Mutex<Vec<(String, String)>>>,
+}
+
+impl GitHubProvider for ReviewRequestGitHubProvider {
+    fn fetch_pull_requests(&self) -> BoxFuture<'_, Result<Vec<PullRequest>>> {
+        let prs = self.prs.clone();
+        Box::pin(async move { Ok(prs) })
+    }
+
+    fn fetch_review_requests(&self) -> BoxFuture<'_, Result<Vec<PullRequest>>> {
+        let review_requests = self.review_requests.clone();
+        Box::pin(async move { Ok(review_requests) })
+    }
+
+    fn fetch_pull_request(&self, pr_key: String) -> BoxFuture<'_, Result<Option<PullRequest>>> {
+        let pr = self
+            .prs
+            .iter()
+            .chain(self.review_requests.iter())
+            .find(|pr| pr.key == pr_key)
+            .cloned();
+        Box::pin(async move { Ok(pr) })
+    }
+
+    fn post_issue_comment(&self, pr_key: String, body: String) -> BoxFuture<'_, Result<()>> {
+        let comments = self.comments.clone();
+        Box::pin(async move {
+            comments
+                .lock()
+                .expect("provider comments mutex should not be poisoned")
+                .push((pr_key, body));
+            Ok(())
+        })
+    }
+}
+
+#[derive(Clone)]
 struct CountingTargetedGitHubProvider {
     prs: Vec<PullRequest>,
     total_matching_prs: Option<usize>,
@@ -683,7 +723,7 @@ async fn scheduled_poll_keeps_paused_pr_snapshot_frozen() {
 }
 
 #[tokio::test]
-async fn dashboard_html_exposes_top_right_pr_and_activity_tabs() {
+async fn dashboard_html_exposes_top_right_pr_review_request_and_activity_tabs() {
     let supervisor = Arc::new(
         Supervisor::new(
             sample_config(
@@ -714,12 +754,138 @@ async fn dashboard_html_exposes_top_right_pr_and_activity_tabs() {
         "dashboard should expose the PRs tab, got: {html}",
     );
     assert!(
+        html.contains(r#"id="tab-review-requests""#)
+            && html.contains(r#"data-view="review-requests""#),
+        "dashboard should expose the Review Requests tab, got: {html}",
+    );
+    assert!(
         html.contains(r#"id="tab-activity""#) && html.contains(r#"data-view="activity""#),
         "dashboard should expose the Activity tab, got: {html}",
     );
     assert!(
+        html.contains(r#"id="view-review-requests""#),
+        "dashboard should render the review request view container behind the tab switch, got: {html}",
+    );
+    assert!(
         html.contains(r#"id="view-activity""#),
         "dashboard should render the activity view container behind the tab switch, got: {html}",
+    );
+}
+
+#[tokio::test]
+async fn review_requests_api_lists_requested_review_prs() {
+    let supervisor = Arc::new(
+        Supervisor::new(
+            sample_config(
+                unique_temp_path("state.json"),
+                unique_temp_path("workspaces"),
+            ),
+            Arc::new(ReviewRequestGitHubProvider {
+                prs: vec![idle_pr()],
+                review_requests: vec![review_request_pr()],
+                comments: Arc::new(Mutex::new(vec![])),
+            }),
+            Arc::new(FakeAgentRunner {
+                invocations: Arc::new(AtomicUsize::new(0)),
+                started: Arc::new(Semaphore::new(0)),
+                allow_finish: Arc::new(Semaphore::new(1)),
+            }),
+        )
+        .expect("supervisor should initialize"),
+    );
+
+    supervisor
+        .poll_once()
+        .await
+        .expect("poll should populate review requests");
+
+    let payload = get_json(supervisor, "/api/review-requests").await;
+    let prs = payload["prs"].as_array().expect("review request array");
+    assert_eq!(prs.len(), 1);
+    assert_eq!(prs[0]["key"], json!("openai/symphony#18"));
+    assert_eq!(prs[0]["status"], json!("requested review"));
+    assert_eq!(prs[0]["latest_summary"], Value::Null);
+}
+
+#[tokio::test]
+async fn deep_review_action_runs_requested_review_pr_and_persists_output() {
+    let runner = FakeAgentRunner {
+        invocations: Arc::new(AtomicUsize::new(0)),
+        started: Arc::new(Semaphore::new(0)),
+        allow_finish: Arc::new(Semaphore::new(0)),
+    };
+    let comments = Arc::new(Mutex::new(vec![]));
+    let supervisor = Arc::new(
+        Supervisor::new(
+            sample_config(
+                unique_temp_path("state.json"),
+                unique_temp_path("workspaces"),
+            ),
+            Arc::new(ReviewRequestGitHubProvider {
+                prs: vec![],
+                review_requests: vec![review_request_pr()],
+                comments: comments.clone(),
+            }),
+            Arc::new(runner.clone()),
+        )
+        .expect("supervisor should initialize"),
+    );
+
+    supervisor
+        .poll_once()
+        .await
+        .expect("poll should populate review requests");
+
+    let started = post_json(
+        supervisor.clone(),
+        "/api/review-requests/deep-review",
+        json!({ "key": "openai/symphony#18" }),
+    )
+    .await;
+    assert_eq!(started["ok"], json!(true));
+    assert_eq!(started["pr"]["status"], json!("running"));
+    assert_eq!(
+        started["pr"]["latest_summary"],
+        json!("running deep review")
+    );
+
+    wait_for_runner_start(&runner.started).await;
+    assert_eq!(runner.invocations.load(Ordering::SeqCst), 1);
+
+    let running = get_json(supervisor.clone(), "/api/review-requests").await;
+    let prs = running["prs"].as_array().expect("review request array");
+    assert_eq!(status_for(prs, "openai/symphony#18"), Some("running"));
+
+    runner.allow_finish.add_permits(1);
+    wait_for_invocations(&runner.invocations, 1).await;
+    tokio::task::yield_now().await;
+
+    let completed = get_json(supervisor.clone(), "/api/review-requests").await;
+    let prs = completed["prs"].as_array().expect("review request array");
+    assert_eq!(status_for(prs, "openai/symphony#18"), Some("reviewed"));
+    assert_eq!(
+        summary_for(prs, "openai/symphony#18"),
+        Some("deep review completed"),
+    );
+
+    let detail = get_json(supervisor, "/api/pr?key=openai%2Fsymphony%2318").await;
+    assert_eq!(detail["status"], json!("reviewed"));
+    assert_eq!(detail["latest_summary"], json!("deep review completed"));
+    assert_eq!(
+        detail["detail_output"],
+        json!("codex: inspecting workspace\ncargo test -q")
+    );
+
+    let comments = comments
+        .lock()
+        .expect("provider comments mutex should not be poisoned");
+    assert_eq!(comments.len(), 1);
+    assert_eq!(comments[0].0, "openai/symphony#18");
+    assert!(
+        comments[0].1.contains("## Deep Review")
+            && comments[0].1.contains("codex: inspecting workspace"),
+        "deep review should post the captured report as a PR comment, got: {}",
+        comments[0].1,
     );
 }
 
@@ -1713,6 +1879,20 @@ fn actionable_pr() -> PullRequest {
         ReviewDecision::Clean,
         0,
         None,
+    )
+}
+
+fn review_request_pr() -> PullRequest {
+    base_pr(
+        "openai/symphony#18",
+        18,
+        "Please review this risky refactor",
+        "review-request-sha",
+        CiStatus::Failure,
+        Some(Utc.with_ymd_and_hms(2026, 3, 30, 18, 8, 0).unwrap()),
+        ReviewDecision::Commented,
+        0,
+        Some(Utc.with_ymd_and_hms(2026, 3, 30, 18, 20, 0).unwrap()),
     )
 }
 

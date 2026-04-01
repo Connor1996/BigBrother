@@ -574,7 +574,9 @@ Minimum API surface for MVP:
 - `GET /api/health`
 - `GET /api/activity`
 - `GET /api/prs`
+- `GET /api/review-requests`
 - `POST /api/prs/pause` with a JSON body containing the PR key and desired paused state
+- `POST /api/review-requests/deep-review` with a JSON body containing the PR key
 - an equivalent local test hook for manual triggering if needed
 
 Optional for MVP:
@@ -587,6 +589,7 @@ Optional for MVP:
 - `GET /api/activity`
 - `GET /api/state`
 - `GET /api/prs`
+- `GET /api/review-requests`
 - `GET /api/prs/:repo/:number`
 - `GET /api/prs/:repo/:number/events`
 - `GET /api/prs/:repo/:number/runs`
@@ -615,6 +618,9 @@ Current prototype-compatible action API:
 - `POST /api/prs/pause` with `{ "key": "<repo>#<number>", "paused": true|false }`
   When `paused` is `false`, the backend should queue an immediate background re-check for that PR.
   When `paused` is `true`, scheduled polls should freeze that PR's visible state until resume.
+- `POST /api/review-requests/deep-review` with `{ "key": "<repo>#<number>" }`
+  This starts a manual read-only deep review run for a PR that currently requests the operator's review,
+  persists the run output, and posts the final review report back to the PR as an issue comment.
 
 Potential richer follow-up actions:
 
@@ -636,11 +642,13 @@ The MVP UI can be a single page that shows:
 - daemon health
 - last poll time
 - a `Tracked PRs` hero stat rendered as `tracked/all`, where `all` comes from the latest authored-PR search total and never drops below the number of rows currently shown
-- a right-aligned dashboard tab switch for `PRs` and `Activity`
+- a right-aligned dashboard tab switch for `PRs`, `Review Requests`, and `Activity`
 - current tracked PR rows
+- current review-request inbox rows for PRs that currently request the operator's review
 - each PR’s status, CI state, review state, and latest action summary
 - a row-level link into a dedicated PR detail page for run output, showing an embedded read-only terminal while a run is active and the saved last run output after the run completes
 - a row-level pause/resume control for each tracked PR
+- a row-level `Deep Review` action for review-request inbox rows that runs a manual deep review and comments the result back onto the PR
 - a visually subdued treatment for paused rows so they read as intentionally muted rather than inactive by accident
 
 The MVP UI does not need:
@@ -663,6 +671,17 @@ Columns:
 - attention reason
 - last action
 - updated time
+- action
+
+### 20.1A Review Request Inbox
+
+Columns:
+
+- PR
+- status
+- CI
+- reviews
+- latest deep review summary
 - action
 
 ### 20.2 PR Detail
