@@ -322,7 +322,7 @@ const INDEX_HTML: &str = r#"<!doctype html>
       align-items: center;
       justify-content: center;
       gap: 8px;
-      border: 1px solid var(--line);
+      border: none;
       border-radius: 999px;
       background: rgba(255, 255, 255, 0.82);
       color: var(--ink);
@@ -334,23 +334,21 @@ const INDEX_HTML: &str = r#"<!doctype html>
     }
 
     .action-button.pause-button {
-      background: rgba(183, 61, 61, 0.16);
-      border-color: rgba(183, 61, 61, 0.34);
+      background: #b73d3d;
       color: #fff;
     }
 
     .action-button.pause-button:hover:not(:disabled) {
-      background: rgba(183, 61, 61, 0.24);
+      background: #9f3434;
     }
 
     .action-button.resume-button {
-      background: rgba(29, 107, 87, 0.16);
-      border-color: rgba(29, 107, 87, 0.34);
+      background: #1d6b57;
       color: #fff;
     }
 
     .action-button.resume-button:hover:not(:disabled) {
-      background: rgba(29, 107, 87, 0.24);
+      background: #165645;
     }
 
     .action-button:hover:not(:disabled) {
