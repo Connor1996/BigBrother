@@ -90,18 +90,11 @@ pub struct NotificationsConfig {
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct FeishuNotificationsConfig {
-    #[serde(default)]
-    pub webhook_url: Option<String>,
-    #[serde(default)]
-    pub app_id: Option<String>,
-    #[serde(default)]
-    pub app_secret: Option<String>,
-    #[serde(default)]
-    pub receive_id: Option<String>,
+    pub app_id: String,
+    pub app_secret: String,
+    pub receive_id: String,
     #[serde(default)]
     pub receive_id_type: FeishuReceiveIdType,
-    #[serde(default)]
-    pub keyword: Option<String>,
     #[serde(default)]
     pub label: Option<String>,
     #[serde(default = "default_notification_timeout_secs")]
@@ -152,21 +145,13 @@ pub struct ResolvedNotificationsConfig {
 }
 
 #[derive(Debug, Clone)]
-pub enum ResolvedFeishuNotificationsConfig {
-    Webhook {
-        webhook_url: String,
-        keyword: Option<String>,
-        label: String,
-        timeout_secs: u64,
-    },
-    AppBot {
-        app_id: String,
-        app_secret: String,
-        receive_id: String,
-        receive_id_type: FeishuReceiveIdType,
-        label: String,
-        timeout_secs: u64,
-    },
+pub struct ResolvedFeishuNotificationsConfig {
+    pub app_id: String,
+    pub app_secret: String,
+    pub receive_id: String,
+    pub receive_id_type: FeishuReceiveIdType,
+    pub label: String,
+    pub timeout_secs: u64,
 }
 
 impl AppConfig {
@@ -416,87 +401,38 @@ fn resolve_notifications(
 ) -> Result<ResolvedNotificationsConfig> {
     let feishu = match config.feishu {
         Some(raw) => {
-            let keyword = raw
-                .keyword
-                .map(|value| resolve_literal(value, None))
-                .filter(|value| !value.is_empty());
             let label = raw
                 .label
                 .map(|value| resolve_literal(value, Some(default_feishu_notification_label())))
                 .filter(|value| !value.is_empty())
                 .unwrap_or_else(default_feishu_notification_label);
             let timeout_secs = raw.timeout_secs.max(1);
-            let has_webhook = raw.webhook_url.is_some();
-            let has_app_bot =
-                raw.app_id.is_some() || raw.app_secret.is_some() || raw.receive_id.is_some();
+            let app_id = resolve_literal(raw.app_id, None);
+            if app_id.is_empty() {
+                return Err(anyhow!("notifications.feishu.app_id cannot be empty"));
+            }
 
-            let resolved = match (has_webhook, has_app_bot) {
-                (true, true) => {
-                    return Err(anyhow!(
-                        "notifications.feishu must configure either webhook_url or app bot credentials, not both"
-                    ));
-                }
-                (true, false) => {
-                    let webhook_url = resolve_required_secret(
-                        raw.webhook_url,
-                        "notifications.feishu.webhook_url",
-                    )?
+            let app_secret =
+                resolve_required_secret(Some(raw.app_secret), "notifications.feishu.app_secret")?
                     .trim()
                     .to_owned();
-                    if webhook_url.is_empty() {
-                        return Err(anyhow!("notifications.feishu.webhook_url cannot be empty"));
-                    }
+            if app_secret.is_empty() {
+                return Err(anyhow!("notifications.feishu.app_secret cannot be empty"));
+            }
 
-                    ResolvedFeishuNotificationsConfig::Webhook {
-                        webhook_url,
-                        keyword,
-                        label,
-                        timeout_secs,
-                    }
-                }
-                (false, true) => {
-                    let app_id = raw
-                        .app_id
-                        .map(|value| resolve_literal(value, None))
-                        .filter(|value| !value.is_empty())
-                        .ok_or_else(|| anyhow!("notifications.feishu.app_id is required"))?;
-                    let app_secret =
-                        resolve_required_secret(raw.app_secret, "notifications.feishu.app_secret")?
-                            .trim()
-                            .to_owned();
-                    if app_secret.is_empty() {
-                        return Err(anyhow!("notifications.feishu.app_secret cannot be empty"));
-                    }
+            let receive_id = resolve_literal(raw.receive_id, None);
+            if receive_id.is_empty() {
+                return Err(anyhow!("notifications.feishu.receive_id cannot be empty"));
+            }
 
-                    let receive_id = raw
-                        .receive_id
-                        .map(|value| resolve_literal(value, None))
-                        .filter(|value| !value.is_empty())
-                        .ok_or_else(|| anyhow!("notifications.feishu.receive_id is required"))?;
-
-                    if keyword.is_some() {
-                        return Err(anyhow!(
-                            "notifications.feishu.keyword is only supported with webhook_url"
-                        ));
-                    }
-
-                    ResolvedFeishuNotificationsConfig::AppBot {
-                        app_id,
-                        app_secret,
-                        receive_id,
-                        receive_id_type: raw.receive_id_type,
-                        label,
-                        timeout_secs,
-                    }
-                }
-                (false, false) => {
-                    return Err(anyhow!(
-                        "notifications.feishu requires either webhook_url or app bot credentials"
-                    ));
-                }
-            };
-
-            Some(resolved)
+            Some(ResolvedFeishuNotificationsConfig {
+                app_id,
+                app_secret,
+                receive_id,
+                receive_id_type: raw.receive_id_type,
+                label,
+                timeout_secs,
+            })
         }
         None => None,
     };
@@ -616,57 +552,6 @@ dangerously_bypass_approvals_and_sandbox = true
 api_token = "token"
 
 [notifications.feishu]
-webhook_url = "https://open.feishu.cn/open-apis/bot/v2/hook/test"
-keyword = "Symphony"
-label = "connor-mbp"
-timeout_secs = 17
-"#,
-        )
-        .expect("config fixture should write");
-
-        let resolved = AppConfig::load(&config_path).expect("config should load");
-        let feishu = resolved
-            .notifications
-            .feishu
-            .expect("feishu notifications should resolve");
-
-        match feishu {
-            ResolvedFeishuNotificationsConfig::Webhook {
-                webhook_url,
-                keyword,
-                label,
-                timeout_secs,
-            } => {
-                assert_eq!(
-                    webhook_url,
-                    "https://open.feishu.cn/open-apis/bot/v2/hook/test"
-                );
-                assert_eq!(keyword.as_deref(), Some("Symphony"));
-                assert_eq!(label, "connor-mbp");
-                assert_eq!(timeout_secs, 17);
-            }
-            ResolvedFeishuNotificationsConfig::AppBot { .. } => {
-                panic!("expected webhook config")
-            }
-        }
-    }
-
-    #[test]
-    fn load_resolves_feishu_app_bot_notification_settings() {
-        let unique = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .expect("time")
-            .as_nanos();
-        let dir = std::env::temp_dir().join(format!("symphony-rs-config-{unique}"));
-        std::fs::create_dir_all(&dir).expect("temp config dir should create");
-        let config_path = dir.join("symphony-rs.toml");
-        std::fs::write(
-            &config_path,
-            r#"
-[github]
-api_token = "token"
-
-[notifications.feishu]
 app_id = "cli_test"
 app_secret = "secret"
 receive_id = "you@example.com"
@@ -683,58 +568,11 @@ timeout_secs = 9
             .feishu
             .expect("feishu notifications should resolve");
 
-        match feishu {
-            ResolvedFeishuNotificationsConfig::AppBot {
-                app_id,
-                app_secret,
-                receive_id,
-                receive_id_type,
-                label,
-                timeout_secs,
-            } => {
-                assert_eq!(app_id, "cli_test");
-                assert_eq!(app_secret, "secret");
-                assert_eq!(receive_id, "you@example.com");
-                assert_eq!(receive_id_type, FeishuReceiveIdType::Email);
-                assert_eq!(label, "connor-mbp");
-                assert_eq!(timeout_secs, 9);
-            }
-            ResolvedFeishuNotificationsConfig::Webhook { .. } => {
-                panic!("expected app bot config")
-            }
-        }
-    }
-
-    #[test]
-    fn load_rejects_mixed_feishu_webhook_and_app_bot_config() {
-        let unique = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .expect("time")
-            .as_nanos();
-        let dir = std::env::temp_dir().join(format!("symphony-rs-config-{unique}"));
-        std::fs::create_dir_all(&dir).expect("temp config dir should create");
-        let config_path = dir.join("symphony-rs.toml");
-        std::fs::write(
-            &config_path,
-            r#"
-[github]
-api_token = "token"
-
-[notifications.feishu]
-webhook_url = "https://open.feishu.cn/open-apis/bot/v2/hook/test"
-app_id = "cli_test"
-app_secret = "secret"
-receive_id = "you@example.com"
-"#,
-        )
-        .expect("config fixture should write");
-
-        let error = AppConfig::load(&config_path).expect_err("config should fail");
-        assert!(
-            error
-                .to_string()
-                .contains("either webhook_url or app bot credentials, not both"),
-            "unexpected error: {error:#}"
-        );
+        assert_eq!(feishu.app_id, "cli_test");
+        assert_eq!(feishu.app_secret, "secret");
+        assert_eq!(feishu.receive_id, "you@example.com");
+        assert_eq!(feishu.receive_id_type, FeishuReceiveIdType::Email);
+        assert_eq!(feishu.label, "connor-mbp");
+        assert_eq!(feishu.timeout_secs, 9);
     }
 }

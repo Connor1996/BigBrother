@@ -490,14 +490,14 @@ Notifications are emitted when:
 Notification sinks should be pluggable. Initial sinks:
 
 - local desktop notification
-- webhook-based sink
+- Feishu app-bot direct-message sink
 
 Current first-pass remote sink behavior:
 
-- support both a Feishu custom-bot webhook sink and a Feishu app-bot direct-message sink
+- support a Feishu app-bot direct-message sink
 - keep the first Feishu integration outbound-only; no command handling or chat-driven control flow
 - include a configurable instance label in each outbound Feishu message so multiple daemons can
-  share a notification chat safely or identify the sender in private DMs
+  identify the sender in private DMs
 - emit Feishu notifications for automatic run start, automatic run completion or failure,
   auto-pause after repeated failures, manual deep review start and completion, and daemon poll
   failures

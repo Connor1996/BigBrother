@@ -94,24 +94,12 @@ The current Feishu integration is a one-way notification sink for daemon activit
 automatic-run and manual deep-review updates outward, but it does not yet accept Feishu commands
 or replies.
 
-For private direct messages, configure an enterprise self-built app bot:
-
 ```toml
 [notifications.feishu]
 app_id = "$FEISHU_APP_ID"
 app_secret = "$FEISHU_APP_SECRET"
 receive_id = "$FEISHU_NOTIFY_EMAIL"
 receive_id_type = "email"
-label = "connor-mbp"
-timeout_secs = 10
-```
-
-For group notifications, the older custom-bot webhook mode still works:
-
-```toml
-[notifications.feishu]
-webhook_url = "$FEISHU_BOT_WEBHOOK_URL"
-keyword = "Symphony"
 label = "connor-mbp"
 timeout_secs = 10
 ```
@@ -124,8 +112,8 @@ Current Feishu notifications cover:
 - manual deep review start and completion
 - daemon poll failures
 
-`label` is included in each message so multiple daemon instances can share the same Feishu chat
-without losing source context. `receive_id_type` supports Feishu message targets such as `email`,
+`label` is included in each message so multiple daemon instances can identify themselves clearly in
+private DMs. `receive_id_type` supports Feishu message targets such as `email`,
 `open_id`, `user_id`, `union_id`, and `chat_id`; for a first private-DM setup, `email` is usually
 the easiest option.
 

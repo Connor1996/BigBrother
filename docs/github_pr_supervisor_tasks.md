@@ -190,7 +190,7 @@ This section is the only task list that matters for the next implementation pass
 
 - [x] Define a notification trait and sink abstraction
 - [ ] Implement a local desktop notification sink first
-- [x] Add webhook sink support
+- [x] Add Feishu app-bot direct-message sink support
 - [ ] Emit notifications for blocked runs, repeated failures, and required human decisions
 - [ ] Persist notification records for UI display
 

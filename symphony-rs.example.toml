@@ -44,10 +44,3 @@ refresh_hz = 2
 # receive_id_type = "email"
 # label = "connor-mbp"
 # timeout_secs = 10
-#
-# Group mode via a custom bot webhook.
-# [notifications.feishu]
-# webhook_url = "$FEISHU_BOT_WEBHOOK_URL"
-# keyword = "Symphony"
-# label = "connor-mbp"
-# timeout_secs = 10
