@@ -9,8 +9,8 @@ use std::{
 use anyhow::{Context, Result};
 use axum::{
     extract::{Query, State},
-    http::StatusCode,
-    response::Html,
+    http::{header, StatusCode},
+    response::{Html, IntoResponse},
     routing::{get, post},
     Json, Router,
 };
@@ -23,6 +23,9 @@ use crate::{
     runner::OUTPUT_TRANSCRIPT_HEADER,
     service::Supervisor,
 };
+
+const BIGBROTHER_MARK_PATH: &str = "/assets/bigbrother-mark.png";
+const BIGBROTHER_MARK_PNG: &[u8] = include_bytes!("../assets/bigbrother-mark.png");
 
 const INDEX_HTML: &str = r#"<!doctype html>
 <html lang="en">
@@ -78,10 +81,9 @@ const INDEX_HTML: &str = r#"<!doctype html>
     .brand-mark {
       width: clamp(78px, 8vw, 104px);
       flex-shrink: 0;
-      color: #111;
     }
 
-    .brand-mark svg {
+    .brand-mark img {
       display: block;
       width: 100%;
       height: auto;
@@ -525,40 +527,7 @@ const INDEX_HTML: &str = r#"<!doctype html>
         <div class="hero-copy">
           <div class="brand-lockup">
             <div class="brand-mark" aria-hidden="true">
-              <svg viewBox="0 0 160 112" fill="none" stroke="currentColor" stroke-width="4.5" stroke-linecap="round" stroke-linejoin="round">
-                <path d="M10 88c8-10 17-15 28-15s20 5 28 15" />
-                <path d="M42 73v11" />
-                <circle cx="38" cy="45" r="18" />
-                <circle cx="29" cy="28" r="7" />
-                <circle cx="47" cy="28" r="7" />
-                <path d="M32 45h.01" />
-                <path d="M44 45h.01" />
-                <path d="M35 53c2 2 4 3 6 3s4-1 6-3" />
-                <path d="M29 70c2-3 5-5 9-5" />
-                <path d="M47 70c-2-3-5-5-9-5" />
-
-                <path d="M52 95c9-12 19-18 30-18s21 6 30 18" />
-                <path d="M82 77v14" />
-                <circle cx="82" cy="43" r="22" />
-                <circle cx="70" cy="21" r="8" />
-                <circle cx="94" cy="21" r="8" />
-                <path d="M74 43h.01" />
-                <path d="M90 43h.01" />
-                <path d="M75 54c3 3 5 4 7 4s4-1 7-4" />
-                <path d="M68 73c3-4 8-6 14-6" />
-                <path d="M96 73c-3-4-8-6-14-6" />
-
-                <path d="M110 88c8-10 17-15 28-15s20 5 28 15" />
-                <path d="M118 73v11" />
-                <circle cx="122" cy="45" r="18" />
-                <circle cx="113" cy="28" r="7" />
-                <circle cx="131" cy="28" r="7" />
-                <path d="M116 45h.01" />
-                <path d="M128 45h.01" />
-                <path d="M119 53c2 2 4 3 6 3s4-1 6-3" />
-                <path d="M113 70c2-3 5-5 9-5" />
-                <path d="M131 70c-2-3-5-5-9-5" />
-              </svg>
+              <img src="/assets/bigbrother-mark.png" alt="" />
             </div>
             <div class="brand-copy">
               <h1>BigBrother</h1>
@@ -1019,10 +988,9 @@ const PR_DETAIL_HTML: &str = r##"<!doctype html>
 
     .detail-brand .brand-mark {
       width: 64px;
-      color: #111;
     }
 
-    .detail-brand .brand-mark svg {
+    .detail-brand .brand-mark img {
       display: block;
       width: 100%;
       height: auto;
@@ -1174,40 +1142,7 @@ const PR_DETAIL_HTML: &str = r##"<!doctype html>
     <section class="hero">
       <div class="detail-brand">
         <div class="brand-mark" aria-hidden="true">
-          <svg viewBox="0 0 160 112" fill="none" stroke="currentColor" stroke-width="4.5" stroke-linecap="round" stroke-linejoin="round">
-            <path d="M10 88c8-10 17-15 28-15s20 5 28 15" />
-            <path d="M42 73v11" />
-            <circle cx="38" cy="45" r="18" />
-            <circle cx="29" cy="28" r="7" />
-            <circle cx="47" cy="28" r="7" />
-            <path d="M32 45h.01" />
-            <path d="M44 45h.01" />
-            <path d="M35 53c2 2 4 3 6 3s4-1 6-3" />
-            <path d="M29 70c2-3 5-5 9-5" />
-            <path d="M47 70c-2-3-5-5-9-5" />
-
-            <path d="M52 95c9-12 19-18 30-18s21 6 30 18" />
-            <path d="M82 77v14" />
-            <circle cx="82" cy="43" r="22" />
-            <circle cx="70" cy="21" r="8" />
-            <circle cx="94" cy="21" r="8" />
-            <path d="M74 43h.01" />
-            <path d="M90 43h.01" />
-            <path d="M75 54c3 3 5 4 7 4s4-1 7-4" />
-            <path d="M68 73c3-4 8-6 14-6" />
-            <path d="M96 73c-3-4-8-6-14-6" />
-
-            <path d="M110 88c8-10 17-15 28-15s20 5 28 15" />
-            <path d="M118 73v11" />
-            <circle cx="122" cy="45" r="18" />
-            <circle cx="113" cy="28" r="7" />
-            <circle cx="131" cy="28" r="7" />
-            <path d="M116 45h.01" />
-            <path d="M128 45h.01" />
-            <path d="M119 53c2 2 4 3 6 3s4-1 6-3" />
-            <path d="M113 70c2-3 5-5 9-5" />
-            <path d="M131 70c-2-3-5-5-9-5" />
-          </svg>
+          <img src="/assets/bigbrother-mark.png" alt="" />
         </div>
         <div class="detail-brand-name">BigBrother</div>
       </div>
@@ -1431,6 +1366,7 @@ pub fn router(supervisor: Arc<Supervisor>) -> Router {
     Router::new()
         .route("/", get(index))
         .route("/pr", get(pr_detail_page))
+        .route(BIGBROTHER_MARK_PATH, get(bigbrother_mark))
         .route("/api/health", get(health))
         .route("/api/activity", get(activity))
         .route("/api/prs", get(list_prs))
@@ -1467,6 +1403,10 @@ async fn index() -> Html<&'static str> {
 
 async fn pr_detail_page() -> Html<&'static str> {
     Html(PR_DETAIL_HTML)
+}
+
+async fn bigbrother_mark() -> impl IntoResponse {
+    ([(header::CONTENT_TYPE, "image/png")], BIGBROTHER_MARK_PNG)
 }
 
 async fn health(State(supervisor): State<Arc<Supervisor>>) -> Json<HealthResponse> {

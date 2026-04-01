@@ -11,7 +11,7 @@ use std::{
 use anyhow::Result;
 use axum::{
     body::{to_bytes, Body},
-    http::Request,
+    http::{header, Request},
 };
 use chrono::{TimeZone, Utc};
 use futures::future::BoxFuture;
@@ -829,8 +829,8 @@ async fn dashboard_html_exposes_top_right_pr_review_request_and_activity_tabs() 
     assert!(
         html.contains("<title>BigBrother</title>")
             && html.contains(">BigBrother</h1>")
-            && html.contains("viewBox=\"0 0 160 112\""),
-        "dashboard should expose the BigBrother brand and three-mole icon, got: {html}",
+            && html.contains("src=\"/assets/bigbrother-mark.png\""),
+        "dashboard should expose the BigBrother brand and PNG mole icon asset, got: {html}",
     );
 }
 
@@ -864,10 +864,49 @@ async fn pr_detail_page_uses_bigbrother_branding() {
     assert!(
         html.contains("<title>BigBrother Run View</title>")
             && html.contains("detail-brand-name\">BigBrother</div>")
-            && html.contains("viewBox=\"0 0 160 112\"")
+            && html.contains("src=\"/assets/bigbrother-mark.png\"")
             && html.contains(r#"isRunning ? "terminal-shell" : "output""#),
-        "run detail page should reuse the BigBrother branding, icon, and wrapped saved output mode, got: {html}",
+        "run detail page should reuse the BigBrother branding, PNG icon asset, and wrapped saved output mode, got: {html}",
     );
+}
+
+#[tokio::test]
+async fn bigbrother_brand_asset_is_served_as_png() {
+    let supervisor = Arc::new(
+        Supervisor::new(
+            sample_config(
+                unique_temp_path("state.json"),
+                unique_temp_path("workspaces"),
+            ),
+            Arc::new(FakeGitHubProvider { prs: vec![] }),
+            Arc::new(FakeAgentRunner {
+                invocations: Arc::new(AtomicUsize::new(0)),
+                started: Arc::new(Semaphore::new(0)),
+                allow_finish: Arc::new(Semaphore::new(0)),
+            }),
+        )
+        .expect("supervisor should initialize"),
+    );
+
+    let response = web::router(supervisor)
+        .oneshot(
+            Request::builder()
+                .uri("/assets/bigbrother-mark.png")
+                .body(Body::empty())
+                .expect("request should build"),
+        )
+        .await
+        .expect("route should respond");
+    assert_eq!(response.status(), 200);
+    assert_eq!(
+        response.headers().get(header::CONTENT_TYPE).unwrap(),
+        "image/png"
+    );
+
+    let bytes = to_bytes(response.into_body(), usize::MAX)
+        .await
+        .expect("body should collect");
+    assert!(!bytes.is_empty(), "brand asset should not be empty");
 }
 
 #[tokio::test]
