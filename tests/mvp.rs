@@ -770,6 +770,10 @@ async fn dashboard_html_exposes_top_right_pr_review_request_and_activity_tabs() 
         html.contains(r#"id="view-activity""#),
         "dashboard should render the activity view container behind the tab switch, got: {html}",
     );
+    assert!(
+        !html.contains("<th>Attention</th>"),
+        "dashboard should fold attention context into the status column instead of rendering a dedicated Attention column, got: {html}",
+    );
 }
 
 #[tokio::test]

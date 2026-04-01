@@ -174,6 +174,25 @@ const INDEX_HTML: &str = r#"<!doctype html>
       border-collapse: collapse;
     }
 
+    .description-col {
+      width: 38%;
+    }
+
+    .description-cell {
+      min-width: 280px;
+    }
+
+    .pr-title {
+      margin-top: 6px;
+      font-weight: 600;
+    }
+
+    .pr-meta {
+      margin-top: 4px;
+      color: var(--muted);
+      font-size: 0.9rem;
+    }
+
     .pr-row td {
       transition: background 160ms ease, color 160ms ease;
     }
@@ -223,6 +242,18 @@ const INDEX_HTML: &str = r#"<!doctype html>
     .pill.good { color: var(--accent); }
     .pill.warn { color: var(--warn); }
     .pill.bad { color: var(--bad); }
+
+    .status-stack {
+      display: grid;
+      gap: 6px;
+    }
+
+    .status-note {
+      color: var(--muted);
+      font-size: 0.82rem;
+      line-height: 1.4;
+      white-space: pre-wrap;
+    }
 
     .summary {
       max-width: 34ch;
@@ -434,17 +465,16 @@ const INDEX_HTML: &str = r#"<!doctype html>
       <table>
         <thead>
           <tr>
-            <th>PR</th>
+            <th class="description-col">PR</th>
             <th>Status</th>
             <th>CI</th>
             <th>Reviews</th>
-            <th>Attention</th>
             <th>Details</th>
             <th>Action</th>
           </tr>
         </thead>
         <tbody id="prs-table">
-          <tr><td colspan="7" class="empty">Loading pull requests...</td></tr>
+          <tr><td colspan="6" class="empty">Loading pull requests...</td></tr>
         </tbody>
       </table>
     </section>
@@ -453,7 +483,7 @@ const INDEX_HTML: &str = r#"<!doctype html>
       <table>
         <thead>
           <tr>
-            <th>PR</th>
+            <th class="description-col">PR</th>
             <th>Status</th>
             <th>CI</th>
             <th>Reviews</th>
@@ -553,6 +583,16 @@ const INDEX_HTML: &str = r#"<!doctype html>
       `;
     }
 
+    function renderStatus(pr, detail = pr.attention_reason) {
+      const note = detail ? `<div class="status-note">${escapeHtml(detail)}</div>` : "";
+      return `
+        <div class="status-stack">
+          <span class="${pillClass(pr.status)}">${escapeHtml(pr.status)}</span>
+          ${note}
+        </div>
+      `;
+    }
+
     function renderReviewRequestAction(pr) {
       const pending = pendingDeepReviewKeys.has(pr.key);
       const running = pr.status === "running";
@@ -637,21 +677,20 @@ const INDEX_HTML: &str = r#"<!doctype html>
     function renderPrs(prs) {
       const tbody = document.getElementById("prs-table");
       if (!prs.length) {
-        tbody.innerHTML = '<tr><td colspan="7" class="empty">No pull requests are currently being tracked.</td></tr>';
+        tbody.innerHTML = '<tr><td colspan="6" class="empty">No pull requests are currently being tracked.</td></tr>';
         return;
       }
 
       tbody.innerHTML = prs.map((pr) => `
         <tr class="${rowClass(pr)}">
-          <td data-label="PR">
+          <td class="description-cell" data-label="PR">
             <a href="${pr.url}" target="_blank" rel="noreferrer">${escapeHtml(pr.repo_full_name)} #${pr.number}</a>
-            <div>${escapeHtml(pr.title)}</div>
-            <div style="color: var(--muted); font-size: 0.9rem;">Updated ${escapeHtml(fmtTime(pr.updated_at))}</div>
+            <div class="pr-title">${escapeHtml(pr.title)}</div>
+            <div class="pr-meta">Updated ${escapeHtml(fmtTime(pr.updated_at))}</div>
           </td>
-          <td data-label="Status"><span class="${pillClass(pr.status)}">${escapeHtml(pr.status)}</span></td>
+          <td data-label="Status">${renderStatus(pr)}</td>
           <td data-label="CI"><span class="${pillClass(pr.ci_status)}">${escapeHtml(pr.ci_status)}</span></td>
           <td data-label="Reviews"><span class="${pillClass(pr.review_status)}">${escapeHtml(pr.review_status)}</span></td>
-          <td data-label="Attention">${escapeHtml(pr.attention_reason || "-")}</td>
           <td data-label="Details">${renderDetails(pr)}</td>
           <td data-label="Action">${renderAction(pr)}</td>
         </tr>
@@ -667,12 +706,12 @@ const INDEX_HTML: &str = r#"<!doctype html>
 
       tbody.innerHTML = prs.map((pr) => `
         <tr class="${rowClass(pr)}">
-          <td data-label="PR">
+          <td class="description-cell" data-label="PR">
             <a href="${pr.url}" target="_blank" rel="noreferrer">${escapeHtml(pr.repo_full_name)} #${pr.number}</a>
-            <div>${escapeHtml(pr.title)}</div>
-            <div style="color: var(--muted); font-size: 0.9rem;">Updated ${escapeHtml(fmtTime(pr.updated_at))}</div>
+            <div class="pr-title">${escapeHtml(pr.title)}</div>
+            <div class="pr-meta">Updated ${escapeHtml(fmtTime(pr.updated_at))}</div>
           </td>
-          <td data-label="Status"><span class="${pillClass(pr.status)}">${escapeHtml(pr.status)}</span></td>
+          <td data-label="Status">${renderStatus(pr, null)}</td>
           <td data-label="CI"><span class="${pillClass(pr.ci_status)}">${escapeHtml(pr.ci_status)}</span></td>
           <td data-label="Reviews"><span class="${pillClass(pr.review_status)}">${escapeHtml(pr.review_status)}</span></td>
           <td data-label="Details">${renderDetails(pr)}</td>

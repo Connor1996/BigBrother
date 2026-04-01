@@ -647,11 +647,12 @@ The MVP UI can be a single page that shows:
 - a right-aligned dashboard tab switch for `PRs`, `Review Requests`, and `Activity`
 - current tracked PR rows
 - current review-request inbox rows for PRs that currently request the operator's review
-- each PR’s status, CI state, review state, and latest action summary
+- each PR’s status, CI state, review state, and latest action summary, with attention context folded into the status cell instead of a dedicated attention column
 - a row-level link into a dedicated PR detail page for run output, showing an embedded read-only terminal while a run is active and the saved last run output after the run completes
 - a row-level pause/resume control for each tracked PR
 - a row-level `Deep Review` action for review-request inbox rows that runs a manual deep review and comments the result back onto the PR
 - a visually subdued treatment for paused rows so they read as intentionally muted rather than inactive by accident
+- a wider description column so repo, title, and timestamp remain comfortably readable
 
 The MVP UI does not need:
 
@@ -665,14 +666,10 @@ The MVP UI does not need:
 Columns:
 
 - PR
-- repo
-- title
 - status
 - CI
 - reviews
-- attention reason
 - last action
-- updated time
 - action
 
 ### 20.1A Review Request Inbox
