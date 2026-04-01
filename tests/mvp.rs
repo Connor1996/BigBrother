@@ -806,6 +806,10 @@ async fn dashboard_html_exposes_top_right_pr_review_request_and_activity_tabs() 
         "dashboard should expose distinct pause and resume button styling hooks, got: {html}",
     );
     assert!(
+        html.contains("background: #c76a6a;") && html.contains("background: #4b907a;"),
+        "dashboard should use the lighter pause and resume button fills, got: {html}",
+    );
+    assert!(
         html.contains("button-icon")
             && html.contains("&#9654;")
             && html.contains("&#10074;&#10074;"),

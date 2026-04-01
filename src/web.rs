@@ -357,21 +357,21 @@ const INDEX_HTML: &str = r#"<!doctype html>
     }
 
     .action-button.pause-button {
-      background: #b73d3d;
+      background: #c76a6a;
       color: #fff;
     }
 
     .action-button.pause-button:hover:not(:disabled) {
-      background: #9f3434;
+      background: #b75b5b;
     }
 
     .action-button.resume-button {
-      background: #1d6b57;
+      background: #4b907a;
       color: #fff;
     }
 
     .action-button.resume-button:hover:not(:disabled) {
-      background: #165645;
+      background: #3f7f6b;
     }
 
     .action-button:hover:not(:disabled) {
