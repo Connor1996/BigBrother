@@ -28,17 +28,6 @@ additional_instructions = """
 - If you are blocked, explain the blocker clearly in the final output.
 """
 
-# Optional per-machine prompt overrides.
-# The repository defaults live under ./prompts/*.md.
-# Copy only the files you want to customize, then point the matching key at your local copy.
-# [agent.prompts]
-# actionable = "./local-prompts/actionable.md"
-# deep_review = "./local-prompts/deep_review.md"
-# ci_failure_rules = "./local-prompts/ci_failure_rules.md"
-# workspace_ready = "./local-prompts/workspace_ready.md"
-# resumed_conflict = "./local-prompts/resumed_conflict.md"
-# deep_review_artifact = "./local-prompts/deep_review_artifact.md"
-
 # Optional one-way Feishu notifications.
 # This first pass only pushes daemon run state and results outward; it does not receive commands.
 #

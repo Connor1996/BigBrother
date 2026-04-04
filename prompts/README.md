@@ -1,6 +1,6 @@
 # Prompt Templates
 
-BigBrother now loads its default agent prompts from the Markdown files in this folder.
+BigBrother now loads its agent prompts from the fixed Markdown files in this folder.
 
 These files are the built-in defaults:
 
@@ -11,10 +11,8 @@ These files are the built-in defaults:
 - `resumed_conflict.md`: extra operator guidance when BigBrother resumes an unresolved conflict workspace
 - `deep_review_artifact.md`: extra operator guidance that tells the agent where to write the deep review artifact
 
-You can customize prompts in two ways:
-
-- edit these repository defaults directly
-- point your local `symphony-rs.toml` at alternative Markdown files with `[agent.prompts]`
+BigBrother looks for these templates at the fixed path `./prompts/*.md` next to
+`symphony-rs.toml`. To customize prompts on a machine, edit these files directly.
 
 Available placeholders:
 

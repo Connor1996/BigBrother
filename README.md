@@ -121,7 +121,7 @@ the easiest option.
 
 The default agent prompts now live in Markdown files under
 [`prompts/`](/Users/Connor/Coding/symphony-rs/prompts/README.md). That makes the built-in prompt
-wording visible in the repo and lets each operator override only the pieces they care about.
+wording visible in the repo and lets each operator tweak the fixed prompt files directly.
 
 BigBrother ships these default prompt files:
 
@@ -131,18 +131,8 @@ BigBrother ships these default prompt files:
 - [`prompts/workspace_ready.md`](/Users/Connor/Coding/symphony-rs/prompts/workspace_ready.md) and [`prompts/resumed_conflict.md`](/Users/Connor/Coding/symphony-rs/prompts/resumed_conflict.md) for workspace-preparation notes
 - [`prompts/deep_review_artifact.md`](/Users/Connor/Coding/symphony-rs/prompts/deep_review_artifact.md) for the deep-review artifact instructions
 
-To customize prompts per machine, copy whichever files you want to change and point your local
-`symphony-rs.toml` at them:
-
-```toml
-[agent.prompts]
-actionable = "./local-prompts/actionable.md"
-deep_review = "./local-prompts/deep_review.md"
-ci_failure_rules = "./local-prompts/ci_failure_rules.md"
-workspace_ready = "./local-prompts/workspace_ready.md"
-resumed_conflict = "./local-prompts/resumed_conflict.md"
-deep_review_artifact = "./local-prompts/deep_review_artifact.md"
-```
+BigBrother looks for those templates at the fixed path `./prompts/*.md` next to
+`symphony-rs.toml`. To customize prompts on a given machine, edit those files directly.
 
 ## How The Agent Loop Works
 

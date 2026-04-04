@@ -481,8 +481,8 @@ Prompt template management:
 
 - the default prompt text should live in versioned Markdown templates in the repository so operators
   can inspect and edit the wording directly
-- local config should allow per-instance prompt-template path overrides without requiring Rust code
-  edits
+- the daemon should load those templates from a fixed `prompts/*.md` location next to the config so
+  operators can edit prompt files without changing Rust code or TOML wiring
 - prompt assembly may still inject runtime PR metadata and daemon-generated operator notes into
   those templates before sending the final prompt to the agent
 

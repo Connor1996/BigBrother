@@ -74,24 +74,6 @@ pub struct RawAgentConfig {
     pub dangerously_bypass_approvals_and_sandbox: bool,
     #[serde(default)]
     pub additional_instructions: Option<String>,
-    #[serde(default)]
-    pub prompts: RawAgentPromptTemplates,
-}
-
-#[derive(Debug, Clone, Default, Deserialize)]
-pub struct RawAgentPromptTemplates {
-    #[serde(default)]
-    pub actionable: Option<String>,
-    #[serde(default)]
-    pub deep_review: Option<String>,
-    #[serde(default)]
-    pub ci_failure_rules: Option<String>,
-    #[serde(default)]
-    pub workspace_ready: Option<String>,
-    #[serde(default)]
-    pub resumed_conflict: Option<String>,
-    #[serde(default)]
-    pub deep_review_artifact: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -273,7 +255,6 @@ impl Default for RawAgentConfig {
             args: default_agent_args(),
             dangerously_bypass_approvals_and_sandbox: false,
             additional_instructions: None,
-            prompts: RawAgentPromptTemplates::default(),
         }
     }
 }
@@ -438,6 +419,13 @@ const DEFAULT_WORKSPACE_READY_TEMPLATE: &str = include_str!("../prompts/workspac
 const DEFAULT_RESUMED_CONFLICT_TEMPLATE: &str = include_str!("../prompts/resumed_conflict.md");
 const DEFAULT_DEEP_REVIEW_ARTIFACT_TEMPLATE: &str =
     include_str!("../prompts/deep_review_artifact.md");
+const PROMPTS_DIR: &str = "prompts";
+const ACTIONABLE_PROMPT_FILE: &str = "actionable.md";
+const DEEP_REVIEW_PROMPT_FILE: &str = "deep_review.md";
+const CI_FAILURE_RULES_FILE: &str = "ci_failure_rules.md";
+const WORKSPACE_READY_FILE: &str = "workspace_ready.md";
+const RESUMED_CONFLICT_FILE: &str = "resumed_conflict.md";
+const DEEP_REVIEW_ARTIFACT_FILE: &str = "deep_review_artifact.md";
 
 fn default_refresh_hz() -> u64 {
     2
@@ -463,67 +451,57 @@ fn resolve_agent_config(raw: RawAgentConfig, config_dir: &Path) -> Result<AgentC
         additional_instructions: raw
             .additional_instructions
             .map(|value| resolve_literal(value, None)),
-        prompts: resolve_agent_prompt_templates(raw.prompts, config_dir)?,
+        prompts: resolve_agent_prompt_templates(config_dir)?,
     })
 }
 
-fn resolve_agent_prompt_templates(
-    raw: RawAgentPromptTemplates,
-    config_dir: &Path,
-) -> Result<AgentPromptTemplates> {
+fn resolve_agent_prompt_templates(config_dir: &Path) -> Result<AgentPromptTemplates> {
     Ok(AgentPromptTemplates {
-        actionable: resolve_template_override(
-            raw.actionable,
+        actionable: load_fixed_prompt_template(
             config_dir,
+            ACTIONABLE_PROMPT_FILE,
             DEFAULT_ACTIONABLE_PROMPT_TEMPLATE,
-            "agent.prompts.actionable",
         )?,
-        deep_review: resolve_template_override(
-            raw.deep_review,
+        deep_review: load_fixed_prompt_template(
             config_dir,
+            DEEP_REVIEW_PROMPT_FILE,
             DEFAULT_DEEP_REVIEW_PROMPT_TEMPLATE,
-            "agent.prompts.deep_review",
         )?,
-        ci_failure_rules: resolve_template_override(
-            raw.ci_failure_rules,
+        ci_failure_rules: load_fixed_prompt_template(
             config_dir,
+            CI_FAILURE_RULES_FILE,
             DEFAULT_CI_FAILURE_RULES_TEMPLATE,
-            "agent.prompts.ci_failure_rules",
         )?,
-        workspace_ready: resolve_template_override(
-            raw.workspace_ready,
+        workspace_ready: load_fixed_prompt_template(
             config_dir,
+            WORKSPACE_READY_FILE,
             DEFAULT_WORKSPACE_READY_TEMPLATE,
-            "agent.prompts.workspace_ready",
         )?,
-        resumed_conflict: resolve_template_override(
-            raw.resumed_conflict,
+        resumed_conflict: load_fixed_prompt_template(
             config_dir,
+            RESUMED_CONFLICT_FILE,
             DEFAULT_RESUMED_CONFLICT_TEMPLATE,
-            "agent.prompts.resumed_conflict",
         )?,
-        deep_review_artifact: resolve_template_override(
-            raw.deep_review_artifact,
+        deep_review_artifact: load_fixed_prompt_template(
             config_dir,
+            DEEP_REVIEW_ARTIFACT_FILE,
             DEFAULT_DEEP_REVIEW_ARTIFACT_TEMPLATE,
-            "agent.prompts.deep_review_artifact",
         )?,
     })
 }
 
-fn resolve_template_override(
-    raw_path: Option<String>,
+fn load_fixed_prompt_template(
     config_dir: &Path,
+    file_name: &str,
     default_template: &str,
-    field_name: &str,
 ) -> Result<String> {
-    let Some(raw_path) = raw_path else {
+    let path = config_dir.join(PROMPTS_DIR).join(file_name);
+    if !path.exists() {
         return Ok(default_template.to_owned());
-    };
+    }
 
-    let path = resolve_path(&raw_path, config_dir);
     fs::read_to_string(&path)
-        .with_context(|| format!("failed to read {field_name} template at {}", path.display()))
+        .with_context(|| format!("failed to read prompt template at {}", path.display()))
 }
 
 fn resolve_notifications(
@@ -668,13 +646,13 @@ dangerously_bypass_approvals_and_sandbox = true
     }
 
     #[test]
-    fn load_resolves_agent_prompt_template_overrides_relative_to_config_dir() {
+    fn load_reads_agent_prompt_templates_from_fixed_prompts_directory() {
         let unique = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .expect("time")
             .as_nanos();
         let dir = std::env::temp_dir().join(format!("symphony-rs-config-{unique}"));
-        let prompts_dir = dir.join("local-prompts");
+        let prompts_dir = dir.join("prompts");
         std::fs::create_dir_all(&prompts_dir).expect("prompt fixture dir should create");
         std::fs::write(
             prompts_dir.join("actionable.md"),
@@ -693,10 +671,6 @@ dangerously_bypass_approvals_and_sandbox = true
             r#"
 [github]
 api_token = "token"
-
-[agent.prompts]
-actionable = "./local-prompts/actionable.md"
-deep_review_artifact = "./local-prompts/deep_review_artifact.md"
 "#,
         )
         .expect("config fixture should write");
