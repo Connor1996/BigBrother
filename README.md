@@ -121,7 +121,7 @@ the easiest option.
 
 The default agent prompts now live in Markdown files under
 [`prompts/`](/Users/Connor/Coding/symphony-rs/prompts/README.md). That makes the built-in prompt
-wording visible in the repo and lets each operator tweak the fixed prompt files directly.
+wording visible in the repo and lets each operator tweak the repository prompt files directly.
 
 BigBrother ships these default prompt files:
 
@@ -131,8 +131,8 @@ BigBrother ships these default prompt files:
 - [`prompts/workspace_ready.md`](/Users/Connor/Coding/symphony-rs/prompts/workspace_ready.md) and [`prompts/resumed_conflict.md`](/Users/Connor/Coding/symphony-rs/prompts/resumed_conflict.md) for workspace-preparation notes
 - [`prompts/deep_review_artifact.md`](/Users/Connor/Coding/symphony-rs/prompts/deep_review_artifact.md) for the deep-review artifact instructions
 
-BigBrother looks for those templates at the fixed path `./prompts/*.md` next to
-`symphony-rs.toml`. To customize prompts on a given machine, edit those files directly.
+BigBrother reads those templates from the repository's own `prompts/*.md` files. To customize
+prompts on a given machine, edit the repo files directly.
 
 ## How The Agent Loop Works
 

@@ -221,7 +221,7 @@ impl AppConfig {
                     .collect(),
                 git_transport: self.workspace.git_transport,
             },
-            agent: resolve_agent_config(self.agent, &config_dir)?,
+            agent: resolve_agent_config(self.agent)?,
             ui: self.ui,
             notifications,
             state_path,
@@ -439,7 +439,7 @@ fn default_feishu_notification_label() -> String {
     "symphony-rs".to_owned()
 }
 
-fn resolve_agent_config(raw: RawAgentConfig, config_dir: &Path) -> Result<AgentConfig> {
+fn resolve_agent_config(raw: RawAgentConfig) -> Result<AgentConfig> {
     Ok(AgentConfig {
         command: resolve_literal(raw.command, None),
         args: raw
@@ -451,55 +451,31 @@ fn resolve_agent_config(raw: RawAgentConfig, config_dir: &Path) -> Result<AgentC
         additional_instructions: raw
             .additional_instructions
             .map(|value| resolve_literal(value, None)),
-        prompts: resolve_agent_prompt_templates(config_dir)?,
+        prompts: resolve_agent_prompt_templates()?,
     })
 }
 
-fn resolve_agent_prompt_templates(config_dir: &Path) -> Result<AgentPromptTemplates> {
+fn resolve_agent_prompt_templates() -> Result<AgentPromptTemplates> {
+    load_agent_prompt_templates_from_dir(&repo_prompts_dir())
+}
+
+fn load_agent_prompt_templates_from_dir(prompt_dir: &Path) -> Result<AgentPromptTemplates> {
     Ok(AgentPromptTemplates {
-        actionable: load_fixed_prompt_template(
-            config_dir,
-            ACTIONABLE_PROMPT_FILE,
-            DEFAULT_ACTIONABLE_PROMPT_TEMPLATE,
-        )?,
-        deep_review: load_fixed_prompt_template(
-            config_dir,
-            DEEP_REVIEW_PROMPT_FILE,
-            DEFAULT_DEEP_REVIEW_PROMPT_TEMPLATE,
-        )?,
-        ci_failure_rules: load_fixed_prompt_template(
-            config_dir,
-            CI_FAILURE_RULES_FILE,
-            DEFAULT_CI_FAILURE_RULES_TEMPLATE,
-        )?,
-        workspace_ready: load_fixed_prompt_template(
-            config_dir,
-            WORKSPACE_READY_FILE,
-            DEFAULT_WORKSPACE_READY_TEMPLATE,
-        )?,
-        resumed_conflict: load_fixed_prompt_template(
-            config_dir,
-            RESUMED_CONFLICT_FILE,
-            DEFAULT_RESUMED_CONFLICT_TEMPLATE,
-        )?,
-        deep_review_artifact: load_fixed_prompt_template(
-            config_dir,
-            DEEP_REVIEW_ARTIFACT_FILE,
-            DEFAULT_DEEP_REVIEW_ARTIFACT_TEMPLATE,
-        )?,
+        actionable: load_repo_prompt_template(prompt_dir, ACTIONABLE_PROMPT_FILE)?,
+        deep_review: load_repo_prompt_template(prompt_dir, DEEP_REVIEW_PROMPT_FILE)?,
+        ci_failure_rules: load_repo_prompt_template(prompt_dir, CI_FAILURE_RULES_FILE)?,
+        workspace_ready: load_repo_prompt_template(prompt_dir, WORKSPACE_READY_FILE)?,
+        resumed_conflict: load_repo_prompt_template(prompt_dir, RESUMED_CONFLICT_FILE)?,
+        deep_review_artifact: load_repo_prompt_template(prompt_dir, DEEP_REVIEW_ARTIFACT_FILE)?,
     })
 }
 
-fn load_fixed_prompt_template(
-    config_dir: &Path,
-    file_name: &str,
-    default_template: &str,
-) -> Result<String> {
-    let path = config_dir.join(PROMPTS_DIR).join(file_name);
-    if !path.exists() {
-        return Ok(default_template.to_owned());
-    }
+fn repo_prompts_dir() -> PathBuf {
+    Path::new(env!("CARGO_MANIFEST_DIR")).join(PROMPTS_DIR)
+}
 
+fn load_repo_prompt_template(prompt_dir: &Path, file_name: &str) -> Result<String> {
+    let path = prompt_dir.join(file_name);
     fs::read_to_string(&path)
         .with_context(|| format!("failed to read prompt template at {}", path.display()))
 }
@@ -646,7 +622,7 @@ dangerously_bypass_approvals_and_sandbox = true
     }
 
     #[test]
-    fn load_reads_agent_prompt_templates_from_fixed_prompts_directory() {
+    fn load_agent_prompt_templates_from_dir_reads_repo_style_markdown_files() {
         let unique = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .expect("time")
@@ -664,35 +640,33 @@ dangerously_bypass_approvals_and_sandbox = true
             "artifact => {{artifact_path}}",
         )
         .expect("custom deep review artifact prompt should write");
-
-        let config_path = dir.join("symphony-rs.toml");
         std::fs::write(
-            &config_path,
-            r#"
-[github]
-api_token = "token"
-"#,
+            prompts_dir.join("deep_review.md"),
+            "deep review for {{repo}}",
         )
-        .expect("config fixture should write");
+        .expect("deep review prompt should write");
+        std::fs::write(prompts_dir.join("ci_failure_rules.md"), "- retest guidance")
+            .expect("ci failure rules should write");
+        std::fs::write(
+            prompts_dir.join("workspace_ready.md"),
+            "- workspace ready guidance",
+        )
+        .expect("workspace ready prompt should write");
+        std::fs::write(
+            prompts_dir.join("resumed_conflict.md"),
+            "- resumed conflict guidance",
+        )
+        .expect("resumed conflict prompt should write");
 
-        let resolved = AppConfig::load(&config_path).expect("config should load");
+        let resolved = load_agent_prompt_templates_from_dir(&prompts_dir)
+            .expect("prompt templates should load");
 
+        assert_eq!(resolved.actionable, "custom actionable for {{repo}}");
         assert_eq!(
-            resolved.agent.prompts.actionable,
-            "custom actionable for {{repo}}"
-        );
-        assert_eq!(
-            resolved.agent.prompts.deep_review_artifact,
+            resolved.deep_review_artifact,
             "artifact => {{artifact_path}}"
         );
-        assert!(
-            resolved
-                .agent
-                .prompts
-                .deep_review
-                .contains("deep code review"),
-            "unspecified prompt templates should fall back to repository defaults",
-        );
+        assert_eq!(resolved.deep_review, "deep review for {{repo}}");
     }
 
     #[test]

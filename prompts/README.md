@@ -11,8 +11,8 @@ These files are the built-in defaults:
 - `resumed_conflict.md`: extra operator guidance when BigBrother resumes an unresolved conflict workspace
 - `deep_review_artifact.md`: extra operator guidance that tells the agent where to write the deep review artifact
 
-BigBrother looks for these templates at the fixed path `./prompts/*.md` next to
-`symphony-rs.toml`. To customize prompts on a machine, edit these files directly.
+BigBrother reads these templates from the repository's `prompts/` directory at runtime. To
+customize prompts on a machine, edit these repo files directly.
 
 Available placeholders:
 
