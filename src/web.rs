@@ -9,8 +9,8 @@ use std::{
 use anyhow::{Context, Result};
 use axum::{
     extract::{Query, State},
-    http::StatusCode,
-    response::Html,
+    http::{header, StatusCode},
+    response::{Html, IntoResponse},
     routing::{get, post},
     Json, Router,
 };
@@ -24,12 +24,15 @@ use crate::{
     service::Supervisor,
 };
 
+const BIGBROTHER_MARK_PATH: &str = "/assets/bigbrother-mark.png";
+const BIGBROTHER_MARK_PNG: &[u8] = include_bytes!("../assets/bigbrother-mark.png");
+
 const INDEX_HTML: &str = r#"<!doctype html>
 <html lang="en">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Symphony RS</title>
+  <title>BigBrother</title>
   <style>
     :root {
       color-scheme: light;
@@ -66,6 +69,28 @@ const INDEX_HTML: &str = r#"<!doctype html>
       font-size: clamp(2.2rem, 3vw, 3.4rem);
       font-weight: 700;
       letter-spacing: -0.04em;
+    }
+
+    .brand-lockup {
+      display: flex;
+      align-items: center;
+      gap: 18px;
+      margin-bottom: 8px;
+    }
+
+    .brand-mark {
+      width: clamp(78px, 8vw, 104px);
+      flex-shrink: 0;
+    }
+
+    .brand-mark img {
+      display: block;
+      width: 100%;
+      height: auto;
+    }
+
+    .brand-copy {
+      min-width: 0;
     }
 
     p {
@@ -318,7 +343,11 @@ const INDEX_HTML: &str = r#"<!doctype html>
     }
 
     .action-button {
-      border: 1px solid var(--line);
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      gap: 8px;
+      border: none;
       border-radius: 999px;
       background: rgba(255, 255, 255, 0.82);
       color: var(--ink);
@@ -330,33 +359,54 @@ const INDEX_HTML: &str = r#"<!doctype html>
     }
 
     .action-button.pause-button {
-      background: rgba(183, 61, 61, 0.16);
-      border-color: rgba(183, 61, 61, 0.34);
-      color: #8b2f2f;
+      background: #c76a6a;
+      color: #fff;
     }
 
     .action-button.pause-button:hover:not(:disabled) {
-      background: rgba(183, 61, 61, 0.24);
+      background: #b75b5b;
     }
 
     .action-button.resume-button {
-      background: rgba(29, 107, 87, 0.16);
-      border-color: rgba(29, 107, 87, 0.34);
-      color: #1d6b57;
+      background: #4b907a;
+      color: #fff;
     }
 
     .action-button.resume-button:hover:not(:disabled) {
-      background: rgba(29, 107, 87, 0.24);
+      background: #3f7f6b;
+    }
+
+    .action-button.deep-review-button {
+      background: #6f8896;
+      color: #fff;
+    }
+
+    .action-button.deep-review-button:hover:not(:disabled) {
+      background: #627987;
     }
 
     .action-button:hover:not(:disabled) {
-      background: rgba(255, 255, 255, 1);
       transform: translateY(-1px);
+    }
+
+    .action-button:not(.pause-button):not(.resume-button):not(.deep-review-button):hover:not(:disabled) {
+      background: rgba(255, 255, 255, 1);
     }
 
     .action-button:disabled {
       cursor: wait;
       opacity: 0.65;
+    }
+
+    .button-icon {
+      font-size: 0.9em;
+      line-height: 1;
+    }
+
+    .button-icon svg {
+      display: block;
+      width: 0.95em;
+      height: 0.95em;
     }
 
     .detail-link {
@@ -475,7 +525,14 @@ const INDEX_HTML: &str = r#"<!doctype html>
     <section class="hero">
       <div class="hero-head">
         <div class="hero-copy">
-          <h1>Symphony RS</h1>
+          <div class="brand-lockup">
+            <div class="brand-mark" aria-hidden="true">
+              <img src="/assets/bigbrother-mark.png" alt="" />
+            </div>
+            <div class="brand-copy">
+              <h1>BigBrother</h1>
+            </div>
+          </div>
           <p>Tracking authored GitHub pull requests, surfacing CI and review changes, and showing when the local agent has already taken a pass.</p>
         </div>
         <div class="view-tabs" role="tablist" aria-label="Dashboard views">
@@ -528,14 +585,12 @@ const INDEX_HTML: &str = r#"<!doctype html>
           <tr>
             <th class="description-col">PR</th>
             <th class="metric-col">Status</th>
-            <th class="metric-col">CI</th>
-            <th class="metric-col">Reviews</th>
             <th class="metric-col">Details</th>
             <th class="metric-col">Action</th>
           </tr>
         </thead>
         <tbody id="review-requests-table">
-          <tr><td colspan="6" class="empty">Loading requested reviews...</td></tr>
+          <tr><td colspan="4" class="empty">Loading requested reviews...</td></tr>
         </tbody>
       </table>
     </section>
@@ -576,6 +631,9 @@ const INDEX_HTML: &str = r#"<!doctype html>
 
     function pillClass(value) {
       const label = String(value || "").toLowerCase();
+      if (!label || label === "-" || label === "not loaded") return "pill";
+      if (label === "requested review") return "pill warn";
+      if (label === "reviewed") return "pill good";
       if (label.includes("fail") || label.includes("block") || label.includes("conflict")) return "pill bad";
       if (label.includes("pause")) return "pill warn";
       if (label.includes("need") || label.includes("pending") || label.includes("comment") || label.includes("retry")) return "pill warn";
@@ -616,13 +674,15 @@ const INDEX_HTML: &str = r#"<!doctype html>
       const nextPaused = !isPaused;
       const label = pending ? "Updating..." : (isPaused ? "Resume" : "Pause");
       const variantClass = isPaused ? "resume-button" : "pause-button";
+      const icon = isPaused ? "&#9654;" : "&#10074;&#10074;";
       return `
         <button
           class="action-button ${variantClass}"
           ${pending ? "disabled" : ""}
           onclick="togglePause('${encodeURIComponent(pr.key)}', ${nextPaused})"
         >
-          ${label}
+          <span class="button-icon" aria-hidden="true">${icon}</span>
+          <span>${label}</span>
         </button>
       `;
     }
@@ -641,13 +701,22 @@ const INDEX_HTML: &str = r#"<!doctype html>
       const pending = pendingDeepReviewKeys.has(pr.key);
       const running = pr.status === "running";
       const label = pending ? "Starting..." : (running ? "Running..." : "Deep Review");
+      const icon = `
+        <span class="button-icon" aria-hidden="true">
+          <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+            <circle cx="7" cy="7" r="4.5"></circle>
+            <path d="M11.5 11.5L14 14"></path>
+          </svg>
+        </span>
+      `;
       return `
         <button
-          class="action-button"
+          class="action-button deep-review-button"
           ${(pending || running) ? "disabled" : ""}
           onclick="triggerDeepReview('${encodeURIComponent(pr.key)}')"
         >
-          ${label}
+          ${icon}
+          <span>${label}</span>
         </button>
       `;
     }
@@ -744,7 +813,7 @@ const INDEX_HTML: &str = r#"<!doctype html>
     function renderReviewRequests(prs) {
       const tbody = document.getElementById("review-requests-table");
       if (!prs.length) {
-        tbody.innerHTML = '<tr><td colspan="6" class="empty">No PRs are currently requesting your review.</td></tr>';
+        tbody.innerHTML = '<tr><td colspan="4" class="empty">No PRs are currently requesting your review.</td></tr>';
         return;
       }
 
@@ -756,8 +825,6 @@ const INDEX_HTML: &str = r#"<!doctype html>
             <div class="pr-meta">Updated ${escapeHtml(fmtTime(pr.updated_at))}</div>
           </td>
           <td class="metric-cell status-cell" data-label="Status">${renderStatus(pr, null)}</td>
-          <td class="metric-cell" data-label="CI"><span class="${pillClass(pr.ci_status)}">${escapeHtml(pr.ci_status)}</span></td>
-          <td class="metric-cell" data-label="Reviews"><span class="${pillClass(pr.review_status)}">${escapeHtml(pr.review_status)}</span></td>
           <td class="metric-cell details-cell" data-label="Details">${renderDetails(pr)}</td>
           <td class="metric-cell action-cell" data-label="Action">${renderReviewRequestAction(pr)}</td>
         </tr>
@@ -852,7 +919,7 @@ const INDEX_HTML: &str = r#"<!doctype html>
       document.getElementById("prs-table").innerHTML =
         `<tr><td colspan="7" class="empty">Failed to load dashboard: ${error.message}</td></tr>`;
       document.getElementById("review-requests-table").innerHTML =
-        `<tr><td colspan="6" class="empty">Failed to load review requests: ${error.message}</td></tr>`;
+        `<tr><td colspan="4" class="empty">Failed to load review requests: ${error.message}</td></tr>`;
       document.getElementById("activity-feed").innerHTML =
         `<div class="empty">Failed to load daemon activity: ${error.message}</div>`;
     });
@@ -866,7 +933,7 @@ const PR_DETAIL_HTML: &str = r##"<!doctype html>
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Symphony RS Run View</title>
+  <title>BigBrother Run View</title>
   <style>
     :root {
       color-scheme: light;
@@ -898,6 +965,23 @@ const PR_DETAIL_HTML: &str = r##"<!doctype html>
       padding: 32px 20px 64px;
     }
 
+    a {
+      color: inherit;
+    }
+
+    h1 {
+      margin: 0 0 8px;
+      font-size: clamp(2.2rem, 3vw, 3.4rem);
+      font-weight: 700;
+      letter-spacing: -0.04em;
+    }
+
+    p {
+      margin: 0;
+      color: var(--muted);
+      line-height: 1.55;
+    }
+
     .hero,
     .panel {
       background: var(--panel);
@@ -912,11 +996,57 @@ const PR_DETAIL_HTML: &str = r##"<!doctype html>
       margin-bottom: 18px;
     }
 
+    .hero-head {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 18px;
+      margin-bottom: 18px;
+    }
+
+    .brand-lockup {
+      display: flex;
+      align-items: center;
+      gap: 18px;
+    }
+
+    .brand-mark {
+      width: clamp(78px, 8vw, 104px);
+      flex-shrink: 0;
+    }
+
+    .brand-mark img {
+      display: block;
+      width: 100%;
+      height: auto;
+    }
+
+    .brand-copy {
+      min-width: 0;
+    }
+
+    .hero-copy {
+      min-width: 0;
+      margin-bottom: 20px;
+    }
+
+    .pr-title {
+      margin-top: 6px;
+      font-weight: 600;
+      font-size: 1.12rem;
+      line-height: 1.45;
+    }
+
+    .pr-meta {
+      margin-top: 4px;
+      color: var(--muted);
+      font-size: 0.9rem;
+    }
+
     .meta {
       display: grid;
       grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
       gap: 14px;
-      margin-top: 20px;
     }
 
     .meta-card {
@@ -947,17 +1077,19 @@ const PR_DETAIL_HTML: &str = r##"<!doctype html>
       margin-bottom: 18px;
     }
 
-    .back-link,
-    .pr-link {
+    .detail-link {
       color: var(--accent);
       text-decoration: none;
       border-bottom: 1px solid rgba(29, 107, 87, 0.25);
       width: fit-content;
     }
 
-    .back-link:hover,
-    .pr-link:hover {
+    .detail-link:hover {
       border-bottom-color: rgba(29, 107, 87, 0.8);
+    }
+
+    .is-hidden {
+      display: none;
     }
 
     .pill {
@@ -1048,9 +1180,22 @@ const PR_DETAIL_HTML: &str = r##"<!doctype html>
 <body>
   <main>
     <section class="hero">
-      <a class="back-link" href="/">Back to dashboard</a>
-      <h1 id="title" style="margin: 12px 0 6px; font-size: clamp(2rem, 3vw, 3rem); letter-spacing: -0.04em;">Loading run…</h1>
-      <div id="subtitle" style="color: var(--muted); line-height: 1.55;">Fetching PR details…</div>
+      <div class="hero-head">
+        <div class="brand-lockup">
+          <div class="brand-mark" aria-hidden="true">
+            <img src="/assets/bigbrother-mark.png" alt="" />
+          </div>
+          <div class="brand-copy">
+            <h1>BigBrother</h1>
+          </div>
+        </div>
+        <a class="detail-link" href="/">Back to dashboard</a>
+      </div>
+      <div class="hero-copy">
+        <a id="pr-link" class="is-hidden" href="#" target="_blank" rel="noreferrer">PR</a>
+        <div id="title" class="pr-title">Loading PR details…</div>
+        <div id="subtitle" class="pr-meta">Fetching PR details…</div>
+      </div>
       <div class="meta">
         <div class="meta-card">
           <label>Status</label>
@@ -1072,10 +1217,6 @@ const PR_DETAIL_HTML: &str = r##"<!doctype html>
     </section>
 
     <section class="panel">
-      <div class="toolbar">
-        <a id="pr-link" class="pr-link" href="#" target="_blank" rel="noreferrer">Open GitHub PR</a>
-        <span id="attention-text" class="empty">Attention: -</span>
-      </div>
       <div class="summary-block">
         <span class="section-label">Latest Summary</span>
         <div id="summary-text" class="summary-text">-</div>
@@ -1096,6 +1237,9 @@ const PR_DETAIL_HTML: &str = r##"<!doctype html>
 
     function pillClass(value) {
       const label = String(value || "").toLowerCase();
+      if (!label || label === "-" || label === "not loaded") return "pill";
+      if (label === "requested review") return "pill warn";
+      if (label === "reviewed") return "pill good";
       if (label.includes("fail") || label.includes("block") || label.includes("conflict")) return "pill bad";
       if (label.includes("pause")) return "pill warn";
       if (label.includes("need") || label.includes("pending") || label.includes("comment") || label.includes("retry")) return "pill warn";
@@ -1104,6 +1248,27 @@ const PR_DETAIL_HTML: &str = r##"<!doctype html>
 
     function setPill(id, value) {
       document.getElementById(id).innerHTML = `<span class="${pillClass(value)}">${String(value || "-")}</span>`;
+    }
+
+    function setPrLink(url, label) {
+      const link = document.getElementById("pr-link");
+      if (!url || !label) {
+        link.classList.add("is-hidden");
+        link.removeAttribute("href");
+        link.textContent = "PR";
+        return;
+      }
+
+      link.href = url;
+      link.textContent = label;
+      link.classList.remove("is-hidden");
+    }
+
+    function setTerminalMode(isRunning) {
+      document.getElementById("terminal-label").textContent =
+        isRunning ? "Live Terminal" : "Last Run Output";
+      document.getElementById("terminal").className =
+        isRunning ? "terminal-shell" : "output";
     }
 
     function detailOutputStatusText(pr) {
@@ -1123,9 +1288,10 @@ const PR_DETAIL_HTML: &str = r##"<!doctype html>
     async function refresh() {
       const key = new URLSearchParams(window.location.search).get("key");
       if (!key) {
+        setPrLink(null, null);
         document.getElementById("title").textContent = "Missing PR key";
         document.getElementById("subtitle").textContent = "Open this page from the dashboard so the PR key is included.";
-        document.getElementById("terminal-label").textContent = "Run Output";
+        setTerminalMode(false);
         document.getElementById("terminal-meta").textContent = "-";
         document.getElementById("terminal").textContent = "No PR key was provided.";
         return;
@@ -1138,15 +1304,13 @@ const PR_DETAIL_HTML: &str = r##"<!doctype html>
       }
 
       const pr = await response.json();
-      document.title = `${pr.repo_full_name} #${pr.number} · Symphony RS`;
-      document.getElementById("title").textContent = `${pr.repo_full_name} #${pr.number}`;
-      document.getElementById("subtitle").textContent = pr.title;
-      document.getElementById("pr-link").href = pr.url;
-      document.getElementById("attention-text").textContent = `Attention: ${pr.attention_reason || "-"}`;
+      document.title = `${pr.repo_full_name} #${pr.number} · BigBrother`;
+      setPrLink(pr.url, `${pr.repo_full_name} #${pr.number}`);
+      document.getElementById("title").textContent = pr.title;
+      document.getElementById("subtitle").textContent = `Updated ${fmtTime(pr.updated_at)}`;
       document.getElementById("updated-at").textContent = fmtTime(pr.updated_at);
       document.getElementById("summary-text").textContent = pr.latest_summary || "-";
-      document.getElementById("terminal-label").textContent =
-        pr.status === "running" ? "Live Terminal" : "Last Run Output";
+      setTerminalMode(pr.status === "running");
       document.getElementById("terminal-meta").textContent = detailOutputStatusText(pr);
       document.getElementById("terminal").textContent = pr.detail_output || detailOutputStatusText(pr);
       setPill("status-pill", pr.status);
@@ -1155,9 +1319,10 @@ const PR_DETAIL_HTML: &str = r##"<!doctype html>
     }
 
     refresh().catch((error) => {
+      setPrLink(null, null);
       document.getElementById("title").textContent = "Failed to load run";
       document.getElementById("subtitle").textContent = error.message;
-      document.getElementById("terminal-label").textContent = "Run Output";
+      setTerminalMode(false);
       document.getElementById("terminal-meta").textContent = "-";
       document.getElementById("terminal").textContent = error.message;
     });
@@ -1259,6 +1424,7 @@ pub fn router(supervisor: Arc<Supervisor>) -> Router {
     Router::new()
         .route("/", get(index))
         .route("/pr", get(pr_detail_page))
+        .route(BIGBROTHER_MARK_PATH, get(bigbrother_mark))
         .route("/api/health", get(health))
         .route("/api/activity", get(activity))
         .route("/api/prs", get(list_prs))
@@ -1281,7 +1447,7 @@ pub async fn serve(
         .await
         .with_context(|| format!("failed to bind {listen_addr}"))?;
 
-    println!("Symphony RS listening on http://{listen_addr}");
+    println!("BigBrother listening on http://{listen_addr}");
 
     axum::serve(listener, router(supervisor))
         .with_graceful_shutdown(shutdown_signal(stop_flag))
@@ -1295,6 +1461,10 @@ async fn index() -> Html<&'static str> {
 
 async fn pr_detail_page() -> Html<&'static str> {
     Html(PR_DETAIL_HTML)
+}
+
+async fn bigbrother_mark() -> impl IntoResponse {
+    ([(header::CONTENT_TYPE, "image/png")], BIGBROTHER_MARK_PNG)
 }
 
 async fn health(State(supervisor): State<Arc<Supervisor>>) -> Json<HealthResponse> {
@@ -1494,12 +1664,8 @@ fn summarize_review_request(review_request: &ReviewRequestPr) -> PullRequestSumm
         title: review_request.pull_request.title.clone(),
         url: review_request.pull_request.url.clone(),
         status: review_request_status(review_request).to_owned(),
-        ci_status: review_request.pull_request.ci_status.label().to_owned(),
-        review_status: review_request
-            .pull_request
-            .review_decision
-            .label()
-            .to_owned(),
+        ci_status: "-".to_owned(),
+        review_status: "-".to_owned(),
         is_paused: false,
         can_toggle_pause: false,
         attention_reason: Some("requested reviewer".to_owned()),

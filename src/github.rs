@@ -37,7 +37,7 @@ impl GitHubClient {
             ACCEPT,
             HeaderValue::from_static("application/vnd.github+json"),
         );
-        headers.insert(USER_AGENT, HeaderValue::from_static("symphony-rs/0.1"));
+        headers.insert(USER_AGENT, HeaderValue::from_static("bigbrother/0.1"));
 
         let auth_value = format!("Bearer {}", config.api_token);
         headers.insert(
@@ -112,14 +112,45 @@ impl GitHubClient {
             Some(author) => author.clone(),
             None => self.fetch_viewer_login(&metrics).await?,
         };
-        self.fetch_pull_requests_for_query_with_stats(
-            &reviewer,
+        self.fetch_review_requests_for_query_with_stats(
             build_review_request_query(&reviewer),
-            Arc::new(HashMap::new()),
-            Arc::new(HashSet::new()),
             &metrics,
         )
         .await
+    }
+
+    async fn fetch_review_requests_for_query_with_stats(
+        &self,
+        query: String,
+        metrics: &GitHubRequestMetrics,
+    ) -> Result<(Vec<PullRequest>, GitHubRequestStats)> {
+        let search: SearchResponse = self
+            .get_json(
+                "search/issues",
+                &[
+                    ("q", query),
+                    ("sort", "updated".to_owned()),
+                    ("order", "desc".to_owned()),
+                    ("per_page", self.config.max_prs.to_string()),
+                ],
+                metrics,
+                RequestCategory::Search,
+            )
+            .await?;
+        let total_matching_prs = search.total_count;
+
+        let mut prs = Vec::with_capacity(search.items.len());
+        for item in search.items {
+            let repo = parse_repo_from_api_url(&item.repository_url)
+                .with_context(|| format!("failed to parse repo from {}", item.repository_url))?;
+            prs.push(build_pull_request_from_search_item(&repo, item));
+            metrics.record_light_pr();
+        }
+
+        prs.sort_by(|left, right| right.updated_at.cmp(&left.updated_at));
+        let mut stats = metrics.snapshot();
+        stats.total_matching_prs = Some(total_matching_prs);
+        Ok((prs, stats))
     }
 
     async fn fetch_pull_requests_for_query_with_stats(
@@ -517,6 +548,14 @@ struct SearchResponse {
 struct SearchItem {
     number: u64,
     repository_url: String,
+    html_url: String,
+    title: String,
+    body: Option<String>,
+    user: GitHubUser,
+    #[serde(default)]
+    labels: Vec<Label>,
+    created_at: DateTime<Utc>,
+    updated_at: DateTime<Utc>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -552,12 +591,12 @@ struct RepoRef {
     ssh_url: String,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Clone)]
 struct GitHubUser {
     login: String,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Clone)]
 struct Label {
     name: String,
 }
@@ -671,6 +710,39 @@ fn build_pull_request_from_detail(
         is_closed: detail.state.eq_ignore_ascii_case("closed") && detail.merged_at.is_none(),
         is_merged: detail.merged_at.is_some(),
     })
+}
+
+fn build_pull_request_from_search_item(repo: &str, item: SearchItem) -> PullRequest {
+    PullRequest {
+        key: format!("{repo}#{}", item.number),
+        repo_full_name: repo.to_owned(),
+        number: item.number,
+        title: item.title,
+        body: item.body,
+        url: item.html_url,
+        author_login: item.user.login,
+        labels: item.labels.into_iter().map(|label| label.name).collect(),
+        created_at: item.created_at,
+        updated_at: item.updated_at,
+        head_sha: String::new(),
+        head_ref: String::new(),
+        base_sha: String::new(),
+        base_ref: String::new(),
+        clone_url: String::new(),
+        ssh_url: String::new(),
+        ci_status: CiStatus::Unknown,
+        ci_updated_at: None,
+        review_decision: ReviewDecision::Clean,
+        approval_count: 0,
+        review_comment_count: 0,
+        issue_comment_count: 0,
+        latest_reviewer_activity_at: None,
+        has_conflicts: false,
+        mergeable_state: None,
+        is_draft: false,
+        is_closed: false,
+        is_merged: false,
+    }
 }
 
 fn apply_signal_summary(
@@ -909,8 +981,9 @@ mod tests {
     use chrono::{Duration, TimeZone, Utc};
 
     use super::{
-        reuse_cached_signal_details, reuse_frozen_pull_request, should_refresh_signal_details,
-        summarize_ci, CheckRun,
+        build_pull_request_from_search_item, reuse_cached_signal_details,
+        reuse_frozen_pull_request, should_refresh_signal_details, summarize_ci, CheckRun,
+        GitHubUser, Label, SearchItem,
     };
     use crate::model::{CiStatus, PullRequest, ReviewDecision};
 
@@ -1062,5 +1135,35 @@ mod tests {
             summary.updated_at,
             Some(Utc.with_ymd_and_hms(2026, 4, 1, 6, 15, 58).unwrap())
         );
+    }
+
+    #[test]
+    fn build_pull_request_from_search_item_keeps_review_requests_lightweight() {
+        let pr = build_pull_request_from_search_item(
+            "openai/symphony",
+            SearchItem {
+                number: 18,
+                repository_url: "https://api.github.com/repos/openai/symphony".to_owned(),
+                html_url: "https://github.com/openai/symphony/pull/18".to_owned(),
+                title: "Review me".to_owned(),
+                body: Some("Please review".to_owned()),
+                user: GitHubUser {
+                    login: "reviewer".to_owned(),
+                },
+                labels: vec![Label {
+                    name: "needs-review".to_owned(),
+                }],
+                created_at: Utc.with_ymd_and_hms(2026, 4, 1, 1, 2, 3).unwrap(),
+                updated_at: Utc.with_ymd_and_hms(2026, 4, 1, 4, 5, 6).unwrap(),
+            },
+        );
+
+        assert_eq!(pr.key, "openai/symphony#18");
+        assert_eq!(pr.repo_full_name, "openai/symphony");
+        assert_eq!(pr.title, "Review me");
+        assert_eq!(pr.ci_status, CiStatus::Unknown);
+        assert_eq!(pr.review_decision, ReviewDecision::Clean);
+        assert!(pr.head_sha.is_empty());
+        assert!(pr.clone_url.is_empty());
     }
 }

@@ -2,7 +2,7 @@
 
 Status: Draft v0.2
 
-Owner: `symphony-rs` implementation track
+Owner: `BigBrother` implementation track
 
 Repository note:
 
@@ -11,7 +11,7 @@ Repository note:
 
 ## 1. Goal
 
-Build a new Rust-based Symphony implementation that:
+Build a new Rust-based BigBrother implementation that:
 
 1. tracks GitHub pull requests authored by the configured user
 2. monitors CI, reviews, inline comments, and top-level PR comments
@@ -635,7 +635,8 @@ Current prototype-compatible action API:
   When `paused` is `true`, scheduled polls should freeze that PR's visible state until resume.
 - `POST /api/review-requests/deep-review` with `{ "key": "<repo>#<number>" }`
   This starts a manual read-only deep review run for a PR that currently requests the operator's review,
-  persists the run output, and posts the final review report back to the PR as an issue comment.
+  uses the `$deep-review` skill to write a final markdown review artifact, persists that final report,
+  and posts only the final review report back to the PR as an issue comment.
 
 Potential richer follow-up actions:
 
@@ -660,8 +661,9 @@ The MVP UI can be a single page that shows:
 - a right-aligned dashboard tab switch for `PRs`, `Review Requests`, and `Activity`
 - current tracked PR rows
 - current review-request inbox rows for PRs that currently request the operator's review
+- the review-request inbox should stay lightweight: it should list matching PRs without hydrating CI, reviews, review comments, or issue comments until the operator opens a detail view or starts a deep review
 - each PR’s status, CI state, review state, and latest action summary, with attention context folded into the status cell instead of a dedicated attention column
-- the non-description columns centered for easier scanning, with red `Pause` and green `Resume` controls in the action column
+- the non-description columns centered for easier scanning, with red `Pause` and green `Resume` controls in the action column using white labels plus pause/play icons
 - a row-level link into a dedicated PR detail page for run output, showing an embedded read-only terminal while a run is active and the saved last run output after the run completes
 - a row-level pause/resume control for each tracked PR
 - a row-level `Deep Review` action for review-request inbox rows that runs a manual deep review and comments the result back onto the PR
@@ -692,20 +694,24 @@ Columns:
 
 - PR
 - status
-- CI
-- reviews
 - latest deep review summary
 - action
+
+The inbox status pills should visually distinguish `requested review` from `reviewed` so pending
+and completed review work do not blend together.
 
 ### 20.2 PR Detail
 
 Panels:
 
+- a hero header that reuses the homepage `BigBrother` brand lockup and size, with `Back to dashboard` aligned on the right
+- a GitHub PR link and PR title block styled like the dashboard PR description cell rather than a large standalone CTA
+- no dedicated attention banner or oversized `Open GitHub PR` control in the detail view; operator context should come from the status cards and summary/output sections
 - summary
 - recent comments/reviews summary
 - run history
 - read-only embedded terminal screen for the current run, including the latest terminal redraw state and last terminal activity time
-- saved last run output when no run is currently active, sourced from the persisted command/output transcript rather than the last terminal redraw snapshot
+- saved last run output when no run is currently active, sourced from the persisted command/output transcript rather than the last terminal redraw snapshot and rendered with wrapped monospace text so long lines stay readable
 - latest run output summary rendered as a short operator-facing status line rather than raw terminal or transcript text
 - workspace path
 - notification state

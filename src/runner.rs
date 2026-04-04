@@ -22,6 +22,7 @@ pub(crate) const PROMPT_TRANSCRIPT_HEADER: &str = "=== Prompt Sent To Codex CLI 
 pub(crate) const OUTPUT_TRANSCRIPT_HEADER: &str = "=== Codex CLI Output ===\n";
 const DEFAULT_PTY_ROWS: u16 = 36;
 const DEFAULT_PTY_COLS: u16 = 120;
+const DEEP_REVIEW_TARGET_DIR: &str = "target/bigbrother-deep-review";
 
 #[derive(Debug, Clone)]
 pub struct RunRequest {
@@ -65,6 +66,13 @@ struct RunFailure {
 #[derive(Debug)]
 struct PromptFile {
     path: PathBuf,
+}
+
+#[derive(Debug, Clone)]
+struct DeepReviewArtifact {
+    path: PathBuf,
+    target_dir: PathBuf,
+    file_name: String,
 }
 
 impl PromptFile {
@@ -207,9 +215,20 @@ async fn run_inner(
         .map_err(RunFailure::without_output)?
     };
 
-    let prompt_instructions = combine_operator_instructions(
+    let deep_review_artifact = if request.trigger == AttentionReason::DeepReview {
+        Some(
+            prepare_deep_review_artifact(&workspace_path, &request.pull_request)
+                .map_err(RunFailure::without_output)?,
+        )
+    } else {
+        None
+    };
+
+    let prompt_instructions = build_prompt_instructions(
+        request.trigger,
         request.agent.additional_instructions.as_deref(),
-        sync_report.prompt_note(),
+        &sync_report,
+        deep_review_artifact.as_ref(),
     );
 
     let prompt = build_prompt(
@@ -260,7 +279,25 @@ async fn run_inner(
     } else {
         request.trigger.failure_summary().to_owned()
     };
-    let captured_output = normalize_output(&cli_transcript(&transcript_preamble, &combined_output));
+    let base_captured_output =
+        normalize_output(&cli_transcript(&transcript_preamble, &combined_output));
+    let captured_output = if request.trigger == AttentionReason::DeepReview && exit_code == Some(0)
+    {
+        let artifact = deep_review_artifact.as_ref().ok_or_else(|| {
+            RunFailure::with_transcript(
+                anyhow!("missing deep review artifact"),
+                &transcript_preamble,
+            )
+        })?;
+        normalize_output(
+            &load_deep_review_report(artifact).map_err(|error| RunFailure {
+                error,
+                captured_output: base_captured_output.clone(),
+            })?,
+        )
+    } else {
+        base_captured_output
+    };
     let captured_terminal = normalize_output(&terminal_screen);
 
     Ok((
@@ -524,6 +561,76 @@ fn combine_operator_instructions(base: Option<&str>, extra: Option<&str>) -> Opt
         (Some(base), None) => Some(base.to_owned()),
         (None, Some(extra)) => Some(extra.to_owned()),
         (None, None) => None,
+    }
+}
+
+fn build_prompt_instructions(
+    trigger: AttentionReason,
+    base: Option<&str>,
+    sync_report: &WorkspaceSyncReport,
+    deep_review_artifact: Option<&DeepReviewArtifact>,
+) -> Option<String> {
+    let extra = match trigger {
+        AttentionReason::DeepReview => deep_review_artifact.map(deep_review_prompt_note),
+        _ => sync_report.prompt_note().map(str::to_owned),
+    };
+
+    combine_operator_instructions(base, extra.as_deref())
+}
+
+fn prepare_deep_review_artifact(
+    workspace_path: &Path,
+    pr: &PullRequest,
+) -> Result<DeepReviewArtifact> {
+    let target_dir = workspace_path.join(DEEP_REVIEW_TARGET_DIR);
+    fs::create_dir_all(&target_dir).with_context(|| {
+        format!(
+            "failed to create deep review target directory at {}",
+            target_dir.display()
+        )
+    })?;
+    let timestamp = Utc::now().format("%Y%m%d-%H%M%S");
+    let file_name = format!("review-report-pr{}-{timestamp}.md", pr.number);
+    let path = target_dir.join(&file_name);
+
+    Ok(DeepReviewArtifact {
+        path,
+        target_dir,
+        file_name,
+    })
+}
+
+fn deep_review_prompt_note(artifact: &DeepReviewArtifact) -> String {
+    format!(
+        "- Use the `$deep-review` skill and follow its workflow exactly.\n\
+         - Repository root: the current working directory.\n\
+         - Target output folder: `{}`.\n\
+         - Output filename: `{}`.\n\
+         - Write the final deep review markdown to `{}`.\n\
+         - The final PR comment will be generated from that file, so make the file itself the complete review artifact.\n\
+         - After writing the file, you may print a short confirmation, but do not paste the entire review into stdout.\n",
+        artifact.target_dir.display(),
+        artifact.file_name,
+        artifact.path.display()
+    )
+}
+
+fn load_deep_review_report(artifact: &DeepReviewArtifact) -> Result<String> {
+    let report = fs::read_to_string(&artifact.path).with_context(|| {
+        format!(
+            "deep review succeeded but no review report was written to {}",
+            artifact.path.display()
+        )
+    })?;
+
+    let report = report.trim();
+    if report.is_empty() {
+        Err(anyhow!(
+            "deep review report at {} was empty",
+            artifact.path.display()
+        ))
+    } else {
+        Ok(report.to_owned())
     }
 }
 
@@ -812,12 +919,12 @@ mod tests {
             .expect("git repo should initialize");
         run_command(
             "git",
-            &["config", "user.email", "symphony-rs@example.com"],
+            &["config", "user.email", "bigbrother@example.com"],
             Some(path),
         )
         .await
         .expect("git email should configure");
-        run_command("git", &["config", "user.name", "Symphony RS"], Some(path))
+        run_command("git", &["config", "user.name", "BigBrother"], Some(path))
             .await
             .expect("git user should configure");
         run_command("git", &["branch", "-M", "main"], Some(path))
@@ -913,14 +1020,14 @@ mod tests {
         clone_repo(&remote, &workspace_repo).await;
         run_command(
             "git",
-            &["config", "user.email", "symphony-rs@example.com"],
+            &["config", "user.email", "bigbrother@example.com"],
             Some(&workspace_repo),
         )
         .await
         .expect("workspace email should configure");
         run_command(
             "git",
-            &["config", "user.name", "Symphony RS"],
+            &["config", "user.name", "BigBrother"],
             Some(&workspace_repo),
         )
         .await
@@ -960,6 +1067,47 @@ mod tests {
         assert!(transcript.contains("Inspect the workspace\nRun focused validation"));
         assert!(transcript.contains("\n\n=== Codex CLI Output ===\n"));
         assert!(transcript.ends_with(output));
+    }
+
+    #[test]
+    fn deep_review_prompt_instructions_use_skill_artifact_without_merge_guidance() {
+        let artifact = DeepReviewArtifact {
+            path: PathBuf::from("/tmp/review-report.md"),
+            target_dir: PathBuf::from("/tmp"),
+            file_name: "review-report.md".to_owned(),
+        };
+        let sync_report = WorkspaceSyncReport {
+            fetched_pr_branch: true,
+            fetched_base_branch: true,
+            resumed_conflict_workspace: false,
+        };
+
+        let instructions = build_prompt_instructions(
+            AttentionReason::DeepReview,
+            Some("- Operator note."),
+            &sync_report,
+            Some(&artifact),
+        )
+        .expect("deep review instructions should exist");
+
+        assert!(instructions.contains("$deep-review"));
+        assert!(instructions.contains("review-report.md"));
+        assert!(!instructions.contains("merge the latest base branch"));
+    }
+
+    #[test]
+    fn actionable_prompt_instructions_keep_sync_guidance() {
+        let sync_report = WorkspaceSyncReport {
+            fetched_pr_branch: true,
+            fetched_base_branch: true,
+            resumed_conflict_workspace: false,
+        };
+
+        let instructions =
+            build_prompt_instructions(AttentionReason::CiFailed, None, &sync_report, None)
+                .expect("actionable instructions should exist");
+
+        assert!(instructions.contains("merge the latest base branch"));
     }
 
     async fn simulate_agent_merge_conflict(workspace_repo: &Path, pr: &PullRequest) {

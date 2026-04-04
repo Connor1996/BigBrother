@@ -114,10 +114,11 @@ fn build_deep_review_prompt(pr: &PullRequest, extra: Option<&str>) -> String {
          Working rules:\n\
          - Work only inside the current repository checkout.\n\
          - Treat this as a read-only review pass: do not edit files, commit, push, or leave GitHub comments.\n\
+         - Use the `$deep-review` skill workflow for this review and follow its output template.\n\
          - Inspect the PR diff against the latest fetched base branch, then read any surrounding code needed to validate behavior.\n\
          - You may run targeted read-only commands or tests when they help confirm a finding.\n\
          - Focus on bugs, regressions, risky assumptions, missing validation, and missing tests.\n\
-         - Final output must be a concise review report ordered by severity with file references when possible.\n\
+         - The final deliverable is the review markdown artifact requested in the additional instructions below.\n\
          - If you find no actionable issues, say `No findings.` and briefly note any residual risk.\n\
          {extra}",
         trigger = AttentionReason::DeepReview.label(),
@@ -221,6 +222,7 @@ mod tests {
 
         assert!(prompt.contains("You are performing a deep code review"));
         assert!(prompt.contains("do not edit files, commit, push, or leave GitHub comments"));
+        assert!(prompt.contains("Use the `$deep-review` skill workflow"));
         assert!(prompt.contains("If you find no actionable issues, say `No findings.`"));
         assert!(!prompt.contains("merge the latest base branch into the PR branch yourself"));
     }

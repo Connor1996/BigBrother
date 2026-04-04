@@ -11,7 +11,7 @@ use std::{
 use anyhow::Result;
 use axum::{
     body::{to_bytes, Body},
-    http::Request,
+    http::{header, Request},
 };
 use chrono::{TimeZone, Utc};
 use futures::future::BoxFuture;
@@ -273,8 +273,14 @@ impl AgentRunner for FakeAgentRunner {
         Box::pin(async move {
             invocations.fetch_add(1, Ordering::SeqCst);
             started.add_permits(1);
+            let report = "### Deep Review\n\n#### Problem Summary\n- Validate the PR for risky behavior.\n\n#### Solution Walkthrough\n- Read the diff and surrounding code.\n\n#### Findings (ordered by severity)\n- No findings.\n\n#### Costs and Negative Impacts\n- Correctness: None.\n- Security: None.\n- Compatibility: None.\n- Robustness: Low residual risk.\n- Cognitive Load: Low.\n- CPU: None.\n- Memory: None.\n- Log Volume: None.\n\n#### Engineering Rules Check\n- None\n\n#### Questions and Assumptions\n- None\n\n#### Suggested Tests / Validation\n- cargo test -q\n";
             let transcript =
                 fake_cli_transcript(&request, "codex: inspecting workspace\ncargo test -q\n");
+            let captured_output = if request.trigger == AttentionReason::DeepReview {
+                report.to_owned()
+            } else {
+                transcript.clone()
+            };
             if let Some(output_updates) = request.output_updates.as_ref() {
                 let _ = output_updates.send(RunUpdate::TranscriptChunk(transcript.clone()));
                 let _ = output_updates.send(RunUpdate::TerminalSnapshot {
@@ -293,7 +299,7 @@ impl AgentRunner for FakeAgentRunner {
                 success: true,
                 exit_code: Some(0),
                 summary: format!("fixed {}", request.pull_request.key),
-                captured_output: Some(transcript),
+                captured_output: Some(captured_output),
                 captured_terminal: Some("$ codex exec\nThinking...\ncargo test -q".to_owned()),
                 last_terminal_output_at: Some(Utc::now()),
                 processed_comment_at: request.pull_request.latest_reviewer_activity_at,
@@ -790,9 +796,127 @@ async fn dashboard_html_exposes_top_right_pr_review_request_and_activity_tabs() 
         "dashboard should center the non-description columns, got: {html}",
     );
     assert!(
+        html.contains(
+            r#"<tr><td colspan="4" class="empty">Loading requested reviews...</td></tr>"#
+        ),
+        "review request inbox should render the compact four-column layout, got: {html}",
+    );
+    assert!(
         html.contains("pause-button") && html.contains("resume-button"),
         "dashboard should expose distinct pause and resume button styling hooks, got: {html}",
     );
+    assert!(
+        html.contains("background: #c76a6a;") && html.contains("background: #4b907a;"),
+        "dashboard should use the lighter pause and resume button fills, got: {html}",
+    );
+    assert!(
+        html.contains("deep-review-button")
+            && html.contains("background: #6f8896;")
+            && html.contains("M11.5 11.5L14 14"),
+        "dashboard should render deep review with the same filled action button style family and magnifying glass icon, got: {html}",
+    );
+    assert!(
+        html.contains("button-icon")
+            && html.contains("&#9654;")
+            && html.contains("&#10074;&#10074;"),
+        "dashboard should render play and pause icons for the action buttons, got: {html}",
+    );
+    assert!(
+        html.contains(r#"if (label === "requested review") return "pill warn";"#)
+            && html.contains(r#"if (label === "reviewed") return "pill good";"#),
+        "review request status pills should color requested and reviewed differently, got: {html}",
+    );
+    assert!(
+        html.contains("<title>BigBrother</title>")
+            && html.contains(">BigBrother</h1>")
+            && html.contains("src=\"/assets/bigbrother-mark.png\""),
+        "dashboard should expose the BigBrother brand and PNG mole icon asset, got: {html}",
+    );
+}
+
+#[tokio::test]
+async fn pr_detail_page_uses_bigbrother_branding() {
+    let supervisor = Arc::new(
+        Supervisor::new(
+            sample_config(
+                unique_temp_path("state.json"),
+                unique_temp_path("workspaces"),
+            ),
+            Arc::new(FakeGitHubProvider { prs: vec![] }),
+            Arc::new(FakeAgentRunner {
+                invocations: Arc::new(AtomicUsize::new(0)),
+                started: Arc::new(Semaphore::new(0)),
+                allow_finish: Arc::new(Semaphore::new(0)),
+            }),
+        )
+        .expect("supervisor should initialize"),
+    );
+
+    let html = request_text(
+        supervisor,
+        Request::builder()
+            .uri("/pr")
+            .body(Body::empty())
+            .expect("request should build"),
+    )
+    .await;
+
+    assert!(
+        html.contains("<title>BigBrother Run View</title>")
+            && html.contains("<div class=\"brand-lockup\">")
+            && html.contains("<h1>BigBrother</h1>")
+            && html.contains("Back to dashboard")
+            && html.contains("src=\"/assets/bigbrother-mark.png\"")
+            && html.contains("id=\"title\" class=\"pr-title\"")
+            && html.contains("id=\"subtitle\" class=\"pr-meta\"")
+            && html.contains(r#"isRunning ? "terminal-shell" : "output""#)
+            && !html.contains("Open GitHub PR")
+            && !html.contains("Attention:")
+            && !html.contains("PR run details and saved output.")
+            && html.contains("a {\n      color: inherit;\n    }")
+            && html.contains("<label>CI</label>")
+            && html.contains("<label>Reviews</label>"),
+        "run detail page should reuse the homepage branding/layout while keeping the CI and reviews cards, got: {html}",
+    );
+}
+
+#[tokio::test]
+async fn bigbrother_brand_asset_is_served_as_png() {
+    let supervisor = Arc::new(
+        Supervisor::new(
+            sample_config(
+                unique_temp_path("state.json"),
+                unique_temp_path("workspaces"),
+            ),
+            Arc::new(FakeGitHubProvider { prs: vec![] }),
+            Arc::new(FakeAgentRunner {
+                invocations: Arc::new(AtomicUsize::new(0)),
+                started: Arc::new(Semaphore::new(0)),
+                allow_finish: Arc::new(Semaphore::new(0)),
+            }),
+        )
+        .expect("supervisor should initialize"),
+    );
+
+    let response = web::router(supervisor)
+        .oneshot(
+            Request::builder()
+                .uri("/assets/bigbrother-mark.png")
+                .body(Body::empty())
+                .expect("request should build"),
+        )
+        .await
+        .expect("route should respond");
+    assert_eq!(response.status(), 200);
+    assert_eq!(
+        response.headers().get(header::CONTENT_TYPE).unwrap(),
+        "image/png"
+    );
+
+    let bytes = to_bytes(response.into_body(), usize::MAX)
+        .await
+        .expect("body should collect");
+    assert!(!bytes.is_empty(), "brand asset should not be empty");
 }
 
 #[tokio::test]
@@ -827,6 +951,8 @@ async fn review_requests_api_lists_requested_review_prs() {
     assert_eq!(prs.len(), 1);
     assert_eq!(prs[0]["key"], json!("openai/symphony#18"));
     assert_eq!(prs[0]["status"], json!("requested review"));
+    assert_eq!(prs[0]["ci_status"], json!("-"));
+    assert_eq!(prs[0]["review_status"], json!("-"));
     assert_eq!(prs[0]["latest_summary"], Value::Null);
 }
 
@@ -896,7 +1022,7 @@ async fn deep_review_action_runs_requested_review_pr_and_persists_output() {
     assert_eq!(detail["latest_summary"], json!("deep review completed"));
     assert_eq!(
         detail["detail_output"],
-        json!("codex: inspecting workspace\ncargo test -q")
+        json!("### Deep Review\n\n#### Problem Summary\n- Validate the PR for risky behavior.\n\n#### Solution Walkthrough\n- Read the diff and surrounding code.\n\n#### Findings (ordered by severity)\n- No findings.\n\n#### Costs and Negative Impacts\n- Correctness: None.\n- Security: None.\n- Compatibility: None.\n- Robustness: Low residual risk.\n- Cognitive Load: Low.\n- CPU: None.\n- Memory: None.\n- Log Volume: None.\n\n#### Engineering Rules Check\n- None\n\n#### Questions and Assumptions\n- None\n\n#### Suggested Tests / Validation\n- cargo test -q")
     );
 
     let comments = comments
@@ -905,9 +1031,12 @@ async fn deep_review_action_runs_requested_review_pr_and_persists_output() {
     assert_eq!(comments.len(), 1);
     assert_eq!(comments[0].0, "openai/symphony#18");
     assert!(
-        comments[0].1.contains("## Deep Review")
-            && comments[0].1.contains("codex: inspecting workspace"),
-        "deep review should post the captured report as a PR comment, got: {}",
+        comments[0].1.contains("### Deep Review")
+            && comments[0]
+                .1
+                .contains("#### Findings (ordered by severity)")
+            && !comments[0].1.contains("codex: inspecting workspace"),
+        "deep review should post only the final review report as a PR comment, got: {}",
         comments[0].1,
     );
 }
