@@ -15,7 +15,7 @@ pub struct AppConfig {
     #[serde(default)]
     pub workspace: WorkspaceConfig,
     #[serde(default)]
-    pub agent: AgentConfig,
+    pub agent: RawAgentConfig,
     #[serde(default)]
     pub ui: UiConfig,
     #[serde(default)]
@@ -65,7 +65,7 @@ pub enum GitTransport {
 }
 
 #[derive(Debug, Clone, Deserialize)]
-pub struct AgentConfig {
+pub struct RawAgentConfig {
     #[serde(default = "default_agent_command")]
     pub command: String,
     #[serde(default = "default_agent_args")]
@@ -74,6 +74,43 @@ pub struct AgentConfig {
     pub dangerously_bypass_approvals_and_sandbox: bool,
     #[serde(default)]
     pub additional_instructions: Option<String>,
+    #[serde(default)]
+    pub prompts: RawAgentPromptTemplates,
+}
+
+#[derive(Debug, Clone, Default, Deserialize)]
+pub struct RawAgentPromptTemplates {
+    #[serde(default)]
+    pub actionable: Option<String>,
+    #[serde(default)]
+    pub deep_review: Option<String>,
+    #[serde(default)]
+    pub ci_failure_rules: Option<String>,
+    #[serde(default)]
+    pub workspace_ready: Option<String>,
+    #[serde(default)]
+    pub resumed_conflict: Option<String>,
+    #[serde(default)]
+    pub deep_review_artifact: Option<String>,
+}
+
+#[derive(Debug, Clone)]
+pub struct AgentConfig {
+    pub command: String,
+    pub args: Vec<String>,
+    pub dangerously_bypass_approvals_and_sandbox: bool,
+    pub additional_instructions: Option<String>,
+    pub prompts: AgentPromptTemplates,
+}
+
+#[derive(Debug, Clone)]
+pub struct AgentPromptTemplates {
+    pub actionable: String,
+    pub deep_review: String,
+    pub ci_failure_rules: String,
+    pub workspace_ready: String,
+    pub resumed_conflict: String,
+    pub deep_review_artifact: String,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -202,22 +239,7 @@ impl AppConfig {
                     .collect(),
                 git_transport: self.workspace.git_transport,
             },
-            agent: AgentConfig {
-                command: resolve_literal(self.agent.command, None),
-                args: self
-                    .agent
-                    .args
-                    .into_iter()
-                    .map(|value| resolve_literal(value, None))
-                    .collect(),
-                dangerously_bypass_approvals_and_sandbox: self
-                    .agent
-                    .dangerously_bypass_approvals_and_sandbox,
-                additional_instructions: self
-                    .agent
-                    .additional_instructions
-                    .map(|value| resolve_literal(value, None)),
-            },
+            agent: resolve_agent_config(self.agent, &config_dir)?,
             ui: self.ui,
             notifications,
             state_path,
@@ -244,6 +266,18 @@ impl Default for WorkspaceConfig {
     }
 }
 
+impl Default for RawAgentConfig {
+    fn default() -> Self {
+        Self {
+            command: default_agent_command(),
+            args: default_agent_args(),
+            dangerously_bypass_approvals_and_sandbox: false,
+            additional_instructions: None,
+            prompts: RawAgentPromptTemplates::default(),
+        }
+    }
+}
+
 impl Default for AgentConfig {
     fn default() -> Self {
         Self {
@@ -251,6 +285,20 @@ impl Default for AgentConfig {
             args: default_agent_args(),
             dangerously_bypass_approvals_and_sandbox: false,
             additional_instructions: None,
+            prompts: AgentPromptTemplates::default(),
+        }
+    }
+}
+
+impl Default for AgentPromptTemplates {
+    fn default() -> Self {
+        Self {
+            actionable: DEFAULT_ACTIONABLE_PROMPT_TEMPLATE.to_owned(),
+            deep_review: DEFAULT_DEEP_REVIEW_PROMPT_TEMPLATE.to_owned(),
+            ci_failure_rules: DEFAULT_CI_FAILURE_RULES_TEMPLATE.to_owned(),
+            workspace_ready: DEFAULT_WORKSPACE_READY_TEMPLATE.to_owned(),
+            resumed_conflict: DEFAULT_RESUMED_CONFLICT_TEMPLATE.to_owned(),
+            deep_review_artifact: DEFAULT_DEEP_REVIEW_ARTIFACT_TEMPLATE.to_owned(),
         }
     }
 }
@@ -383,6 +431,14 @@ fn default_agent_args() -> Vec<String> {
     ]
 }
 
+const DEFAULT_ACTIONABLE_PROMPT_TEMPLATE: &str = include_str!("../prompts/actionable.md");
+const DEFAULT_DEEP_REVIEW_PROMPT_TEMPLATE: &str = include_str!("../prompts/deep_review.md");
+const DEFAULT_CI_FAILURE_RULES_TEMPLATE: &str = include_str!("../prompts/ci_failure_rules.md");
+const DEFAULT_WORKSPACE_READY_TEMPLATE: &str = include_str!("../prompts/workspace_ready.md");
+const DEFAULT_RESUMED_CONFLICT_TEMPLATE: &str = include_str!("../prompts/resumed_conflict.md");
+const DEFAULT_DEEP_REVIEW_ARTIFACT_TEMPLATE: &str =
+    include_str!("../prompts/deep_review_artifact.md");
+
 fn default_refresh_hz() -> u64 {
     2
 }
@@ -393,6 +449,81 @@ fn default_notification_timeout_secs() -> u64 {
 
 fn default_feishu_notification_label() -> String {
     "symphony-rs".to_owned()
+}
+
+fn resolve_agent_config(raw: RawAgentConfig, config_dir: &Path) -> Result<AgentConfig> {
+    Ok(AgentConfig {
+        command: resolve_literal(raw.command, None),
+        args: raw
+            .args
+            .into_iter()
+            .map(|value| resolve_literal(value, None))
+            .collect(),
+        dangerously_bypass_approvals_and_sandbox: raw.dangerously_bypass_approvals_and_sandbox,
+        additional_instructions: raw
+            .additional_instructions
+            .map(|value| resolve_literal(value, None)),
+        prompts: resolve_agent_prompt_templates(raw.prompts, config_dir)?,
+    })
+}
+
+fn resolve_agent_prompt_templates(
+    raw: RawAgentPromptTemplates,
+    config_dir: &Path,
+) -> Result<AgentPromptTemplates> {
+    Ok(AgentPromptTemplates {
+        actionable: resolve_template_override(
+            raw.actionable,
+            config_dir,
+            DEFAULT_ACTIONABLE_PROMPT_TEMPLATE,
+            "agent.prompts.actionable",
+        )?,
+        deep_review: resolve_template_override(
+            raw.deep_review,
+            config_dir,
+            DEFAULT_DEEP_REVIEW_PROMPT_TEMPLATE,
+            "agent.prompts.deep_review",
+        )?,
+        ci_failure_rules: resolve_template_override(
+            raw.ci_failure_rules,
+            config_dir,
+            DEFAULT_CI_FAILURE_RULES_TEMPLATE,
+            "agent.prompts.ci_failure_rules",
+        )?,
+        workspace_ready: resolve_template_override(
+            raw.workspace_ready,
+            config_dir,
+            DEFAULT_WORKSPACE_READY_TEMPLATE,
+            "agent.prompts.workspace_ready",
+        )?,
+        resumed_conflict: resolve_template_override(
+            raw.resumed_conflict,
+            config_dir,
+            DEFAULT_RESUMED_CONFLICT_TEMPLATE,
+            "agent.prompts.resumed_conflict",
+        )?,
+        deep_review_artifact: resolve_template_override(
+            raw.deep_review_artifact,
+            config_dir,
+            DEFAULT_DEEP_REVIEW_ARTIFACT_TEMPLATE,
+            "agent.prompts.deep_review_artifact",
+        )?,
+    })
+}
+
+fn resolve_template_override(
+    raw_path: Option<String>,
+    config_dir: &Path,
+    default_template: &str,
+    field_name: &str,
+) -> Result<String> {
+    let Some(raw_path) = raw_path else {
+        return Ok(default_template.to_owned());
+    };
+
+    let path = resolve_path(&raw_path, config_dir);
+    fs::read_to_string(&path)
+        .with_context(|| format!("failed to read {field_name} template at {}", path.display()))
 }
 
 fn resolve_notifications(
@@ -534,6 +665,60 @@ dangerously_bypass_approvals_and_sandbox = true
         let resolved = AppConfig::load(&config_path).expect("config should load");
 
         assert!(resolved.agent.dangerously_bypass_approvals_and_sandbox);
+    }
+
+    #[test]
+    fn load_resolves_agent_prompt_template_overrides_relative_to_config_dir() {
+        let unique = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("time")
+            .as_nanos();
+        let dir = std::env::temp_dir().join(format!("symphony-rs-config-{unique}"));
+        let prompts_dir = dir.join("local-prompts");
+        std::fs::create_dir_all(&prompts_dir).expect("prompt fixture dir should create");
+        std::fs::write(
+            prompts_dir.join("actionable.md"),
+            "custom actionable for {{repo}}",
+        )
+        .expect("custom actionable prompt should write");
+        std::fs::write(
+            prompts_dir.join("deep_review_artifact.md"),
+            "artifact => {{artifact_path}}",
+        )
+        .expect("custom deep review artifact prompt should write");
+
+        let config_path = dir.join("symphony-rs.toml");
+        std::fs::write(
+            &config_path,
+            r#"
+[github]
+api_token = "token"
+
+[agent.prompts]
+actionable = "./local-prompts/actionable.md"
+deep_review_artifact = "./local-prompts/deep_review_artifact.md"
+"#,
+        )
+        .expect("config fixture should write");
+
+        let resolved = AppConfig::load(&config_path).expect("config should load");
+
+        assert_eq!(
+            resolved.agent.prompts.actionable,
+            "custom actionable for {{repo}}"
+        );
+        assert_eq!(
+            resolved.agent.prompts.deep_review_artifact,
+            "artifact => {{artifact_path}}"
+        );
+        assert!(
+            resolved
+                .agent
+                .prompts
+                .deep_review
+                .contains("deep code review"),
+            "unspecified prompt templates should fall back to repository defaults",
+        );
     }
 
     #[test]

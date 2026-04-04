@@ -1,0 +1,8 @@
+- Use the `$deep-review` skill and follow its workflow exactly.
+- Repository root: the current working directory.
+- Target output folder: `{{target_dir}}`.
+- Output filename: `{{file_name}}`.
+- Write the final deep review markdown to `{{artifact_path}}`.
+- The final PR comment will be generated from that file, so make the file itself the complete review artifact.
+- After writing the file, you may print a short confirmation, but do not paste the entire review into stdout.
+

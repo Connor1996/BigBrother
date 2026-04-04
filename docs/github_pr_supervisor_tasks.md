@@ -184,6 +184,7 @@ This section is the only task list that matters for the next implementation pass
 - [ ] Capture stdout, stderr, exit code, duration, and compact summary
 - [ ] Persist run records into SQLite
 - [ ] Add backpressure so one PR cannot launch overlapping runs
+- [x] Extract default prompt text into Markdown templates with per-instance override paths
 - [ ] Make the prompt builder explicit and versioned
 
 ## 10. Notifications

@@ -477,6 +477,15 @@ The agent prompt must include:
 - for CI-failure triggers, explicit instruction that clearly unrelated or flaky failures may be
   handled by commenting `/retest` on the PR instead of making speculative code changes
 
+Prompt template management:
+
+- the default prompt text should live in versioned Markdown templates in the repository so operators
+  can inspect and edit the wording directly
+- local config should allow per-instance prompt-template path overrides without requiring Rust code
+  edits
+- prompt assembly may still inject runtime PR metadata and daemon-generated operator notes into
+  those templates before sending the final prompt to the agent
+
 ## 15. Notification Model
 
 Notifications are emitted when:

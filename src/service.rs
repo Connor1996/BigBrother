@@ -1630,8 +1630,8 @@ mod tests {
     use super::*;
     use crate::{
         config::{
-            AgentConfig, DaemonConfig, GitTransport, ResolvedConfig, ResolvedGitHubConfig,
-            ResolvedNotificationsConfig, ResolvedWorkspaceConfig, UiConfig,
+            AgentConfig, AgentPromptTemplates, DaemonConfig, GitTransport, ResolvedConfig,
+            ResolvedGitHubConfig, ResolvedNotificationsConfig, ResolvedWorkspaceConfig, UiConfig,
         },
         model::{CiStatus, EventLevel, PullRequest, ReviewDecision},
         notify::{Notification, NotificationSink},
@@ -1698,6 +1698,7 @@ mod tests {
                 args: vec![],
                 dangerously_bypass_approvals_and_sandbox: false,
                 additional_instructions: None,
+                prompts: AgentPromptTemplates::default(),
             },
             ui: UiConfig::default(),
             notifications: ResolvedNotificationsConfig::default(),

@@ -18,7 +18,7 @@ use futures::future::BoxFuture;
 use serde_json::{json, Value};
 use symphony_rs::{
     config::{
-        AgentConfig, DaemonConfig, ResolvedConfig, ResolvedGitHubConfig,
+        AgentConfig, AgentPromptTemplates, DaemonConfig, ResolvedConfig, ResolvedGitHubConfig,
         ResolvedNotificationsConfig, ResolvedWorkspaceConfig, UiConfig,
     },
     model::{
@@ -2002,6 +2002,7 @@ fn sample_config(state_path: PathBuf, workspace_root: PathBuf) -> ResolvedConfig
             args: vec![],
             dangerously_bypass_approvals_and_sandbox: false,
             additional_instructions: None,
+            prompts: AgentPromptTemplates::default(),
         },
         ui: UiConfig::default(),
         notifications: ResolvedNotificationsConfig::default(),
@@ -2159,6 +2160,7 @@ fn fake_cli_transcript(request: &RunRequest, output: &str) -> String {
     let prompt = build_prompt(
         &request.pull_request,
         request.trigger,
+        &request.agent.prompts,
         request.agent.additional_instructions.as_deref(),
     );
 

@@ -117,6 +117,33 @@ private DMs. `receive_id_type` supports Feishu message targets such as `email`,
 `open_id`, `user_id`, `union_id`, and `chat_id`; for a first private-DM setup, `email` is usually
 the easiest option.
 
+## Prompt Templates
+
+The default agent prompts now live in Markdown files under
+[`prompts/`](/Users/Connor/Coding/symphony-rs/prompts/README.md). That makes the built-in prompt
+wording visible in the repo and lets each operator override only the pieces they care about.
+
+BigBrother ships these default prompt files:
+
+- [`prompts/actionable.md`](/Users/Connor/Coding/symphony-rs/prompts/actionable.md) for CI failures, merge conflicts, and review-feedback runs
+- [`prompts/deep_review.md`](/Users/Connor/Coding/symphony-rs/prompts/deep_review.md) for manual deep reviews
+- [`prompts/ci_failure_rules.md`](/Users/Connor/Coding/symphony-rs/prompts/ci_failure_rules.md) for the CI-only `/retest` guidance block
+- [`prompts/workspace_ready.md`](/Users/Connor/Coding/symphony-rs/prompts/workspace_ready.md) and [`prompts/resumed_conflict.md`](/Users/Connor/Coding/symphony-rs/prompts/resumed_conflict.md) for workspace-preparation notes
+- [`prompts/deep_review_artifact.md`](/Users/Connor/Coding/symphony-rs/prompts/deep_review_artifact.md) for the deep-review artifact instructions
+
+To customize prompts per machine, copy whichever files you want to change and point your local
+`symphony-rs.toml` at them:
+
+```toml
+[agent.prompts]
+actionable = "./local-prompts/actionable.md"
+deep_review = "./local-prompts/deep_review.md"
+ci_failure_rules = "./local-prompts/ci_failure_rules.md"
+workspace_ready = "./local-prompts/workspace_ready.md"
+resumed_conflict = "./local-prompts/resumed_conflict.md"
+deep_review_artifact = "./local-prompts/deep_review_artifact.md"
+```
+
 ## How The Agent Loop Works
 
 When BigBrother detects a PR that needs attention, it:
@@ -130,7 +157,7 @@ When BigBrother detects a PR that needs attention, it:
 7. pipes that prompt to the configured agent command
 8. updates the UI and persisted state with the result
 
-The default prompt asks the agent to inspect GitHub feedback and CI, merge the latest base branch itself when needed, resolve conflicts before declaring success, fix code in-place, run targeted validation, and push back to the PR branch if it can. It also tells the agent to stop and ask for operator direction before making material or high-risk changes instead of changing code unilaterally.
+The default prompt templates ask the agent to inspect GitHub feedback and CI, merge the latest base branch itself when needed, resolve conflicts before declaring success, fix code in-place, run targeted validation, and push back to the PR branch if it can. They also tell the agent to stop and ask for operator direction before making material or high-risk changes instead of changing code unilaterally.
 
 Manual deep reviews use the `$deep-review` skill in read-only mode: they write the final review markdown under `target/bigbrother-deep-review`, and the backend posts only that final review artifact back to the PR as a comment when the run succeeds.
 

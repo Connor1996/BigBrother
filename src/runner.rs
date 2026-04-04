@@ -12,9 +12,9 @@ use portable_pty::{native_pty_system, CommandBuilder, PtySize};
 use tokio::{process::Command, sync::mpsc::UnboundedSender};
 
 use crate::{
-    config::{AgentConfig, GitTransport, ResolvedWorkspaceConfig},
+    config::{AgentConfig, AgentPromptTemplates, GitTransport, ResolvedWorkspaceConfig},
     model::{AttentionReason, PullRequest},
-    prompt::build_prompt,
+    prompt::{build_prompt, render_template},
     service::AgentRunner,
 };
 
@@ -121,15 +121,11 @@ struct WorkspaceSyncReport {
 }
 
 impl WorkspaceSyncReport {
-    fn prompt_note(&self) -> Option<&'static str> {
+    fn prompt_note(&self, templates: &AgentPromptTemplates) -> Option<String> {
         if self.resumed_conflict_workspace {
-            Some(
-                "- Workspace preparation detected an unresolved merge-conflict workspace from a previous run for this same PR.\n- Continue from the existing conflict markers in the working tree, finish the base-branch merge yourself, then continue with the trigger-specific fix, validation, and push if safe.",
-            )
+            Some(templates.resumed_conflict.clone())
         } else if self.fetched_pr_branch || self.fetched_base_branch {
-            Some(
-                "- Workspace preparation fetched the PR head branch and latest base branch refs and checked out the PR branch locally.\n- If the base and head branches differ, you must merge the latest base branch into the PR branch yourself before addressing the trigger-specific issue.",
-            )
+            Some(templates.workspace_ready.clone())
         } else {
             None
         }
@@ -229,11 +225,13 @@ async fn run_inner(
         request.agent.additional_instructions.as_deref(),
         &sync_report,
         deep_review_artifact.as_ref(),
+        &request.agent.prompts,
     );
 
     let prompt = build_prompt(
         &request.pull_request,
         request.trigger,
+        &request.agent.prompts,
         prompt_instructions.as_deref(),
     );
     let transcript_preamble = cli_transcript_preamble(&prompt);
@@ -569,10 +567,13 @@ fn build_prompt_instructions(
     base: Option<&str>,
     sync_report: &WorkspaceSyncReport,
     deep_review_artifact: Option<&DeepReviewArtifact>,
+    templates: &AgentPromptTemplates,
 ) -> Option<String> {
     let extra = match trigger {
-        AttentionReason::DeepReview => deep_review_artifact.map(deep_review_prompt_note),
-        _ => sync_report.prompt_note().map(str::to_owned),
+        AttentionReason::DeepReview => {
+            deep_review_artifact.map(|artifact| deep_review_prompt_note(artifact, templates))
+        }
+        _ => sync_report.prompt_note(templates),
     };
 
     combine_operator_instructions(base, extra.as_deref())
@@ -600,18 +601,17 @@ fn prepare_deep_review_artifact(
     })
 }
 
-fn deep_review_prompt_note(artifact: &DeepReviewArtifact) -> String {
-    format!(
-        "- Use the `$deep-review` skill and follow its workflow exactly.\n\
-         - Repository root: the current working directory.\n\
-         - Target output folder: `{}`.\n\
-         - Output filename: `{}`.\n\
-         - Write the final deep review markdown to `{}`.\n\
-         - The final PR comment will be generated from that file, so make the file itself the complete review artifact.\n\
-         - After writing the file, you may print a short confirmation, but do not paste the entire review into stdout.\n",
-        artifact.target_dir.display(),
-        artifact.file_name,
-        artifact.path.display()
+fn deep_review_prompt_note(
+    artifact: &DeepReviewArtifact,
+    templates: &AgentPromptTemplates,
+) -> String {
+    render_template(
+        &templates.deep_review_artifact,
+        &[
+            ("target_dir", artifact.target_dir.display().to_string()),
+            ("file_name", artifact.file_name.clone()),
+            ("artifact_path", artifact.path.display().to_string()),
+        ],
     )
 }
 
@@ -856,7 +856,7 @@ mod tests {
 
     use super::*;
     use crate::{
-        config::ResolvedWorkspaceConfig,
+        config::{AgentPromptTemplates, ResolvedWorkspaceConfig},
         model::{CiStatus, ReviewDecision},
     };
 
@@ -1087,6 +1087,7 @@ mod tests {
             Some("- Operator note."),
             &sync_report,
             Some(&artifact),
+            &AgentPromptTemplates::default(),
         )
         .expect("deep review instructions should exist");
 
@@ -1103,9 +1104,14 @@ mod tests {
             resumed_conflict_workspace: false,
         };
 
-        let instructions =
-            build_prompt_instructions(AttentionReason::CiFailed, None, &sync_report, None)
-                .expect("actionable instructions should exist");
+        let instructions = build_prompt_instructions(
+            AttentionReason::CiFailed,
+            None,
+            &sync_report,
+            None,
+            &AgentPromptTemplates::default(),
+        )
+        .expect("actionable instructions should exist");
 
         assert!(instructions.contains("merge the latest base branch"));
     }
