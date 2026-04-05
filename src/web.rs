@@ -2123,10 +2123,10 @@ fn latest_detail_output(tracked: &TrackedPr) -> Option<String> {
     tracked
         .runner
         .as_ref()
-        .and_then(|runner| runner.live_output.clone())
+        .and_then(|runner| detail_text_output(runner.live_output.as_deref()))
         .or_else(|| {
             if tracked.runner.is_none() {
-                persisted_run_output(tracked.persisted.last_run_output.as_deref())
+                detail_text_output(tracked.persisted.last_run_output.as_deref())
             } else {
                 None
             }
@@ -2169,12 +2169,12 @@ fn latest_review_request_output(review_request: &ReviewRequestPr) -> Option<Stri
         .runner
         .as_ref()
         .filter(|runner| runner.trigger == AttentionReason::DeepReview)
-        .and_then(|runner| runner.live_output.clone())
+        .and_then(|runner| detail_text_output(runner.live_output.as_deref()))
         .or_else(|| {
             if review_request.runner.is_none()
                 && review_request.persisted.last_run_trigger == Some(AttentionReason::DeepReview)
             {
-                persisted_run_output(review_request.persisted.last_run_output.as_deref())
+                detail_text_output(review_request.persisted.last_run_output.as_deref())
             } else {
                 None
             }
@@ -2262,13 +2262,20 @@ fn compact_summary_text(summary: Option<&str>) -> Option<String> {
     Some(truncated)
 }
 
-fn persisted_run_output(output: Option<&str>) -> Option<String> {
+fn detail_text_output(output: Option<&str>) -> Option<String> {
     let output = output?;
     let output = output
         .find(OUTPUT_TRANSCRIPT_HEADER)
         .map(|offset| &output[offset + OUTPUT_TRANSCRIPT_HEADER.len()..])
         .unwrap_or(output)
-        .trim();
+        .lines()
+        .filter(|line| {
+            let trimmed = line.trim();
+            trimmed != "=== Prompt Sent To Codex CLI ===" && trimmed != "=== Codex CLI Output ==="
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    let output = output.trim();
 
     if output.is_empty() {
         None
@@ -2295,7 +2302,7 @@ async fn shutdown_signal(stop_flag: Arc<AtomicBool>) {
 mod tests {
     use chrono::TimeZone;
 
-    use super::{compact_summary_text, latest_operator_summary, persisted_run_output};
+    use super::{compact_summary_text, detail_text_output, latest_operator_summary};
     use crate::model::{
         AttentionReason, CiStatus, PersistentPrState, PullRequest, ReviewDecision, RunnerState,
         TrackedPr, TrackingStatus, NEEDS_DECISION_SUMMARY,
@@ -2400,13 +2407,24 @@ mod tests {
     }
 
     #[test]
-    fn persisted_run_output_strips_transcript_headers() {
+    fn detail_text_output_strips_transcript_headers() {
         assert_eq!(
-            persisted_run_output(Some(
+            detail_text_output(Some(
                 "=== Prompt Sent To Codex CLI ===\nprompt body\n=== Codex CLI Output ===\n$ cargo test\nok\n"
             ))
             .as_deref(),
             Some("$ cargo test\nok")
+        );
+    }
+
+    #[test]
+    fn detail_text_output_strips_header_only_fallbacks() {
+        assert_eq!(
+            detail_text_output(Some(
+                "=== Prompt Sent To Codex CLI ===\n\nfatal: auth expired\nsecond line\n"
+            ))
+            .as_deref(),
+            Some("fatal: auth expired\nsecond line")
         );
     }
 

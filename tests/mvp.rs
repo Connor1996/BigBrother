@@ -1495,9 +1495,7 @@ async fn running_pr_exposes_live_terminal() {
         json!("$ codex exec\nThinking...\ncargo test -q")
     );
     if let Some(detail_output) = detail_payload["detail_output"].as_str() {
-        assert!(detail_output.starts_with("=== Prompt Sent To Codex CLI ===\n"));
-        assert!(detail_output.contains("=== Codex CLI Output ===\n"));
-        assert!(detail_output.contains("codex: inspecting workspace\ncargo test -q\n"));
+        assert_eq!(detail_output, "codex: inspecting workspace\ncargo test -q");
     }
     assert!(detail_payload["last_terminal_output_at"].is_string());
     assert_eq!(detail_payload["live_output"], Value::Null);
