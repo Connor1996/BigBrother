@@ -1759,6 +1759,7 @@ mod tests {
             agent: AgentConfig {
                 command: "codex".to_owned(),
                 args: vec![],
+                model_reasoning_effort: "xhigh".to_owned(),
                 dangerously_bypass_approvals_and_sandbox: false,
                 additional_instructions: None,
                 prompts: AgentPromptTemplates::default(),

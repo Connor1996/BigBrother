@@ -698,11 +698,7 @@ fn build_pty_command(
     command.arg("-c");
     command.arg("exec \"$@\" <\"$SYMPHONY_PROMPT_PATH\"");
     command.arg("symphony-agent");
-    command.arg(&request.agent.command);
-    if request.agent.dangerously_bypass_approvals_and_sandbox {
-        command.arg("--dangerously-bypass-approvals-and-sandbox");
-    }
-    for arg in &request.agent.args {
+    for arg in build_agent_command_argv(&request.agent) {
         command.arg(arg);
     }
 
@@ -753,6 +749,29 @@ fn build_pty_command(
     );
 
     Ok(command)
+}
+
+fn build_agent_command_argv(agent: &AgentConfig) -> Vec<String> {
+    let mut argv = vec![agent.command.clone()];
+    if agent.dangerously_bypass_approvals_and_sandbox {
+        argv.push("--dangerously-bypass-approvals-and-sandbox".to_owned());
+    }
+    if should_inject_codex_reasoning_effort(agent) {
+        argv.push("-c".to_owned());
+        argv.push(format!(
+            "model_reasoning_effort={:?}",
+            agent.model_reasoning_effort
+        ));
+    }
+    argv.extend(agent.args.iter().cloned());
+    argv
+}
+
+fn should_inject_codex_reasoning_effort(agent: &AgentConfig) -> bool {
+    Path::new(&agent.command)
+        .file_name()
+        .and_then(|value| value.to_str())
+        .is_some_and(|value| value == "codex")
 }
 
 fn normalize_output(output: &str) -> Option<String> {
@@ -1198,6 +1217,52 @@ mod tests {
     fn extract_needs_decision_signal_requires_explicit_marker() {
         assert!(
             extract_needs_decision_signal("Need approval before changing API shape.").is_none()
+        );
+    }
+
+    #[test]
+    fn build_agent_command_argv_injects_xhigh_reasoning_for_codex_exec() {
+        let agent = AgentConfig {
+            command: "codex".to_owned(),
+            args: vec![
+                "exec".to_owned(),
+                "--model".to_owned(),
+                "gpt-5.4".to_owned(),
+            ],
+            model_reasoning_effort: "xhigh".to_owned(),
+            dangerously_bypass_approvals_and_sandbox: true,
+            additional_instructions: None,
+            prompts: AgentPromptTemplates::default(),
+        };
+
+        assert_eq!(
+            build_agent_command_argv(&agent),
+            vec![
+                "codex".to_owned(),
+                "--dangerously-bypass-approvals-and-sandbox".to_owned(),
+                "-c".to_owned(),
+                "model_reasoning_effort=\"xhigh\"".to_owned(),
+                "exec".to_owned(),
+                "--model".to_owned(),
+                "gpt-5.4".to_owned(),
+            ]
+        );
+    }
+
+    #[test]
+    fn build_agent_command_argv_skips_codex_only_reasoning_override_for_other_agents() {
+        let agent = AgentConfig {
+            command: "other-agent".to_owned(),
+            args: vec!["run".to_owned()],
+            model_reasoning_effort: "xhigh".to_owned(),
+            dangerously_bypass_approvals_and_sandbox: false,
+            additional_instructions: None,
+            prompts: AgentPromptTemplates::default(),
+        };
+
+        assert_eq!(
+            build_agent_command_argv(&agent),
+            vec!["other-agent".to_owned(), "run".to_owned()]
         );
     }
 

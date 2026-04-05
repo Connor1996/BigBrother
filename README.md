@@ -45,6 +45,8 @@ The UI shows the authored PR list, a `Review Requests` tab for PRs that currentl
 - a GitHub token in `GITHUB_TOKEN` or `GH_TOKEN`
 - an agent command available on your machine
   - the example config assumes `codex`
+  - BigBrother defaults Codex runs to `model_reasoning_effort = "xhigh"` and passes that
+    explicitly via `codex -c model_reasoning_effort=... exec ...`
   - if you want Codex to run with unsandboxed full local access, set
     `agent.dangerously_bypass_approvals_and_sandbox = true`
 - existing local checkouts for the repositories you want BigBrother to operate on
@@ -78,6 +80,8 @@ The example config sets `workspace.root = ".."`, which means BigBrother will loo
 repositories next to `symphony-rs` before it tries any explicit `workspace.repo_map` overrides.
 If you enable `agent.dangerously_bypass_approvals_and_sandbox`, BigBrother will invoke Codex with
 full unsandboxed access, so only use that on a machine you already trust.
+By default, BigBrother also injects `-c model_reasoning_effort="xhigh"` into `codex exec` so the
+daemon does not depend on whatever ambient global Codex config happens to be present on the host.
 
 4. Open the dashboard in your browser:
 
@@ -147,6 +151,10 @@ When BigBrother detects a PR that needs attention, it:
 6. builds an execution prompt from the PR context and trigger reason
 7. pipes that prompt to the configured agent command
 8. updates the UI and persisted state with the result
+
+When the configured agent command is `codex`, BigBrother treats reasoning effort as a first-class
+agent setting. The `[agent] model_reasoning_effort` config defaults to `xhigh`, and the runner
+always passes it explicitly to `codex exec` via `-c model_reasoning_effort="..."`.
 
 The default prompt templates ask the agent to inspect GitHub feedback and CI, merge the latest base branch itself when needed, resolve conflicts before declaring success, fix code in-place, run targeted validation, and push back to the PR branch if it can. They also tell the agent to stop and ask for operator direction before making material or high-risk changes instead of changing code unilaterally. When the agent decides a change is non-trivial, it emits a machine-readable `BIGBROTHER_NEEDS_DECISION:` marker; BigBrother then sets the PR to `needs decision`, auto-pauses future automatic runs for that PR under the hood, and stores the full operator-facing explanation in the PR details output until you resume it.
 

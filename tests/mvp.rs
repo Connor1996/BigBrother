@@ -2105,6 +2105,7 @@ fn sample_config(state_path: PathBuf, workspace_root: PathBuf) -> ResolvedConfig
         agent: AgentConfig {
             command: "fake-agent".to_owned(),
             args: vec![],
+            model_reasoning_effort: "xhigh".to_owned(),
             dangerously_bypass_approvals_and_sandbox: false,
             additional_instructions: None,
             prompts: AgentPromptTemplates::default(),

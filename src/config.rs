@@ -70,6 +70,8 @@ pub struct RawAgentConfig {
     pub command: String,
     #[serde(default = "default_agent_args")]
     pub args: Vec<String>,
+    #[serde(default = "default_agent_model_reasoning_effort")]
+    pub model_reasoning_effort: String,
     #[serde(default)]
     pub dangerously_bypass_approvals_and_sandbox: bool,
     #[serde(default)]
@@ -80,6 +82,7 @@ pub struct RawAgentConfig {
 pub struct AgentConfig {
     pub command: String,
     pub args: Vec<String>,
+    pub model_reasoning_effort: String,
     pub dangerously_bypass_approvals_and_sandbox: bool,
     pub additional_instructions: Option<String>,
     pub prompts: AgentPromptTemplates,
@@ -253,6 +256,7 @@ impl Default for RawAgentConfig {
         Self {
             command: default_agent_command(),
             args: default_agent_args(),
+            model_reasoning_effort: default_agent_model_reasoning_effort(),
             dangerously_bypass_approvals_and_sandbox: false,
             additional_instructions: None,
         }
@@ -264,6 +268,7 @@ impl Default for AgentConfig {
         Self {
             command: default_agent_command(),
             args: default_agent_args(),
+            model_reasoning_effort: default_agent_model_reasoning_effort(),
             dangerously_bypass_approvals_and_sandbox: false,
             additional_instructions: None,
             prompts: AgentPromptTemplates::default(),
@@ -412,6 +417,10 @@ fn default_agent_args() -> Vec<String> {
     ]
 }
 
+fn default_agent_model_reasoning_effort() -> String {
+    "xhigh".to_owned()
+}
+
 const DEFAULT_ACTIONABLE_PROMPT_TEMPLATE: &str = include_str!("../prompts/actionable.md");
 const DEFAULT_DEEP_REVIEW_PROMPT_TEMPLATE: &str = include_str!("../prompts/deep_review.md");
 const DEFAULT_CI_FAILURE_RULES_TEMPLATE: &str = include_str!("../prompts/ci_failure_rules.md");
@@ -447,6 +456,7 @@ fn resolve_agent_config(raw: RawAgentConfig) -> Result<AgentConfig> {
             .into_iter()
             .map(|value| resolve_literal(value, None))
             .collect(),
+        model_reasoning_effort: resolve_literal(raw.model_reasoning_effort, None),
         dangerously_bypass_approvals_and_sandbox: raw.dangerously_bypass_approvals_and_sandbox,
         additional_instructions: raw
             .additional_instructions
@@ -619,6 +629,55 @@ dangerously_bypass_approvals_and_sandbox = true
         let resolved = AppConfig::load(&config_path).expect("config should load");
 
         assert!(resolved.agent.dangerously_bypass_approvals_and_sandbox);
+    }
+
+    #[test]
+    fn load_defaults_agent_reasoning_effort_to_xhigh() {
+        let unique = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("time")
+            .as_nanos();
+        let dir = std::env::temp_dir().join(format!("symphony-rs-config-{unique}"));
+        std::fs::create_dir_all(&dir).expect("temp config dir should create");
+        let config_path = dir.join("symphony-rs.toml");
+        std::fs::write(
+            &config_path,
+            r#"
+[github]
+api_token = "token"
+"#,
+        )
+        .expect("config fixture should write");
+
+        let resolved = AppConfig::load(&config_path).expect("config should load");
+
+        assert_eq!(resolved.agent.model_reasoning_effort, "xhigh");
+    }
+
+    #[test]
+    fn load_preserves_explicit_agent_reasoning_effort() {
+        let unique = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("time")
+            .as_nanos();
+        let dir = std::env::temp_dir().join(format!("symphony-rs-config-{unique}"));
+        std::fs::create_dir_all(&dir).expect("temp config dir should create");
+        let config_path = dir.join("symphony-rs.toml");
+        std::fs::write(
+            &config_path,
+            r#"
+[github]
+api_token = "token"
+
+[agent]
+model_reasoning_effort = "high"
+"#,
+        )
+        .expect("config fixture should write");
+
+        let resolved = AppConfig::load(&config_path).expect("config should load");
+
+        assert_eq!(resolved.agent.model_reasoning_effort, "high");
     }
 
     #[test]

@@ -459,6 +459,14 @@ Each run includes:
 - compact final summary intended for operator scanning, such as `merge conflict handling completed`,
   `review feedback handling failed`, or `CI failure handling completed`
 
+Agent runtime defaults:
+
+- when `agent.command` resolves to `codex`, the daemon must explicitly pass a
+  `-c model_reasoning_effort="..."` override instead of relying on ambient host config
+- the default BigBrother reasoning effort for `codex exec` is `xhigh`
+- operators may override that reasoning effort through the structured `[agent]` config rather than
+  burying it in free-form `args`
+
 The agent prompt must include:
 
 - repository and PR identity

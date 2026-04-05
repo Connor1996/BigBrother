@@ -27,6 +27,9 @@ git_transport = "ssh"
 [agent]
 # Executable used to run the coding agent.
 command = "codex"
+# Explicit Codex reasoning effort override passed via `-c model_reasoning_effort=...`.
+# BigBrother defaults this to `xhigh` even if you omit it.
+model_reasoning_effort = "xhigh"
 # When true, Symphony launches `codex` with `--dangerously-bypass-approvals-and-sandbox`.
 # Leave this off unless the host environment is already externally sandboxed and you want
 # Codex to have full local access.
