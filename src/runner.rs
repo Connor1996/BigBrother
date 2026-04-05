@@ -274,8 +274,14 @@ async fn run_inner(
         })
         .context("failed to create PTY for agent command")
         .map_err(|error| RunFailure::with_transcript(error, &transcript_preamble))?;
-    let command = build_pty_command(request, &workspace_path, &sync_report, &prompt_file)
-        .map_err(|error| RunFailure::with_transcript(error, &transcript_preamble))?;
+    let command = build_pty_command(
+        request,
+        &workspace_path,
+        &sync_report,
+        &prompt,
+        &prompt_file,
+    )
+    .map_err(|error| RunFailure::with_transcript(error, &transcript_preamble))?;
     let child = pair
         .slave
         .spawn_command(command)
@@ -807,22 +813,30 @@ fn build_pty_command(
     request: &RunRequest,
     workspace_path: &Path,
     sync_report: &WorkspaceSyncReport,
+    prompt: &str,
     prompt_file: &PromptFile,
 ) -> Result<CommandBuilder> {
-    let prompt_path = prompt_file
-        .path
-        .to_str()
-        .ok_or_else(|| anyhow!("prompt file path is not valid UTF-8"))?;
+    let prompt_as_argument = should_pass_prompt_as_argument(&request.agent);
     let mut command = CommandBuilder::new("sh");
     command.arg("-c");
-    command.arg("exec \"$@\" <\"$SYMPHONY_PROMPT_PATH\"");
+    if prompt_as_argument {
+        command.arg("exec \"$@\"");
+    } else {
+        let prompt_path = prompt_file
+            .path
+            .to_str()
+            .ok_or_else(|| anyhow!("prompt file path is not valid UTF-8"))?;
+        command.arg("exec \"$@\" <\"$SYMPHONY_PROMPT_PATH\"");
+        command.env("SYMPHONY_PROMPT_PATH", prompt_path);
+    }
     command.arg("symphony-agent");
-    for arg in build_agent_command_argv(&request.agent) {
+    for arg in build_agent_command_argv(&request.agent, prompt_as_argument.then_some(prompt)) {
         command.arg(arg);
     }
 
     command.cwd(workspace_path);
-    command.env("SYMPHONY_PROMPT_PATH", prompt_path);
+    command.env("TERM", "xterm-256color");
+    command.env("COLORTERM", "truecolor");
     command.env("SYMPHONY_PR_REPO", &request.pull_request.repo_full_name);
     command.env(
         "SYMPHONY_PR_NUMBER",
@@ -871,7 +885,7 @@ fn build_pty_command(
     Ok(command)
 }
 
-fn build_agent_command_argv(agent: &AgentConfig) -> Vec<String> {
+fn build_agent_command_argv(agent: &AgentConfig, prompt: Option<&str>) -> Vec<String> {
     let mut argv = vec![agent.command.clone()];
     if agent.dangerously_bypass_approvals_and_sandbox {
         argv.push("--dangerously-bypass-approvals-and-sandbox".to_owned());
@@ -883,7 +897,25 @@ fn build_agent_command_argv(agent: &AgentConfig) -> Vec<String> {
             agent.model_reasoning_effort
         ));
     }
-    argv.extend(agent.args.iter().cloned());
+    let mut agent_args = agent.args.clone();
+    if should_inject_codex_color(agent, &agent_args) {
+        let insert_at = agent_args
+            .iter()
+            .position(|value| value == "exec")
+            .map(|index| index + 1)
+            .unwrap_or(0);
+        agent_args.insert(insert_at, "--color".to_owned());
+        agent_args.insert(insert_at + 1, "always".to_owned());
+    }
+    if let Some(prompt) = prompt {
+        if should_append_prompt_argument(agent, &agent_args) {
+            if matches!(agent_args.last(), Some(last) if last == "-") {
+                agent_args.pop();
+            }
+            agent_args.push(prompt.to_owned());
+        }
+    }
+    argv.extend(agent_args);
     argv
 }
 
@@ -892,6 +924,22 @@ fn should_inject_codex_reasoning_effort(agent: &AgentConfig) -> bool {
         .file_name()
         .and_then(|value| value.to_str())
         .is_some_and(|value| value == "codex")
+}
+
+fn should_inject_codex_color(agent: &AgentConfig, args: &[String]) -> bool {
+    should_inject_codex_reasoning_effort(agent)
+        && !args.windows(2).any(|window| {
+            window[0] == "--color" || window[0] == "-c" && window[1].starts_with("color=")
+        })
+        && !args.iter().any(|value| value == "--color")
+}
+
+fn should_append_prompt_argument(agent: &AgentConfig, args: &[String]) -> bool {
+    should_inject_codex_reasoning_effort(agent) && args.iter().any(|value| value == "exec")
+}
+
+fn should_pass_prompt_as_argument(agent: &AgentConfig) -> bool {
+    should_inject_codex_reasoning_effort(agent)
 }
 
 fn normalize_output(output: &str) -> Option<String> {
@@ -1350,15 +1398,18 @@ mod tests {
         };
 
         assert_eq!(
-            build_agent_command_argv(&agent),
+            build_agent_command_argv(&agent, Some("Inspect workspace")),
             vec![
                 "codex".to_owned(),
                 "--dangerously-bypass-approvals-and-sandbox".to_owned(),
                 "-c".to_owned(),
                 "model_reasoning_effort=\"xhigh\"".to_owned(),
                 "exec".to_owned(),
+                "--color".to_owned(),
+                "always".to_owned(),
                 "--model".to_owned(),
                 "gpt-5.4".to_owned(),
+                "Inspect workspace".to_owned(),
             ]
         );
     }
@@ -1375,8 +1426,38 @@ mod tests {
         };
 
         assert_eq!(
-            build_agent_command_argv(&agent),
+            build_agent_command_argv(&agent, None),
             vec!["other-agent".to_owned(), "run".to_owned()]
+        );
+    }
+
+    #[test]
+    fn build_agent_command_argv_preserves_existing_codex_color_flag() {
+        let agent = AgentConfig {
+            command: "codex".to_owned(),
+            args: vec![
+                "exec".to_owned(),
+                "--color".to_owned(),
+                "always".to_owned(),
+                "-".to_owned(),
+            ],
+            model_reasoning_effort: "xhigh".to_owned(),
+            dangerously_bypass_approvals_and_sandbox: false,
+            additional_instructions: None,
+            prompts: AgentPromptTemplates::default(),
+        };
+
+        assert_eq!(
+            build_agent_command_argv(&agent, Some("hello")),
+            vec![
+                "codex".to_owned(),
+                "-c".to_owned(),
+                "model_reasoning_effort=\"xhigh\"".to_owned(),
+                "exec".to_owned(),
+                "--color".to_owned(),
+                "always".to_owned(),
+                "hello".to_owned(),
+            ]
         );
     }
 

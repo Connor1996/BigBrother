@@ -459,7 +459,7 @@ Each run includes:
 - workspace sync result
 - agent command
 - timeout
-- the exact prompt sent to the agent stdin
+- the exact prompt text sent to the agent, even if the runtime passes it as a direct `codex exec` prompt argument rather than stdin
 - stdout and stderr capture
 - exit code
 - compact final summary intended for operator scanning, such as `merge conflict handling completed`,
@@ -469,6 +469,8 @@ Agent runtime defaults:
 
 - when `agent.command` resolves to `codex`, the daemon must explicitly pass a
   `-c model_reasoning_effort="..."` override instead of relying on ambient host config
+- `codex exec` runs should force `--color always` and preserve PTY-style output so the detail view can replay ANSI-colored terminal recordings
+- for `codex exec`, the daemon should pass the assembled prompt as the initial prompt argument instead of piping it through stdin whenever possible, so the PTY session remains closer to a native terminal run
 - the default BigBrother reasoning effort for `codex exec` is `xhigh`
 - operators may override that reasoning effort through the structured `[agent]` config rather than
   burying it in free-form `args`
@@ -747,6 +749,7 @@ Panels:
 - run history
 - a browser-rendered `xterm.js` terminal for active runs, fed from the raw PTY stream over WebSocket so Codex CLI redraws, ANSI styling, and live scrollback are preserved in the detail view
 - the same terminal presentation for completed runs whenever a PTY session was captured, replayed from the saved terminal recording rather than a one-screen snapshot so operators can inspect the final terminal context after the run ends
+- saved terminal recordings should keep the full PTY stream instead of trimming down to a short in-memory screen excerpt, so completed runs retain their available scrollback
 - saved last run output as a wrapped monospace text fallback only when no PTY terminal recording is available for the last run (for example, failures before the terminal session starts), and that fallback should omit internal transcript wrapper headers such as `Prompt Sent To Codex CLI` / `Codex CLI Output`
 - latest run output summary rendered as a short operator-facing status line rather than raw terminal or transcript text
 - when a run ends in `needs decision`, the saved last run output should show the full operator-facing explanation and requested decision, while the summary stays short

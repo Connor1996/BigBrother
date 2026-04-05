@@ -109,8 +109,6 @@ pub struct PollQueryState {
 }
 
 const MAX_LIVE_OUTPUT_CHARS: usize = 16_000;
-const MAX_TERMINAL_RECORDING_CHARS: usize = 120_000;
-
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct GitHubRequestStats {
     pub total_matching_prs: Option<usize>,
@@ -1813,17 +1811,6 @@ fn append_live_output(buffer: &mut String, chunk: &str) {
 
 fn append_terminal_recording(buffer: &mut String, chunk: &str) {
     buffer.push_str(chunk);
-
-    let total_chars = buffer.chars().count();
-    if total_chars <= MAX_TERMINAL_RECORDING_CHARS {
-        return;
-    }
-
-    let trim_chars = total_chars - MAX_TERMINAL_RECORDING_CHARS;
-    let trim_end = char_boundary(buffer, trim_chars);
-    if trim_end > 0 {
-        buffer.drain(..trim_end);
-    }
 }
 
 fn capped_run_output(output: Option<&str>) -> Option<String> {
@@ -2462,6 +2449,14 @@ mod tests {
             buffer.chars().count() <= MAX_LIVE_OUTPUT_CHARS,
             "trimmed transcript should still respect the live-output cap",
         );
+    }
+
+    #[test]
+    fn terminal_recording_keeps_full_scrollback() {
+        let mut buffer = String::new();
+        append_terminal_recording(&mut buffer, &"x".repeat(MAX_LIVE_OUTPUT_CHARS * 2));
+
+        assert_eq!(buffer.chars().count(), MAX_LIVE_OUTPUT_CHARS * 2);
     }
 
     #[test]
