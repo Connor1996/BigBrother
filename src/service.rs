@@ -359,6 +359,7 @@ impl Supervisor {
                 persisted.paused = paused;
                 if !paused {
                     persisted.clear_retry_state();
+                    persisted.clear_needs_decision();
                 }
 
                 if let Err(error) = self.store.save(&inner.persisted_state) {
@@ -843,7 +844,9 @@ impl Supervisor {
                     active_run.as_ref().map(|run| run.trigger),
                     &outcome,
                 );
-                if outcome.success {
+                if let Some(reason) = outcome.needs_decision_reason.as_deref() {
+                    record_needs_decision(persisted, reason);
+                } else if outcome.success {
                     record_successful_run(persisted, &request, &outcome);
                 } else {
                     auto_paused = record_failed_run(persisted, &request);
@@ -862,24 +865,37 @@ impl Supervisor {
                 fetch_stats.total_matching_prs,
             );
 
-            self.push_event(
-                if outcome.success {
-                    EventLevel::Info
-                } else {
-                    EventLevel::Error
-                },
-                Some(pr_key.clone()),
-                if outcome.success {
-                    format!("agent run completed for {pr_key}")
-                } else {
-                    format!("agent run failed for {pr_key}: {}", outcome.summary)
-                },
-            );
-            self.send_notification(
-                Some(&pr_key),
-                automatic_run_finished_notification(&request, &outcome),
-            )
-            .await;
+            if let Some(reason) = outcome.needs_decision_reason.as_deref() {
+                self.push_event(
+                    EventLevel::Info,
+                    Some(pr_key.clone()),
+                    format!("agent run for {pr_key} needs operator decision: {reason}"),
+                );
+                self.send_notification(
+                    Some(&pr_key),
+                    automatic_run_needs_decision_notification(&request, reason),
+                )
+                .await;
+            } else {
+                self.push_event(
+                    if outcome.success {
+                        EventLevel::Info
+                    } else {
+                        EventLevel::Error
+                    },
+                    Some(pr_key.clone()),
+                    if outcome.success {
+                        format!("agent run completed for {pr_key}")
+                    } else {
+                        format!("agent run failed for {pr_key}: {}", outcome.summary)
+                    },
+                );
+                self.send_notification(
+                    Some(&pr_key),
+                    automatic_run_finished_notification(&request, &outcome),
+                )
+                .await;
+            }
 
             if auto_paused {
                 self.push_event(
@@ -1250,6 +1266,8 @@ fn derive_status(
         TrackingStatus::Merged
     } else if pr.is_closed {
         TrackingStatus::Closed
+    } else if persisted.needs_decision_reason.is_some() {
+        TrackingStatus::NeedsDecision
     } else if persisted.paused {
         TrackingStatus::Paused
     } else if pr.is_draft {
@@ -1321,6 +1339,7 @@ fn retry_signal_matches(
 }
 
 fn record_failed_run(persisted: &mut PersistentPrState, request: &RunRequest) -> bool {
+    persisted.clear_needs_decision();
     persisted.consecutive_failures =
         if retry_signal_matches(&request.pull_request, persisted, request.trigger) {
             persisted.consecutive_failures.saturating_add(1).max(1)
@@ -1347,6 +1366,7 @@ fn record_successful_run(
     request: &RunRequest,
     outcome: &RunOutcome,
 ) {
+    persisted.clear_needs_decision();
     match request.trigger {
         AttentionReason::ReviewFeedback => {
             persisted.last_processed_review_comment_at = outcome.processed_comment_at;
@@ -1362,6 +1382,12 @@ fn record_successful_run(
     }
 
     persisted.clear_retry_state();
+}
+
+fn record_needs_decision(persisted: &mut PersistentPrState, reason: &str) {
+    persisted.clear_retry_state();
+    persisted.paused = true;
+    persisted.needs_decision_reason = Some(reason.to_owned());
 }
 
 fn update_runner_output(
@@ -1411,7 +1437,16 @@ fn persist_run_metadata(
 ) {
     persisted.last_run_started_at = Some(outcome.started_at);
     persisted.last_run_finished_at = Some(outcome.finished_at);
-    persisted.last_run_status = Some(if outcome.success { "success" } else { "error" }.to_owned());
+    persisted.last_run_status = Some(
+        if outcome.needs_decision_reason.is_some() {
+            "needs_decision"
+        } else if outcome.success {
+            "success"
+        } else {
+            "error"
+        }
+        .to_owned(),
+    );
     persisted.last_run_summary = Some(outcome.summary.clone());
     persisted.last_run_output = capped_run_output(outcome.captured_output.as_deref());
     persisted.last_run_terminal = capped_run_output(outcome.captured_terminal.as_deref());
@@ -1533,6 +1568,25 @@ fn automatic_run_finished_notification(request: &RunRequest, outcome: &RunOutcom
             &[
                 format!("Reason: {}", request.trigger.label()),
                 format!("Summary: {}", outcome.summary),
+                format!("Result URL: {}", request.pull_request.url),
+            ],
+        ),
+    )
+}
+
+fn automatic_run_needs_decision_notification(request: &RunRequest, reason: &str) -> Notification {
+    Notification::new(
+        EventLevel::Info,
+        format!(
+            "agent run needs operator decision for {}",
+            request.pull_request.key
+        ),
+        pr_notification_body(
+            &request.pull_request,
+            &[
+                format!("Reason: {}", request.trigger.label()),
+                format!("Status: {}", TrackingStatus::NeedsDecision.label()),
+                format!("Decision needed: {reason}"),
                 format!("Result URL: {}", request.pull_request.url),
             ],
         ),
@@ -1812,6 +1866,7 @@ mod tests {
             success: true,
             exit_code: Some(0),
             summary: "review addressed".to_owned(),
+            needs_decision_reason: None,
             captured_output: Some("codex: fixed review feedback\ncargo test -q".to_owned()),
             captured_terminal: Some("$ codex exec\nreview addressed".to_owned()),
             last_terminal_output_at: Some(Utc::now()),
@@ -1854,6 +1909,7 @@ mod tests {
             success: true,
             exit_code: Some(0),
             summary: "conflict analysis completed".to_owned(),
+            needs_decision_reason: None,
             captured_output: Some("codex: analyzed merge conflict".to_owned()),
             captured_terminal: Some("$ codex exec\nanalyzed merge conflict".to_owned()),
             last_terminal_output_at: Some(Utc::now()),
@@ -1936,6 +1992,21 @@ mod tests {
         assert_eq!(
             derive_status(&pr, &persisted, Some(AttentionReason::CiFailed), true),
             TrackingStatus::Running
+        );
+    }
+
+    #[test]
+    fn needs_decision_overrides_paused_display_status() {
+        let pr = sample_pr();
+        let persisted = PersistentPrState {
+            paused: true,
+            needs_decision_reason: Some("requires API contract decision".to_owned()),
+            ..PersistentPrState::default()
+        };
+
+        assert_eq!(
+            derive_status(&pr, &persisted, Some(AttentionReason::CiFailed), false),
+            TrackingStatus::NeedsDecision
         );
     }
 
@@ -2149,6 +2220,7 @@ mod tests {
             success: true,
             exit_code: Some(0),
             summary: "fixed CI".to_owned(),
+            needs_decision_reason: None,
             captured_output: None,
             captured_terminal: None,
             last_terminal_output_at: None,
@@ -2173,6 +2245,62 @@ mod tests {
         assert!(notifications[0].title.contains("starting agent run"));
         assert_eq!(notifications[1].level, EventLevel::Info);
         assert!(notifications[1].title.contains("agent run completed"));
+    }
+
+    #[tokio::test]
+    async fn needs_decision_run_emits_decision_notification() {
+        let mut pr = sample_pr();
+        pr.ci_status = CiStatus::Failure;
+        pr.ci_updated_at = Some(Utc.with_ymd_and_hms(2026, 3, 30, 18, 5, 0).unwrap());
+
+        let outcome = RunOutcome {
+            started_at: Utc::now(),
+            finished_at: Utc::now(),
+            success: true,
+            exit_code: Some(0),
+            summary: crate::model::NEEDS_DECISION_SUMMARY.to_owned(),
+            needs_decision_reason: Some("requires product decision on API shape".to_owned()),
+            captured_output: Some(
+                "Operator decision required: requires product decision on API shape".to_owned(),
+            ),
+            captured_terminal: None,
+            last_terminal_output_at: None,
+            processed_comment_at: None,
+            processed_ci_at: pr.ci_updated_at,
+            processed_head_sha: pr.head_sha.clone(),
+        };
+        let sink = RecordingNotificationSink::default();
+        let supervisor = Supervisor::new_with_notifier(
+            sample_config(),
+            Arc::new(StaticGitHubProvider {
+                prs: vec![pr.clone()],
+            }),
+            Arc::new(StaticRunner { outcome }),
+            Box::new(sink.clone()),
+        )
+        .expect("supervisor should construct");
+
+        supervisor.poll_once().await.expect("poll should succeed");
+
+        let notifications = sink.snapshot();
+        assert_eq!(notifications.len(), 2);
+        assert_eq!(notifications[1].level, EventLevel::Info);
+        assert!(notifications[1].title.contains("needs operator decision"));
+        assert!(notifications[1]
+            .body
+            .contains("requires product decision on API shape"));
+
+        let snapshot = supervisor.snapshot();
+        let tracked = snapshot
+            .tracked_prs
+            .get(&pr.key)
+            .expect("tracked PR should remain visible");
+        assert_eq!(tracked.status, TrackingStatus::NeedsDecision);
+        assert!(tracked.persisted.paused);
+        assert_eq!(
+            tracked.persisted.needs_decision_reason.as_deref(),
+            Some("requires product decision on API shape")
+        );
     }
 
     #[tokio::test]

@@ -299,6 +299,7 @@ impl AgentRunner for FakeAgentRunner {
                 success: true,
                 exit_code: Some(0),
                 summary: format!("fixed {}", request.pull_request.key),
+                needs_decision_reason: None,
                 captured_output: Some(captured_output),
                 captured_terminal: Some("$ codex exec\nThinking...\ncargo test -q".to_owned()),
                 last_terminal_output_at: Some(Utc::now()),
@@ -339,9 +340,54 @@ impl AgentRunner for AlwaysFailingAgentRunner {
                 success: false,
                 exit_code: Some(1),
                 summary: format!("failed {}", request.pull_request.key),
+                needs_decision_reason: None,
                 captured_output: Some(transcript),
                 captured_terminal: Some("$ codex exec\nrun failed before fix".to_owned()),
                 last_terminal_output_at: Some(Utc::now()),
+                processed_comment_at: request.pull_request.latest_reviewer_activity_at,
+                processed_ci_at: request.pull_request.ci_updated_at,
+                processed_head_sha: request.pull_request.head_sha,
+            }
+        })
+    }
+}
+
+#[derive(Clone)]
+struct NeedsDecisionAgentRunner {
+    invocations: Arc<AtomicUsize>,
+}
+
+impl AgentRunner for NeedsDecisionAgentRunner {
+    fn run(&self, request: RunRequest) -> BoxFuture<'static, RunOutcome> {
+        let invocations = self.invocations.clone();
+
+        Box::pin(async move {
+            invocations.fetch_add(1, Ordering::SeqCst);
+            let reason = "requires API compatibility decision";
+            let transcript = fake_cli_transcript(
+                &request,
+                &format!(
+                    "BIGBROTHER_NEEDS_DECISION: {reason}\nChanging this behavior would alter the public response contract.\nPlease decide whether to preserve compatibility or simplify the API.\n"
+                ),
+            );
+            if let Some(output_updates) = request.output_updates.as_ref() {
+                let _ = output_updates.send(RunUpdate::TranscriptChunk(transcript.clone()));
+            }
+
+            RunOutcome {
+                started_at: Utc::now(),
+                finished_at: Utc::now(),
+                success: true,
+                exit_code: Some(0),
+                summary: "operator decision required".to_owned(),
+                needs_decision_reason: Some(reason.to_owned()),
+                captured_output: Some(
+                    format!(
+                        "Operator decision required: {reason}\n\nChanging this behavior would alter the public response contract.\nPlease decide whether to preserve compatibility or simplify the API."
+                    ),
+                ),
+                captured_terminal: None,
+                last_terminal_output_at: None,
                 processed_comment_at: request.pull_request.latest_reviewer_activity_at,
                 processed_ci_at: request.pull_request.ci_updated_at,
                 processed_head_sha: request.pull_request.head_sha,
@@ -497,6 +543,61 @@ async fn pause_api_toggles_review_wait_state_for_a_tracked_pr() {
     let prs = prs_payload["prs"].as_array().expect("prs array");
     assert_eq!(status_for(prs, "openai/symphony#1"), Some("waiting review"));
     assert_eq!(is_paused_for(prs, "openai/symphony#1"), Some(false));
+}
+
+#[tokio::test]
+async fn non_trivial_run_becomes_needs_decision_and_resume_clears_it() {
+    let runner = NeedsDecisionAgentRunner {
+        invocations: Arc::new(AtomicUsize::new(0)),
+    };
+    let supervisor = Arc::new(
+        Supervisor::new(
+            sample_config(
+                unique_temp_path("state.json"),
+                unique_temp_path("workspaces"),
+            ),
+            Arc::new(FakeGitHubProvider {
+                prs: vec![actionable_pr()],
+            }),
+            Arc::new(runner.clone()),
+        )
+        .expect("supervisor should initialize"),
+    );
+
+    supervisor
+        .poll_once()
+        .await
+        .expect("poll should process actionable PR");
+
+    let prs_payload = get_json(supervisor.clone(), "/api/prs").await;
+    let prs = prs_payload["prs"].as_array().expect("prs array");
+    assert_eq!(status_for(prs, "openai/symphony#7"), Some("needs decision"));
+    assert_eq!(is_paused_for(prs, "openai/symphony#7"), Some(true));
+    assert_eq!(
+        summary_for(prs, "openai/symphony#7"),
+        Some("operator decision required")
+    );
+
+    let detail = get_json(supervisor.clone(), "/api/pr?key=openai%2Fsymphony%237").await;
+    assert_eq!(detail["status"], json!("needs decision"));
+    assert_eq!(detail["is_paused"], json!(true));
+    assert_eq!(
+        detail["latest_summary"],
+        json!("operator decision required")
+    );
+    assert_eq!(
+        detail["detail_output"],
+        json!("Operator decision required: requires API compatibility decision\n\nChanging this behavior would alter the public response contract.\nPlease decide whether to preserve compatibility or simplify the API.")
+    );
+
+    let resumed = supervisor
+        .set_pr_paused("openai/symphony#7", false)
+        .await
+        .expect("resume should succeed")
+        .expect("PR should exist");
+    assert_eq!(resumed.status, TrackingStatus::NeedsAttention);
+    assert!(!resumed.persisted.paused);
+    assert_eq!(resumed.persisted.needs_decision_reason, None);
 }
 
 #[tokio::test]
@@ -786,8 +887,8 @@ async fn dashboard_html_exposes_top_right_pr_review_request_and_activity_tabs() 
         "dashboard should fold attention context into the status column instead of rendering a dedicated Attention column, got: {html}",
     );
     assert!(
-        html.contains(r#"const note = effectivePaused(pr) || !detail"#),
-        "dashboard should hide paused status annotations while keeping other status notes, got: {html}",
+        html.contains(r#"const note = displayPaused(pr) || !detail"#),
+        "dashboard should hide annotations only for visibly paused rows while keeping other status notes, got: {html}",
     );
     assert!(
         html.contains("health.active_tracked_prs"),

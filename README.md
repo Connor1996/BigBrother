@@ -31,11 +31,12 @@ For each open PR authored by you, BigBrother polls GitHub and computes a live st
 - `waiting merge`: approved and CI passed, waiting to be merged
 - `conflict`: the PR does not currently merge cleanly with the latest base branch
 - `needs attention`: new reviewer feedback or a newly failing CI signal
+- `needs decision`: the agent determined the required change is non-trivial and needs operator approval before editing
 - `running`: the local agent command is currently working on the PR
 - `blocked`: the last agent run failed
 - `draft`, `closed`, `merged`: terminal or non-actionable states
 
-The UI shows the authored PR list, a `Review Requests` tab for PRs that currently request your review, CI/review state, attention reason, timestamps, top-right dashboard tabs for switching between the PR view, review inbox, and live daemon activity, a dedicated run-details page that streams live Codex CLI output for active runs and preserves the latest run output after completion, and a visibly subdued row state when a PR is paused.
+The UI shows the authored PR list, a `Review Requests` tab for PRs that currently request your review, CI/review state, attention reason, timestamps, top-right dashboard tabs for switching between the PR view, review inbox, and live daemon activity, a dedicated run-details page that streams live Codex CLI output for active runs and preserves the latest run output after completion, and a visibly subdued row state when a PR is explicitly shown as `paused`.
 
 ## Requirements
 
@@ -147,7 +148,7 @@ When BigBrother detects a PR that needs attention, it:
 7. pipes that prompt to the configured agent command
 8. updates the UI and persisted state with the result
 
-The default prompt templates ask the agent to inspect GitHub feedback and CI, merge the latest base branch itself when needed, resolve conflicts before declaring success, fix code in-place, run targeted validation, and push back to the PR branch if it can. They also tell the agent to stop and ask for operator direction before making material or high-risk changes instead of changing code unilaterally.
+The default prompt templates ask the agent to inspect GitHub feedback and CI, merge the latest base branch itself when needed, resolve conflicts before declaring success, fix code in-place, run targeted validation, and push back to the PR branch if it can. They also tell the agent to stop and ask for operator direction before making material or high-risk changes instead of changing code unilaterally. When the agent decides a change is non-trivial, it emits a machine-readable `BIGBROTHER_NEEDS_DECISION:` marker; BigBrother then sets the PR to `needs decision`, auto-pauses future automatic runs for that PR under the hood, and stores the full operator-facing explanation in the PR details output until you resume it.
 
 Manual deep reviews use the `$deep-review` skill in read-only mode: they write the final review markdown under `target/bigbrother-deep-review`, and the backend posts only that final review artifact back to the PR as a comment when the run succeeds.
 

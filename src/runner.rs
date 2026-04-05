@@ -13,13 +13,14 @@ use tokio::{process::Command, sync::mpsc::UnboundedSender};
 
 use crate::{
     config::{AgentConfig, AgentPromptTemplates, GitTransport, ResolvedWorkspaceConfig},
-    model::{AttentionReason, PullRequest},
+    model::{AttentionReason, PullRequest, NEEDS_DECISION_SUMMARY},
     prompt::{build_prompt, render_template},
     service::AgentRunner,
 };
 
 pub(crate) const PROMPT_TRANSCRIPT_HEADER: &str = "=== Prompt Sent To Codex CLI ===\n";
 pub(crate) const OUTPUT_TRANSCRIPT_HEADER: &str = "=== Codex CLI Output ===\n";
+pub(crate) const NEEDS_DECISION_PREFIX: &str = "BIGBROTHER_NEEDS_DECISION:";
 const DEFAULT_PTY_ROWS: u16 = 36;
 const DEFAULT_PTY_COLS: u16 = 120;
 const DEEP_REVIEW_TARGET_DIR: &str = "target/bigbrother-deep-review";
@@ -49,12 +50,19 @@ pub struct RunOutcome {
     pub success: bool,
     pub exit_code: Option<i32>,
     pub summary: String,
+    pub needs_decision_reason: Option<String>,
     pub captured_output: Option<String>,
     pub captured_terminal: Option<String>,
     pub last_terminal_output_at: Option<DateTime<Utc>>,
     pub processed_comment_at: Option<DateTime<Utc>>,
     pub processed_ci_at: Option<DateTime<Utc>>,
     pub processed_head_sha: String,
+}
+
+#[derive(Debug, Clone)]
+struct NeedsDecisionSignal {
+    reason: String,
+    display_output: String,
 }
 
 #[derive(Debug)]
@@ -148,27 +156,34 @@ pub async fn run(request: RunRequest) -> RunOutcome {
     let finished_at = Utc::now();
 
     match result {
-        Ok((exit_code, summary, captured_output, captured_terminal, last_terminal_output_at)) => {
-            RunOutcome {
-                started_at,
-                finished_at,
-                success: exit_code == Some(0),
-                exit_code,
-                summary,
-                captured_output,
-                captured_terminal,
-                last_terminal_output_at,
-                processed_comment_at: request.pull_request.latest_reviewer_activity_at,
-                processed_ci_at: request.pull_request.ci_updated_at,
-                processed_head_sha: request.pull_request.head_sha.clone(),
-            }
-        }
+        Ok((
+            exit_code,
+            summary,
+            needs_decision_reason,
+            captured_output,
+            captured_terminal,
+            last_terminal_output_at,
+        )) => RunOutcome {
+            started_at,
+            finished_at,
+            success: exit_code == Some(0),
+            exit_code,
+            summary,
+            needs_decision_reason,
+            captured_output,
+            captured_terminal,
+            last_terminal_output_at,
+            processed_comment_at: request.pull_request.latest_reviewer_activity_at,
+            processed_ci_at: request.pull_request.ci_updated_at,
+            processed_head_sha: request.pull_request.head_sha.clone(),
+        },
         Err(failure) => RunOutcome {
             started_at,
             finished_at,
             success: false,
             exit_code: None,
             summary: request.trigger.failure_summary().to_owned(),
+            needs_decision_reason: None,
             captured_output: failure.captured_output.or(Some(failure.error.to_string())),
             captured_terminal: None,
             last_terminal_output_at: None,
@@ -185,6 +200,7 @@ async fn run_inner(
     (
         Option<i32>,
         String,
+        Option<String>,
         Option<String>,
         Option<String>,
         Option<DateTime<Utc>>,
@@ -272,13 +288,24 @@ async fn run_inner(
             .await
             .map_err(|error| RunFailure::with_transcript(error, &transcript_preamble))?;
     let exit_code = i32::try_from(status.exit_code()).ok();
-    let summary = if exit_code == Some(0) {
+    let needs_decision_signal = if request.trigger == AttentionReason::DeepReview {
+        None
+    } else {
+        extract_needs_decision_signal(&combined_output)
+    };
+    let summary = if needs_decision_signal.is_some() {
+        NEEDS_DECISION_SUMMARY.to_owned()
+    } else if exit_code == Some(0) {
         request.trigger.success_summary().to_owned()
     } else {
         request.trigger.failure_summary().to_owned()
     };
+    let transcript_output = needs_decision_signal
+        .as_ref()
+        .map(|signal| signal.display_output.as_str())
+        .unwrap_or(combined_output.as_str());
     let base_captured_output =
-        normalize_output(&cli_transcript(&transcript_preamble, &combined_output));
+        normalize_output(&cli_transcript(&transcript_preamble, transcript_output));
     let captured_output = if request.trigger == AttentionReason::DeepReview && exit_code == Some(0)
     {
         let artifact = deep_review_artifact.as_ref().ok_or_else(|| {
@@ -301,6 +328,7 @@ async fn run_inner(
     Ok((
         exit_code,
         summary,
+        needs_decision_signal.map(|signal| signal.reason),
         captured_output,
         captured_terminal,
         last_terminal_output_at,
@@ -735,6 +763,42 @@ fn normalize_output(output: &str) -> Option<String> {
     }
 }
 
+fn extract_needs_decision_signal(output: &str) -> Option<NeedsDecisionSignal> {
+    let mut reason = None;
+    let mut explanation_lines = Vec::new();
+    let mut saw_marker = false;
+
+    for line in output.lines() {
+        if !saw_marker {
+            if let Some(value) = line.trim().strip_prefix(NEEDS_DECISION_PREFIX) {
+                let parsed = value.trim();
+                reason = Some(if parsed.is_empty() {
+                    NEEDS_DECISION_SUMMARY.to_owned()
+                } else {
+                    parsed.to_owned()
+                });
+                saw_marker = true;
+            }
+            continue;
+        }
+
+        explanation_lines.push(line);
+    }
+
+    let reason = reason?;
+    let explanation = explanation_lines.join("\n").trim().to_owned();
+    let display_output = if explanation.is_empty() {
+        format!("Operator decision required: {reason}")
+    } else {
+        format!("Operator decision required: {reason}\n\n{explanation}")
+    };
+
+    Some(NeedsDecisionSignal {
+        reason,
+        display_output,
+    })
+}
+
 async fn collect_process_output(
     mut child: Box<dyn portable_pty::Child + Send>,
     reader: Box<dyn Read + Send>,
@@ -1114,6 +1178,27 @@ mod tests {
         .expect("actionable instructions should exist");
 
         assert!(instructions.contains("merge the latest base branch"));
+    }
+
+    #[test]
+    fn extract_needs_decision_signal_rewrites_operator_output() {
+        let signal = extract_needs_decision_signal(
+            "thinking out loud\nBIGBROTHER_NEEDS_DECISION: requires API behavior change\nNeed approval to alter the public response shape.\nOption A keeps compatibility.\nOption B simplifies the handler.",
+        )
+        .expect("decision marker should be detected");
+
+        assert_eq!(signal.reason, "requires API behavior change");
+        assert_eq!(
+            signal.display_output,
+            "Operator decision required: requires API behavior change\n\nNeed approval to alter the public response shape.\nOption A keeps compatibility.\nOption B simplifies the handler."
+        );
+    }
+
+    #[test]
+    fn extract_needs_decision_signal_requires_explicit_marker() {
+        assert!(
+            extract_needs_decision_signal("Need approval before changing API shape.").is_none()
+        );
     }
 
     async fn simulate_agent_merge_conflict(workspace_repo: &Path, pr: &PullRequest) {

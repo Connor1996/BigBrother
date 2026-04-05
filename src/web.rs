@@ -19,7 +19,10 @@ use serde::{Deserialize, Serialize};
 use tokio::net::TcpListener;
 
 use crate::{
-    model::{ActivityEvent, AttentionReason, PersistentPrState, ReviewRequestPr, TrackedPr},
+    model::{
+        ActivityEvent, AttentionReason, PersistentPrState, ReviewRequestPr, TrackedPr,
+        NEEDS_DECISION_SUMMARY,
+    },
     runner::OUTPUT_TRANSCRIPT_HEADER,
     service::Supervisor,
 };
@@ -644,9 +647,13 @@ const INDEX_HTML: &str = r#"<!doctype html>
       return optimisticPausedStates.has(pr.key) ? optimisticPausedStates.get(pr.key) : pr.is_paused;
     }
 
+    function displayPaused(pr) {
+      return effectivePaused(pr) && pr.status === "paused";
+    }
+
     function rowClass(pr) {
       const classes = ["pr-row"];
-      if (effectivePaused(pr)) classes.push("paused-row");
+      if (displayPaused(pr)) classes.push("paused-row");
       if (pr.status === "running") classes.push("running-row");
       return classes.join(" ");
     }
@@ -688,7 +695,7 @@ const INDEX_HTML: &str = r#"<!doctype html>
     }
 
     function renderStatus(pr, detail = pr.attention_reason) {
-      const note = effectivePaused(pr) || !detail
+      const note = displayPaused(pr) || !detail
         ? ""
         : `<div class="status-note">${escapeHtml(detail)}</div>`;
       return `
@@ -1790,6 +1797,7 @@ fn summarize_persisted_run(persisted: &PersistentPrState) -> Option<String> {
         persisted.last_run_trigger,
         persisted.last_run_status.as_deref(),
     ) {
+        (_, Some("needs_decision")) => Some(NEEDS_DECISION_SUMMARY.to_owned()),
         (Some(trigger), Some("success")) => Some(trigger.success_summary().to_owned()),
         (Some(trigger), Some("error")) => Some(trigger.failure_summary().to_owned()),
         _ => compact_summary_text(persisted.last_run_summary.as_deref()),
@@ -1849,7 +1857,7 @@ mod tests {
     use super::{compact_summary_text, latest_operator_summary, persisted_run_output};
     use crate::model::{
         AttentionReason, CiStatus, PersistentPrState, PullRequest, ReviewDecision, RunnerState,
-        TrackedPr, TrackingStatus,
+        TrackedPr, TrackingStatus, NEEDS_DECISION_SUMMARY,
     };
 
     fn sample_pr() -> PullRequest {
@@ -1958,6 +1966,29 @@ mod tests {
             ))
             .as_deref(),
             Some("$ cargo test\nok")
+        );
+    }
+
+    #[test]
+    fn latest_operator_summary_uses_needs_decision_short_text() {
+        let tracked = TrackedPr {
+            pull_request: sample_pr(),
+            status: TrackingStatus::NeedsDecision,
+            attention_reason: Some(AttentionReason::CiFailed),
+            persisted: PersistentPrState {
+                paused: true,
+                needs_decision_reason: Some("requires API decision".to_owned()),
+                last_run_status: Some("needs_decision".to_owned()),
+                last_run_summary: Some("long operator-facing explanation".to_owned()),
+                last_run_trigger: Some(AttentionReason::CiFailed),
+                ..PersistentPrState::default()
+            },
+            runner: None,
+        };
+
+        assert_eq!(
+            latest_operator_summary(&tracked).as_deref(),
+            Some(NEEDS_DECISION_SUMMARY)
         );
     }
 }

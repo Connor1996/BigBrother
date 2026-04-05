@@ -4,6 +4,7 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
 pub const MAX_ACTIVITY_EVENTS: usize = 200;
+pub const NEEDS_DECISION_SUMMARY: &str = "operator decision required";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum CiStatus {
@@ -93,6 +94,7 @@ impl AttentionReason {
 pub enum TrackingStatus {
     Draft,
     Paused,
+    NeedsDecision,
     Conflict,
     WaitingCi,
     WaitingReview,
@@ -110,6 +112,7 @@ impl TrackingStatus {
         match self {
             Self::Draft => "draft",
             Self::Paused => "paused",
+            Self::NeedsDecision => "needs decision",
             Self::Conflict => "conflict",
             Self::WaitingCi => "waiting for CI",
             Self::WaitingReview => "waiting review",
@@ -160,6 +163,8 @@ pub struct PullRequest {
 pub struct PersistentPrState {
     #[serde(default)]
     pub paused: bool,
+    #[serde(default)]
+    pub needs_decision_reason: Option<String>,
     pub last_processed_review_comment_at: Option<DateTime<Utc>>,
     pub last_processed_ci_signal_at: Option<DateTime<Utc>>,
     pub last_processed_ci_head_sha: Option<String>,
@@ -195,6 +200,10 @@ impl PersistentPrState {
         self.retry_base_sha = None;
         self.retry_comment_at = None;
         self.retry_ci_at = None;
+    }
+
+    pub fn clear_needs_decision(&mut self) {
+        self.needs_decision_reason = None;
     }
 
     pub fn processed_review_comment_at(&self) -> Option<DateTime<Utc>> {

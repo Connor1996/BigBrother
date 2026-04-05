@@ -197,6 +197,7 @@ mod tests {
         assert!(prompt.contains("merge the latest base branch into the PR branch yourself"));
         assert!(prompt.contains("If that merge produces conflicts, resolve them first"));
         assert!(prompt.contains("If the required change is material or high-risk"));
+        assert!(prompt.contains("BIGBROTHER_NEEDS_DECISION: <short reason>"));
         assert!(prompt.contains("leave a concise PR comment containing exactly `/retest`"));
         assert!(prompt.contains("whether you merged base"));
         assert!(prompt.contains("Additional operator instructions:\n- Extra operator note."));

@@ -177,7 +177,7 @@ Scheduled GitHub polling should minimize rate-limit pressure by using two stages
 - then fetch reviews, comments, and GitHub check runs only for candidate PRs whose lightweight
   state has
   changed since the previous dashboard snapshot or whose prior CI status is still unsettled
-- PRs that are manually paused should be treated as frozen dashboard snapshots during scheduled
+- PRs that are paused, including automatically paused `needs_decision` entries, should be treated as frozen dashboard snapshots during scheduled
   polls: keep their last known PR state in the UI, do not refresh their review or CI-derived
   status, and avoid redundant GitHub detail hydration for them until they are resumed
 
@@ -191,7 +191,7 @@ When the agent cannot safely continue:
 - merge conflict or branch protection issue
 - ambiguous reviewer feedback
 
-the daemon emits a notification and marks the PR as `blocked` or `needs human`.
+the daemon emits a notification and marks the PR as `blocked` or `needs decision`.
 
 ### 6.4 Project-Centered Development
 
@@ -292,6 +292,7 @@ Each tracked PR should normalize to a durable local record with:
 - `attention_reason`
 - `tracking_status`
 - `paused`
+- `needs_decision_reason`
 - `last_agent_run_status`
 - `last_agent_run_started_at`
 - `last_agent_run_finished_at`
@@ -317,6 +318,7 @@ Canonical statuses:
 
 - `draft`
 - `paused`
+- `needs_decision`
 - `conflict`
 - `waiting_ci`
 - `waiting_review`
@@ -325,7 +327,6 @@ Canonical statuses:
 - `running`
 - `retry_scheduled`
 - `blocked`
-- `needs_human`
 - `closed`
 - `merged`
 
@@ -402,7 +403,9 @@ Default v0 policy:
 - do not launch a second run for a PR that already has an active run
 - retry a failed run on the next poll while the same actionable signal is still present
 - allow up to five automatic retries after the initial failed run, then auto-pause the PR
+- if the agent explicitly reports that the required change is material or otherwise non-trivial, mark the PR as `needs_decision`, persist the operator-facing reason, and auto-pause future automatic runs for that PR until resumed
 - resuming a paused PR resets retry bookkeeping and triggers an immediate targeted re-check for that PR instead of waiting for the next daemon poll
+- resuming a `needs_decision` PR should also clear the persisted decision reason before triggering that immediate targeted re-check
 - the immediate resume re-check should prefer the resumed PR over unrelated actionable PRs, while still respecting the configured global concurrency
 - the immediate resume re-check should fetch only the resumed PR from GitHub rather than refreshing the entire authored PR set
 - while a PR remains paused, scheduled polls should preserve its last visible state instead of
@@ -474,6 +477,9 @@ The agent prompt must include:
 - explicit instruction to stop and explain blockers when unsafe
 - explicit instruction that material or high-risk changes must be escalated to the operator for a
   decision instead of being applied unilaterally
+- explicit instruction that such non-trivial escalations must start with a machine-readable
+  `BIGBROTHER_NEEDS_DECISION: <short reason>` line so the daemon can persist the PR in the
+  `needs_decision` state
 - for CI-failure triggers, explicit instruction that clearly unrelated or flaky failures may be
   handled by commenting `/retest` on the PR instead of making speculative code changes
 
@@ -493,6 +499,7 @@ Notifications are emitted when:
 - repeated failures exceed threshold
 - a required credential is missing
 - the agent reports ambiguity or blocker
+- the agent explicitly requests an operator decision for a non-trivial change
 - branch protection or push failure prevents completion
 - a PR remains blocked beyond a configured window
 
@@ -666,13 +673,14 @@ The MVP UI can be a single page that shows:
 
 - daemon health
 - last poll time
-- a `Tracked PRs` hero stat rendered as `active/all`, where `active` excludes manually paused PRs and `all` comes from the latest authored-PR search total and never drops below the number of rows currently shown
+- a `Tracked PRs` hero stat rendered as `active/all`, where `active` excludes paused PRs (including auto-paused `needs decision` entries) and `all` comes from the latest authored-PR search total and never drops below the number of rows currently shown
 - a right-aligned dashboard tab switch for `PRs`, `Review Requests`, and `Activity`
 - current tracked PR rows
 - current review-request inbox rows for PRs that currently request the operator's review
 - the review-request inbox should stay lightweight: it should list matching PRs without hydrating CI, reviews, review comments, or issue comments until the operator opens a detail view or starts a deep review
 - each PR’s status, CI state, review state, and latest action summary, with attention context folded into the status cell instead of a dedicated attention column
 - paused rows should show the paused status without an extra status-note annotation underneath
+- PRs in `needs decision` should still keep their underlying auto-paused execution freeze, but the visible status pill should read `needs decision` rather than `paused`
 - the non-description columns centered for easier scanning, with red `Pause` and green `Resume` controls in the action column using white labels plus pause/play icons
 - a row-level link into a dedicated PR detail page for run output, showing an embedded read-only terminal while a run is active and the saved last run output after the run completes
 - a row-level pause/resume control for each tracked PR
@@ -723,6 +731,7 @@ Panels:
 - read-only embedded terminal screen for the current run, including the latest terminal redraw state and last terminal activity time
 - saved last run output when no run is currently active, sourced from the persisted command/output transcript rather than the last terminal redraw snapshot and rendered with wrapped monospace text so long lines stay readable
 - latest run output summary rendered as a short operator-facing status line rather than raw terminal or transcript text
+- when a run ends in `needs decision`, the saved last run output should show the full operator-facing explanation and requested decision, while the summary stays short
 - workspace path
 - notification state
 
