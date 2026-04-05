@@ -154,7 +154,7 @@ The user opens the UI and sees:
 - which PRs are currently tracked
 - current CI status
 - current review state
-- whether the daemon is idle, acting, retrying, failed, waiting for review, or waiting for merge
+- whether the daemon is idle, acting, failed, waiting for review, or waiting for merge
 - whether a PR is currently blocked by merge conflicts with the base branch
 - what happened most recently for each PR
 - recent live agent output for any PR that is currently running
@@ -168,8 +168,8 @@ When CI fails or new actionable feedback appears:
 3. daemon resolves and syncs an existing local checkout for the PR
 4. daemon runs the configured agent command with a prompt derived from PR state
 5. daemon captures result, updates state, and refreshes UI
-6. if the run fails, the daemon retries the same still-actionable signal on the next poll
-7. after five automatic retries for the same signal, the daemon auto-pauses that PR until resumed
+6. if the run fails, the daemon leaves the PR in `failed` until the operator explicitly requests a retry
+7. a manual retry re-checks only that PR instead of waiting for the next scheduled poll
 
 Scheduled GitHub polling should minimize rate-limit pressure by using two stages:
 
@@ -187,7 +187,7 @@ When the agent cannot safely continue:
 
 - unclear product decision
 - missing credentials or permissions
-- repeated failed repair attempts
+- repeated failed repair attempts that still need operator intervention
 - merge conflict or branch protection issue
 - ambiguous reviewer feedback
 
@@ -325,7 +325,6 @@ Canonical statuses:
 - `waiting_merge`
 - `needs_attention`
 - `running`
-- `retry_scheduled`
 - `failed`
 - `closed`
 - `merged`
@@ -346,8 +345,8 @@ The daemon should not re-trigger forever on the same unchanged signal. It must c
 Failed runs are special:
 
 - a failed run must not consume the processed marker for the signal it was trying to fix
-- the same still-actionable signal should therefore be retried on the next poll
-- if the signal clears before the next poll, the PR should fall back out of retry state instead of remaining blocked forever
+- the same still-actionable signal should therefore remain visible as `failed` until the operator explicitly chooses `Retry`
+- if the signal clears before the next poll, the PR should fall back out of `failed` instead of remaining blocked forever
 
 Processed markers are signal-specific:
 
@@ -401,8 +400,8 @@ Default v0 policy:
 - do not auto-act on merged or closed PRs
 - do not launch more than the configured global concurrency
 - do not launch a second run for a PR that already has an active run
-- retry a failed run on the next poll while the same actionable signal is still present
-- allow up to five automatic retries after the initial failed run, then auto-pause the PR
+- leave a failed automatic run in `failed` until the operator explicitly clicks `Retry`
+- a manual `Retry` should run an immediate targeted check for that PR even though scheduled polls skip failed entries
 - if the agent explicitly reports that the required change is material or otherwise non-trivial, mark the PR as `needs_decision`, persist the operator-facing reason, and auto-pause future automatic runs for that PR until resumed
 - resuming a paused PR resets retry bookkeeping and triggers an immediate targeted re-check for that PR instead of waiting for the next daemon poll
 - resuming a `needs_decision` PR should also clear the persisted decision reason before triggering that immediate targeted re-check
@@ -411,6 +410,7 @@ Default v0 policy:
   the same unchanged review activity
 - the immediate resume re-check should prefer the resumed PR over unrelated actionable PRs, while still respecting the configured global concurrency
 - the immediate resume re-check should fetch only the resumed PR from GitHub rather than refreshing the entire authored PR set
+- the failed-state `Retry` action should use the same targeted-fetch pattern rather than falling back to a full authored-PR refresh
 - while a PR remains paused, scheduled polls should preserve its last visible state instead of
   updating it underneath the operator
 
@@ -526,7 +526,7 @@ Current first-pass remote sink behavior:
 - include a configurable instance label in each outbound Feishu message so multiple daemons can
   identify the sender in private DMs
 - emit Feishu notifications for automatic run start, automatic run completion or failure,
-  auto-pause after repeated failures, manual deep review start and completion, and daemon poll
+  `needs_decision` escalation, manual deep review start and completion, and daemon poll
   failures
 
 Lifecycle transition notifications should also be supported for:
@@ -689,12 +689,13 @@ The MVP UI can be a single page that shows:
 - current tracked PR rows
 - current review-request inbox rows for PRs that currently request the operator's review
 - the review-request inbox should stay lightweight: it should list matching PRs without hydrating CI, reviews, review comments, or issue comments until the operator opens a detail view or starts a deep review
-- each PR’s status, CI state, review state, and latest action summary, with attention context folded into the status cell instead of a dedicated attention column
-- paused rows should show the paused status without an extra status-note annotation underneath
+- each PR’s status, CI state, review state, and latest action summary, with no separate attention column and no secondary status-note annotation underneath the status pill
+- paused rows should show the paused status without any extra note underneath
 - PRs in `needs decision` should still keep their underlying auto-paused execution freeze, but the visible status pill should read `needs decision` rather than `paused`
-- the non-description columns centered for easier scanning, with red `Pause` and green `Resume` controls in the action column using white labels plus pause/play icons
+- the non-description columns centered for easier scanning, with red `Pause`, green `Resume`, and yellow `Retry` / `Addressed` controls in the action column using white labels plus simple icons
 - a row-level link into a dedicated PR detail page for run output, showing an embedded read-only terminal while a run is active and the saved last run output after the run completes
 - a row-level pause/resume control for each tracked PR
+- a row-level manual `Retry` action for `failed` PRs and a row-level `Addressed` action for `needs decision` PRs
 - a row-level `Deep Review` action for review-request inbox rows that runs a manual deep review and comments the result back onto the PR
 - a visually subdued treatment for paused rows so they read as intentionally muted rather than inactive by accident
 - a wider description column so repo, title, and timestamp remain comfortably readable
@@ -787,7 +788,7 @@ Current state in this repository is a prototype spike that already contains:
 - GitHub polling logic
 - local state handling
 - persisted per-PR pause/resume state
-- retry bookkeeping for failed runs and auto-pause after repeated retry exhaustion
+- retry bookkeeping for failed runs and targeted manual retries from the dashboard
 - existing-checkout resolution via `workspace.root` plus explicit `workspace.repo_map` overrides
 - agent runner skeleton
 - a minimal local web dashboard

@@ -32,11 +32,11 @@ For each open PR authored by you, BigBrother polls GitHub and computes a live st
 - `conflict`: the PR does not currently merge cleanly with the latest base branch
 - `needs attention`: new reviewer feedback or a newly failing CI signal
 - `needs decision`: the agent determined the required change is non-trivial and needs operator approval before editing
-- `failed`: the latest automatic agent run failed and the same PR signal is still unresolved
+- `failed`: the latest automatic agent run failed and the same PR signal is still unresolved; the daemon leaves it idle until you click `Retry`
 - `running`: the local agent command is currently working on the PR
 - `draft`, `closed`, `merged`: terminal or non-actionable states
 
-The UI shows the authored PR list, a `Review Requests` tab for PRs that currently request your review, CI/review state, attention reason, timestamps, top-right dashboard tabs for switching between the PR view, review inbox, and live daemon activity, a dedicated run-details page that streams live Codex CLI output for active runs and preserves the latest run output after completion, and a visibly subdued row state when a PR is explicitly shown as `paused`.
+The UI shows the authored PR list, a `Review Requests` tab for PRs that currently request your review, CI/review state, timestamps, top-right dashboard tabs for switching between the PR view, review inbox, and live daemon activity, a dedicated run-details page that streams live Codex CLI output for active runs and preserves the latest run output after completion, and a visibly subdued row state when a PR is explicitly shown as `paused`.
 
 ## Requirements
 
@@ -113,7 +113,7 @@ Current Feishu notifications cover:
 
 - automatic agent run start
 - automatic agent run completion or failure
-- auto-pause after repeated failures
+- `needs decision` escalation
 - manual deep review start and completion
 - daemon poll failures
 

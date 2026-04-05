@@ -102,7 +102,6 @@ pub enum TrackingStatus {
     WaitingMerge,
     NeedsAttention,
     Running,
-    RetryScheduled,
     Closed,
     Merged,
 }
@@ -120,7 +119,6 @@ impl TrackingStatus {
             Self::WaitingMerge => "waiting merge",
             Self::NeedsAttention => "needs attention",
             Self::Running => "running",
-            Self::RetryScheduled => "retrying",
             Self::Closed => "closed",
             Self::Merged => "merged",
         }

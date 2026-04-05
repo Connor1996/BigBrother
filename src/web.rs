@@ -296,14 +296,6 @@ const INDEX_HTML: &str = r#"<!doctype html>
       justify-items: center;
     }
 
-    .status-note {
-      color: var(--muted);
-      font-size: 0.82rem;
-      line-height: 1.4;
-      text-align: center;
-      white-space: pre-wrap;
-    }
-
     .summary {
       max-width: 34ch;
       color: var(--muted);
@@ -388,11 +380,22 @@ const INDEX_HTML: &str = r#"<!doctype html>
       background: #627987;
     }
 
+    .action-button.retry-button,
+    .action-button.addressed-button {
+      background: #b99a49;
+      color: #fff;
+    }
+
+    .action-button.retry-button:hover:not(:disabled),
+    .action-button.addressed-button:hover:not(:disabled) {
+      background: #a9893d;
+    }
+
     .action-button:hover:not(:disabled) {
       transform: translateY(-1px);
     }
 
-    .action-button:not(.pause-button):not(.resume-button):not(.deep-review-button):hover:not(:disabled) {
+    .action-button:not(.pause-button):not(.resume-button):not(.deep-review-button):not(.retry-button):not(.addressed-button):hover:not(:disabled) {
       background: rgba(255, 255, 255, 1);
     }
 
@@ -611,6 +614,7 @@ const INDEX_HTML: &str = r#"<!doctype html>
 
   <script>
     const pendingPauseKeys = new Set();
+    const pendingRetryKeys = new Set();
     const pendingDeepReviewKeys = new Set();
     const optimisticPausedStates = new Map();
     const dashboardViewStorageKey = "symphony-rs.dashboard-view";
@@ -674,6 +678,34 @@ const INDEX_HTML: &str = r#"<!doctype html>
     }
 
     function renderAction(pr) {
+      if (pr.status === "failed") {
+        const pending = pendingRetryKeys.has(pr.key);
+        return `
+          <button
+            class="action-button retry-button"
+            ${pending ? "disabled" : ""}
+            onclick="triggerRetry('${encodeURIComponent(pr.key)}')"
+          >
+            <span class="button-icon" aria-hidden="true">&#8635;</span>
+            <span>${pending ? "Retrying..." : "Retry"}</span>
+          </button>
+        `;
+      }
+
+      if (pr.status === "needs decision") {
+        const pending = pendingPauseKeys.has(pr.key);
+        return `
+          <button
+            class="action-button addressed-button"
+            ${pending ? "disabled" : ""}
+            onclick="togglePause('${encodeURIComponent(pr.key)}', false)"
+          >
+            <span class="button-icon" aria-hidden="true">&#10003;</span>
+            <span>${pending ? "Updating..." : "Addressed"}</span>
+          </button>
+        `;
+      }
+
       if (!pr.can_toggle_pause) return "-";
 
       const pending = pendingPauseKeys.has(pr.key);
@@ -694,14 +726,10 @@ const INDEX_HTML: &str = r#"<!doctype html>
       `;
     }
 
-    function renderStatus(pr, detail = pr.attention_reason) {
-      const note = displayPaused(pr) || !detail
-        ? ""
-        : `<div class="status-note">${escapeHtml(detail)}</div>`;
+    function renderStatus(pr) {
       return `
         <div class="status-stack">
           <span class="${pillClass(pr.status)}">${escapeHtml(pr.status)}</span>
-          ${note}
         </div>
       `;
     }
@@ -763,6 +791,36 @@ const INDEX_HTML: &str = r#"<!doctype html>
       } finally {
         pendingPauseKeys.delete(key);
         refresh().catch(() => {});
+      }
+    }
+
+    async function triggerRetry(encodedKey) {
+      const key = decodeURIComponent(encodedKey);
+      pendingRetryKeys.add(key);
+      renderPrs(latestPrs);
+
+      try {
+        const response = await fetch("/api/prs/retry", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json"
+          },
+          body: JSON.stringify({ key })
+        });
+
+        if (!response.ok) {
+          const message = await response.text();
+          throw new Error(message || `HTTP ${response.status}`);
+        }
+
+        const payload = await response.json();
+        latestPrs = latestPrs.map((pr) => pr.key === key ? payload.pr : pr);
+        pendingRetryKeys.delete(key);
+        renderPrs(latestPrs);
+      } catch (error) {
+        pendingRetryKeys.delete(key);
+        renderPrs(latestPrs);
+        alert(`Failed to retry ${key}: ${error.message || error}`);
       }
     }
 
@@ -833,7 +891,7 @@ const INDEX_HTML: &str = r#"<!doctype html>
             <div class="pr-title">${escapeHtml(pr.title)}</div>
             <div class="pr-meta">Updated ${escapeHtml(fmtTime(pr.updated_at))}</div>
           </td>
-          <td class="metric-cell status-cell" data-label="Status">${renderStatus(pr, null)}</td>
+          <td class="metric-cell status-cell" data-label="Status">${renderStatus(pr)}</td>
           <td class="metric-cell details-cell" data-label="Details">${renderDetails(pr)}</td>
           <td class="metric-cell action-cell" data-label="Action">${renderReviewRequestAction(pr)}</td>
         </tr>
@@ -1413,6 +1471,11 @@ struct DeepReviewRequest {
     key: String,
 }
 
+#[derive(Debug, Deserialize)]
+struct RetryRequest {
+    key: String,
+}
+
 #[derive(Debug, Serialize)]
 struct PauseResponse {
     ok: bool,
@@ -1421,6 +1484,12 @@ struct PauseResponse {
 
 #[derive(Debug, Serialize)]
 struct DeepReviewResponse {
+    ok: bool,
+    pr: PullRequestSummary,
+}
+
+#[derive(Debug, Serialize)]
+struct RetryResponse {
     ok: bool,
     pr: PullRequestSummary,
 }
@@ -1440,6 +1509,7 @@ pub fn router(supervisor: Arc<Supervisor>) -> Router {
         .route("/api/review-requests", get(list_review_requests))
         .route("/api/pr", get(get_pr))
         .route("/api/prs/pause", post(set_pr_paused))
+        .route("/api/prs/retry", post(trigger_failed_retry))
         .route(
             "/api/review-requests/deep-review",
             post(trigger_deep_review),
@@ -1616,6 +1686,33 @@ async fn trigger_deep_review(
     Ok(Json(DeepReviewResponse {
         ok: true,
         pr: summarize_review_request(&review_request),
+    }))
+}
+
+async fn trigger_failed_retry(
+    State(supervisor): State<Arc<Supervisor>>,
+    Json(request): Json<RetryRequest>,
+) -> Result<Json<RetryResponse>, (StatusCode, String)> {
+    let updated = supervisor
+        .trigger_failed_retry(&request.key)
+        .await
+        .map_err(|error| {
+            (
+                StatusCode::CONFLICT,
+                format!("failed triggering retry: {error:#}"),
+            )
+        })?;
+
+    let Some(tracked) = updated else {
+        return Err((
+            StatusCode::NOT_FOUND,
+            format!("unknown PR key: {}", request.key),
+        ));
+    };
+
+    Ok(Json(RetryResponse {
+        ok: true,
+        pr: summarize_pr(&tracked),
     }))
 }
 

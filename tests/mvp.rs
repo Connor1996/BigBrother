@@ -934,8 +934,10 @@ async fn dashboard_html_exposes_top_right_pr_review_request_and_activity_tabs() 
         "dashboard should fold attention context into the status column instead of rendering a dedicated Attention column, got: {html}",
     );
     assert!(
-        html.contains(r#"const note = displayPaused(pr) || !detail"#),
-        "dashboard should hide annotations only for visibly paused rows while keeping other status notes, got: {html}",
+        html.contains("function renderStatus(pr) {")
+            && !html.contains("status-note")
+            && !html.contains("const note ="),
+        "dashboard should render the status column without secondary annotations, got: {html}",
     );
     assert!(
         html.contains("health.active_tracked_prs"),
@@ -960,6 +962,12 @@ async fn dashboard_html_exposes_top_right_pr_review_request_and_activity_tabs() 
     assert!(
         html.contains("background: #c76a6a;") && html.contains("background: #4b907a;"),
         "dashboard should use the lighter pause and resume button fills, got: {html}",
+    );
+    assert!(
+        html.contains("retry-button")
+            && html.contains("addressed-button")
+            && html.contains("background: #b99a49;"),
+        "dashboard should expose yellow filled retry and addressed buttons, got: {html}",
     );
     assert!(
         html.contains("deep-review-button")
@@ -1920,7 +1928,7 @@ async fn paused_state_survives_supervisor_restart() {
 }
 
 #[tokio::test]
-async fn failed_runs_retry_on_subsequent_polls_and_auto_pause_after_five_retries() {
+async fn failed_runs_stay_failed_until_manually_retried() {
     let runner = AlwaysFailingAgentRunner {
         invocations: Arc::new(AtomicUsize::new(0)),
         started: Arc::new(Semaphore::new(0)),
@@ -1938,50 +1946,44 @@ async fn failed_runs_retry_on_subsequent_polls_and_auto_pause_after_five_retries
         )
         .expect("supervisor should initialize"),
     );
-
-    for expected_runs in 1..=5 {
-        supervisor
-            .poll_once()
-            .await
-            .expect("poll should succeed while retries remain");
-
-        let prs_payload = get_json(supervisor.clone(), "/api/prs").await;
-        let prs = prs_payload["prs"].as_array().expect("prs array");
-        assert_eq!(
-            status_for(prs, "openai/symphony#7"),
-            Some("failed"),
-            "failed runs should surface a failed status while the signal remains actionable",
-        );
-        assert_eq!(is_paused_for(prs, "openai/symphony#7"), Some(false));
-        assert_eq!(
-            runner.invocations.load(Ordering::SeqCst),
-            expected_runs,
-            "each poll should trigger one retry while retries remain",
-        );
-    }
 
     supervisor
         .poll_once()
         .await
-        .expect("final retry poll should still succeed");
+        .expect("initial poll should fail the PR once");
 
-    let prs_payload = get_json(supervisor, "/api/prs").await;
+    let prs_payload = get_json(supervisor.clone(), "/api/prs").await;
     let prs = prs_payload["prs"].as_array().expect("prs array");
     assert_eq!(
         status_for(prs, "openai/symphony#7"),
         Some("failed"),
-        "the PR should keep showing failed even after auto-pause once the retry budget is exhausted",
+        "failed runs should surface a failed status while the signal remains actionable",
     );
-    assert_eq!(is_paused_for(prs, "openai/symphony#7"), Some(true));
+    assert_eq!(is_paused_for(prs, "openai/symphony#7"), Some(false));
     assert_eq!(
         runner.invocations.load(Ordering::SeqCst),
-        6,
-        "one initial failure plus five retries should have been attempted",
+        1,
+        "the initial failure should run once",
+    );
+
+    supervisor
+        .poll_once()
+        .await
+        .expect("subsequent poll should leave failed PR idle");
+
+    let prs_payload = get_json(supervisor, "/api/prs").await;
+    let prs = prs_payload["prs"].as_array().expect("prs array");
+    assert_eq!(status_for(prs, "openai/symphony#7"), Some("failed"));
+    assert_eq!(is_paused_for(prs, "openai/symphony#7"), Some(false));
+    assert_eq!(
+        runner.invocations.load(Ordering::SeqCst),
+        1,
+        "scheduled polls should not automatically retry failed PRs",
     );
 }
 
 #[tokio::test]
-async fn resume_clears_retry_state_and_rechecks_the_current_signal() {
+async fn retry_action_rechecks_the_current_failed_signal() {
     let runner = AlwaysFailingAgentRunner {
         invocations: Arc::new(AtomicUsize::new(0)),
         started: Arc::new(Semaphore::new(0)),
@@ -2000,32 +2002,26 @@ async fn resume_clears_retry_state_and_rechecks_the_current_signal() {
         .expect("supervisor should initialize"),
     );
 
-    for _ in 0..6 {
-        supervisor
-            .poll_once()
-            .await
-            .expect("poll should succeed while driving toward auto-pause");
-    }
-
-    let resumed = supervisor
-        .set_pr_paused("openai/symphony#7", false)
+    supervisor
+        .poll_once()
         .await
-        .expect("resume operation should succeed")
-        .expect("tracked PR should exist");
-    assert_eq!(
-        resumed.status,
-        TrackingStatus::Failed,
-        "resume should keep surfacing failed while the same actionable signal still has a failed last run",
-    );
-    assert!(!resumed.persisted.paused);
-    assert_eq!(resumed.persisted.consecutive_failures, 0);
+        .expect("initial poll should produce a failed PR");
+
+    let retried = post_json(
+        supervisor.clone(),
+        "/api/prs/retry",
+        json!({ "key": "openai/symphony#7" }),
+    )
+    .await;
+    assert_eq!(retried["pr"]["status"], json!("failed"));
+    assert_eq!(retried["pr"]["is_paused"], json!(false));
 
     wait_for_runner_start(&runner.started).await;
-    wait_for_invocations(&runner.invocations, 7).await;
+    wait_for_invocations(&runner.invocations, 2).await;
     assert_eq!(
         runner.invocations.load(Ordering::SeqCst),
-        7,
-        "resume should immediately recheck the current actionable signal",
+        2,
+        "Retry should immediately recheck the current actionable signal",
     );
 
     let prs_payload = get_json(supervisor, "/api/prs").await;

@@ -108,7 +108,6 @@ pub struct PollQueryState {
     pub frozen_pr_keys: BTreeSet<String>,
 }
 
-const MAX_AUTOMATIC_RETRIES: u32 = 5;
 const MAX_LIVE_OUTPUT_CHARS: usize = 16_000;
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -519,18 +518,44 @@ impl Supervisor {
         Ok(Some(updated))
     }
 
+    pub async fn trigger_failed_retry(self: &Arc<Self>, pr_key: &str) -> Result<Option<TrackedPr>> {
+        let updated = {
+            let state = self
+                .shared_state
+                .lock()
+                .expect("dashboard state mutex poisoned");
+            let Some(tracked) = state.tracked_prs.get(pr_key) else {
+                return Ok(None);
+            };
+            if tracked.status != TrackingStatus::Failed {
+                return Ok(Some(tracked.clone()));
+            }
+            tracked.clone()
+        };
+
+        self.schedule_failed_retry(pr_key.to_owned());
+        Ok(Some(updated))
+    }
+
     pub async fn poll_once(&self) -> Result<()> {
-        self.poll_once_with_selection(None, true).await
+        self.poll_once_with_selection(None, true, false).await
     }
 
     async fn poll_once_for_pr(&self, pr_key: &str) -> Result<()> {
-        self.poll_once_with_selection(Some(pr_key), false).await
+        self.poll_once_with_selection(Some(pr_key), false, false)
+            .await
+    }
+
+    async fn retry_failed_pr(&self, pr_key: &str) -> Result<()> {
+        self.poll_once_with_selection(Some(pr_key), false, true)
+            .await
     }
 
     async fn poll_once_with_selection(
         &self,
         preferred_pr_key: Option<&str>,
         allow_fallback: bool,
+        allow_failed_retry: bool,
     ) -> Result<()> {
         let _poll_guard = self.poll_lock.lock().await;
         {
@@ -541,7 +566,9 @@ impl Supervisor {
             state.last_poll_started_at = Some(Utc::now());
             state.last_poll_error = None;
         }
-        let result = self.poll_once_inner(preferred_pr_key, allow_fallback).await;
+        let result = self
+            .poll_once_inner(preferred_pr_key, allow_fallback, allow_failed_retry)
+            .await;
         let finished_at = Utc::now();
         let next_poll_due_at = finished_at
             + chrono::Duration::seconds(
@@ -591,6 +618,25 @@ impl Supervisor {
                     EventLevel::Error,
                     Some(pr_key.clone()),
                     format!("immediate check failed for {pr_key}: {error:#}"),
+                );
+            }
+        });
+    }
+
+    fn schedule_failed_retry(self: &Arc<Self>, pr_key: String) {
+        let supervisor = Arc::clone(self);
+        tokio::spawn(async move {
+            supervisor.push_event(
+                EventLevel::Info,
+                Some(pr_key.clone()),
+                format!("triggering manual retry for {pr_key}"),
+            );
+
+            if let Err(error) = supervisor.retry_failed_pr(&pr_key).await {
+                supervisor.push_event(
+                    EventLevel::Error,
+                    Some(pr_key.clone()),
+                    format!("manual retry failed for {pr_key}: {error:#}"),
                 );
             }
         });
@@ -699,6 +745,7 @@ impl Supervisor {
         &self,
         preferred_pr_key: Option<&str>,
         allow_fallback: bool,
+        allow_failed_retry: bool,
     ) -> Result<()> {
         self.push_event(
             EventLevel::Info,
@@ -743,6 +790,7 @@ impl Supervisor {
                 &inner.active_runs,
                 preferred_pr_key,
                 allow_fallback,
+                allow_failed_retry,
             );
 
             if let Some((pr, trigger)) = selected {
@@ -841,7 +889,6 @@ impl Supervisor {
 
             let mut inner = self.inner.lock().await;
             let active_run = inner.active_runs.remove(&pr_key);
-            let mut auto_paused = false;
             {
                 let persisted = inner.persisted_state.prs.entry(pr_key.clone()).or_default();
                 persist_run_metadata(
@@ -854,7 +901,7 @@ impl Supervisor {
                 } else if outcome.success {
                     record_successful_run(persisted, &request, &outcome);
                 } else {
-                    auto_paused = record_failed_run(persisted, &request);
+                    record_failed_run(persisted, &request);
                 }
             }
 
@@ -898,19 +945,6 @@ impl Supervisor {
                 self.send_notification(
                     Some(&pr_key),
                     automatic_run_finished_notification(&request, &outcome),
-                )
-                .await;
-            }
-
-            if auto_paused {
-                self.push_event(
-                    EventLevel::Error,
-                    Some(pr_key.clone()),
-                    format!("auto-paused {pr_key} after {MAX_AUTOMATIC_RETRIES} retry attempts"),
-                );
-                self.send_notification(
-                    Some(&pr_key),
-                    automatic_run_auto_paused_notification(&request.pull_request),
                 )
                 .await;
             }
@@ -964,17 +998,16 @@ fn select_run_request<'a>(
     active_runs: &HashMap<String, ActiveRun>,
     preferred_pr_key: Option<&str>,
     allow_fallback: bool,
+    allow_failed_retry: bool,
 ) -> Option<(&'a PullRequest, AttentionReason)> {
     if active_runs.len() >= config.daemon.max_concurrent_runs {
         return None;
     }
 
     if let Some(pr_key) = preferred_pr_key {
-        if let Some(selected) = prs
-            .iter()
-            .find(|pr| pr.key == pr_key)
-            .and_then(|pr| selectable_run_request(pr, persisted_state, active_runs))
-        {
+        if let Some(selected) = prs.iter().find(|pr| pr.key == pr_key).and_then(|pr| {
+            selectable_run_request(pr, persisted_state, active_runs, allow_failed_retry)
+        }) {
             return Some(selected);
         }
 
@@ -984,13 +1017,14 @@ fn select_run_request<'a>(
     }
 
     prs.iter()
-        .find_map(|pr| selectable_run_request(pr, persisted_state, active_runs))
+        .find_map(|pr| selectable_run_request(pr, persisted_state, active_runs, allow_failed_retry))
 }
 
 fn selectable_run_request<'a>(
     pr: &'a PullRequest,
     persisted_state: &PersistentStateFile,
     active_runs: &HashMap<String, ActiveRun>,
+    allow_failed_retry: bool,
 ) -> Option<(&'a PullRequest, AttentionReason)> {
     if active_runs.contains_key(&pr.key) {
         return None;
@@ -1005,7 +1039,12 @@ fn selectable_run_request<'a>(
         return None;
     }
 
-    determine_attention_reason(pr, &persisted).map(|reason| (pr, reason))
+    let attention_reason = determine_attention_reason(pr, &persisted);
+    if !allow_failed_retry && has_failed_actionable_status(&persisted, attention_reason) {
+        return None;
+    }
+
+    attention_reason.map(|reason| (pr, reason))
 }
 
 fn refresh_dashboard(
@@ -1280,13 +1319,9 @@ fn derive_status(
     } else if pr.is_draft {
         TrackingStatus::Draft
     } else if let Some(reason) = attention_reason {
-        if is_retry_scheduled(pr, persisted, reason) {
-            TrackingStatus::RetryScheduled
-        } else {
-            match reason {
-                AttentionReason::MergeConflict => TrackingStatus::Conflict,
-                _ => TrackingStatus::NeedsAttention,
-            }
+        match reason {
+            AttentionReason::MergeConflict => TrackingStatus::Conflict,
+            _ => TrackingStatus::NeedsAttention,
         }
     } else if pr.has_conflicts {
         TrackingStatus::Conflict
@@ -1316,17 +1351,6 @@ fn is_waiting_merge(pr: &PullRequest) -> bool {
         && matches!(pr.ci_status, crate::model::CiStatus::Success)
 }
 
-fn is_retry_scheduled(
-    pr: &PullRequest,
-    persisted: &PersistentPrState,
-    reason: AttentionReason,
-) -> bool {
-    persisted.last_run_status.as_deref() == Some("error")
-        && persisted.consecutive_failures > 0
-        && persisted.consecutive_failures <= MAX_AUTOMATIC_RETRIES
-        && retry_signal_matches(pr, persisted, reason)
-}
-
 fn retry_signal_matches(
     pr: &PullRequest,
     persisted: &PersistentPrState,
@@ -1352,7 +1376,7 @@ fn retry_signal_matches(
     }
 }
 
-fn record_failed_run(persisted: &mut PersistentPrState, request: &RunRequest) -> bool {
+fn record_failed_run(persisted: &mut PersistentPrState, request: &RunRequest) {
     persisted.clear_needs_decision();
     persisted.consecutive_failures =
         if retry_signal_matches(&request.pull_request, persisted, request.trigger) {
@@ -1365,14 +1389,6 @@ fn record_failed_run(persisted: &mut PersistentPrState, request: &RunRequest) ->
     persisted.retry_base_sha = Some(request.pull_request.base_sha.clone());
     persisted.retry_comment_at = request.pull_request.latest_reviewer_activity_at;
     persisted.retry_ci_at = request.pull_request.ci_updated_at;
-
-    let retries_used = persisted.consecutive_failures.saturating_sub(1);
-    let auto_paused = retries_used >= MAX_AUTOMATIC_RETRIES;
-    if auto_paused {
-        persisted.paused = true;
-    }
-
-    auto_paused
 }
 
 fn record_successful_run(
@@ -1607,23 +1623,6 @@ fn automatic_run_needs_decision_notification(request: &RunRequest, reason: &str)
                 format!("Status: {}", TrackingStatus::NeedsDecision.label()),
                 format!("Decision needed: {reason}"),
                 format!("Result URL: {}", request.pull_request.url),
-            ],
-        ),
-    )
-}
-
-fn automatic_run_auto_paused_notification(pr: &PullRequest) -> Notification {
-    Notification::new(
-        EventLevel::Error,
-        format!("auto-paused {}", pr.key),
-        pr_notification_body(
-            pr,
-            &[
-                format!(
-                    "Reason: automatic retries reached the limit of {} attempts",
-                    MAX_AUTOMATIC_RETRIES
-                ),
-                format!("Result URL: {}", pr.url),
             ],
         ),
     )
@@ -2029,6 +2028,7 @@ mod tests {
                 &HashMap::new(),
                 None,
                 true,
+                false,
             )
             .is_none(),
             "paused PR should never be scheduled automatically",
@@ -2120,6 +2120,7 @@ mod tests {
             &HashMap::new(),
             Some(&second.key),
             false,
+            false,
         )
         .expect("the preferred actionable PR should be selected");
 
@@ -2128,7 +2129,80 @@ mod tests {
     }
 
     #[test]
-    fn failed_actionable_prs_report_failed_status_until_retry_budget_is_exhausted() {
+    fn failed_prs_are_not_selected_for_scheduled_retries() {
+        let mut pr = sample_pr();
+        pr.ci_status = CiStatus::Failure;
+        pr.ci_updated_at = Some(Utc.with_ymd_and_hms(2026, 3, 30, 18, 5, 0).unwrap());
+
+        let persisted_state = PersistentStateFile {
+            prs: [(
+                pr.key.clone(),
+                PersistentPrState {
+                    last_run_status: Some("error".to_owned()),
+                    retry_trigger: Some(AttentionReason::CiFailed),
+                    retry_head_sha: Some(pr.head_sha.clone()),
+                    retry_ci_at: pr.ci_updated_at,
+                    ..PersistentPrState::default()
+                },
+            )]
+            .into_iter()
+            .collect(),
+        };
+
+        assert!(
+            select_run_request(
+                &sample_config(),
+                &[pr],
+                &persisted_state,
+                &HashMap::new(),
+                None,
+                true,
+                false,
+            )
+            .is_none(),
+            "scheduled polls should leave failed PRs idle until the operator requests a retry",
+        );
+    }
+
+    #[test]
+    fn manual_failed_retry_can_select_the_current_failed_signal() {
+        let mut pr = sample_pr();
+        pr.ci_status = CiStatus::Failure;
+        pr.ci_updated_at = Some(Utc.with_ymd_and_hms(2026, 3, 30, 18, 5, 0).unwrap());
+
+        let persisted_state = PersistentStateFile {
+            prs: [(
+                pr.key.clone(),
+                PersistentPrState {
+                    last_run_status: Some("error".to_owned()),
+                    retry_trigger: Some(AttentionReason::CiFailed),
+                    retry_head_sha: Some(pr.head_sha.clone()),
+                    retry_ci_at: pr.ci_updated_at,
+                    ..PersistentPrState::default()
+                },
+            )]
+            .into_iter()
+            .collect(),
+        };
+
+        let prs = [pr.clone()];
+        let selected = select_run_request(
+            &sample_config(),
+            &prs,
+            &persisted_state,
+            &HashMap::new(),
+            Some(&pr.key),
+            false,
+            true,
+        )
+        .expect("manual retries should still be able to select failed actionable PRs");
+
+        assert_eq!(selected.0.key, pr.key);
+        assert_eq!(selected.1, AttentionReason::CiFailed);
+    }
+
+    #[test]
+    fn failed_actionable_prs_report_failed_status_while_signal_is_unresolved() {
         let mut pr = sample_pr();
         pr.ci_status = CiStatus::Failure;
         pr.ci_updated_at = Some(Utc.with_ymd_and_hms(2026, 3, 30, 18, 5, 0).unwrap());
