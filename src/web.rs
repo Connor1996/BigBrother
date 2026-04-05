@@ -1244,10 +1244,9 @@ const PR_DETAIL_HTML: &str = r##"<!doctype html>
       overflow: hidden;
       padding: 16px;
       border-radius: 16px;
-      border: 1px solid rgba(19, 24, 29, 0.14);
-      background:
-        radial-gradient(circle at top left, rgba(57, 81, 95, 0.35), transparent 32%),
-        linear-gradient(180deg, #182126 0%, #10171b 100%);
+      border: 1px solid rgba(0, 0, 0, 0.32);
+      background: #1e1e1e;
+      box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.03);
     }
 
     .terminal-shell.is-hidden,
@@ -1263,7 +1262,7 @@ const PR_DETAIL_HTML: &str = r##"<!doctype html>
 
     .terminal-shell .xterm-viewport {
       border-radius: 10px;
-      scrollbar-color: rgba(214, 226, 229, 0.3) transparent;
+      scrollbar-color: rgba(255, 255, 255, 0.26) transparent;
       scrollbar-width: thin;
     }
 
@@ -1272,7 +1271,7 @@ const PR_DETAIL_HTML: &str = r##"<!doctype html>
       top: 16px;
       left: 16px;
       right: 16px;
-      color: rgba(214, 226, 229, 0.78);
+      color: rgba(204, 204, 204, 0.8);
       font: 0.84rem/1.45 "SFMono-Regular", "SF Mono", ui-monospace, monospace;
       pointer-events: none;
     }
@@ -1430,9 +1429,27 @@ const PR_DETAIL_HTML: &str = r##"<!doctype html>
         cursorBlink: false,
         scrollback: 6000,
         theme: {
-          background: "#10171b",
-          foreground: "#d6e2e5",
-          selectionBackground: "rgba(214, 226, 229, 0.22)"
+          background: "#1e1e1e",
+          foreground: "#cccccc",
+          cursor: "#aeafad",
+          cursorAccent: "#1e1e1e",
+          selectionBackground: "rgba(255, 255, 255, 0.18)",
+          black: "#000000",
+          red: "#cd3131",
+          green: "#0dbc79",
+          yellow: "#e5e510",
+          blue: "#2472c8",
+          magenta: "#bc3fbc",
+          cyan: "#11a8cd",
+          white: "#e5e5e5",
+          brightBlack: "#666666",
+          brightRed: "#f14c4c",
+          brightGreen: "#23d18b",
+          brightYellow: "#f5f543",
+          brightBlue: "#3b8eea",
+          brightMagenta: "#d670d6",
+          brightCyan: "#29b8db",
+          brightWhite: "#ffffff"
         }
       });
 
