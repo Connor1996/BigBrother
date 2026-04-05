@@ -1268,6 +1268,8 @@ fn derive_status(
         TrackingStatus::Closed
     } else if persisted.needs_decision_reason.is_some() {
         TrackingStatus::NeedsDecision
+    } else if has_failed_actionable_status(persisted, attention_reason) {
+        TrackingStatus::Failed
     } else if persisted.paused {
         TrackingStatus::Paused
     } else if pr.is_draft {
@@ -1290,6 +1292,13 @@ fn derive_status(
     } else {
         TrackingStatus::WaitingReview
     }
+}
+
+fn has_failed_actionable_status(
+    persisted: &PersistentPrState,
+    attention_reason: Option<AttentionReason>,
+) -> bool {
+    persisted.last_run_status.as_deref() == Some("error") && attention_reason.is_some()
 }
 
 fn is_waiting_merge(pr: &PullRequest) -> bool {
@@ -2070,7 +2079,7 @@ mod tests {
     }
 
     #[test]
-    fn failed_actionable_prs_report_retry_scheduled_until_retry_budget_is_exhausted() {
+    fn failed_actionable_prs_report_failed_status_until_retry_budget_is_exhausted() {
         let mut pr = sample_pr();
         pr.ci_status = CiStatus::Failure;
         pr.ci_updated_at = Some(Utc.with_ymd_and_hms(2026, 3, 30, 18, 5, 0).unwrap());
@@ -2086,7 +2095,28 @@ mod tests {
 
         assert_eq!(
             derive_status(&pr, &persisted, Some(AttentionReason::CiFailed), false),
-            TrackingStatus::RetryScheduled
+            TrackingStatus::Failed
+        );
+    }
+
+    #[test]
+    fn failed_status_overrides_paused_display_when_signal_is_still_actionable() {
+        let mut pr = sample_pr();
+        pr.ci_status = CiStatus::Failure;
+        pr.ci_updated_at = Some(Utc.with_ymd_and_hms(2026, 3, 30, 18, 5, 0).unwrap());
+
+        let persisted = PersistentPrState {
+            paused: true,
+            last_run_status: Some("error".to_owned()),
+            retry_trigger: Some(AttentionReason::CiFailed),
+            retry_head_sha: Some(pr.head_sha.clone()),
+            retry_ci_at: pr.ci_updated_at,
+            ..PersistentPrState::default()
+        };
+
+        assert_eq!(
+            derive_status(&pr, &persisted, Some(AttentionReason::CiFailed), false),
+            TrackingStatus::Failed
         );
     }
 

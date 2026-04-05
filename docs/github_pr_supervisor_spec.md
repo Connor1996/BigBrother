@@ -154,7 +154,7 @@ The user opens the UI and sees:
 - which PRs are currently tracked
 - current CI status
 - current review state
-- whether the daemon is idle, acting, retrying, blocked, waiting for review, or waiting for merge
+- whether the daemon is idle, acting, retrying, failed, waiting for review, or waiting for merge
 - whether a PR is currently blocked by merge conflicts with the base branch
 - what happened most recently for each PR
 - recent live agent output for any PR that is currently running
@@ -191,7 +191,7 @@ When the agent cannot safely continue:
 - merge conflict or branch protection issue
 - ambiguous reviewer feedback
 
-the daemon emits a notification and marks the PR as `blocked` or `needs decision`.
+the daemon emits a notification and marks the PR as `failed` or `needs decision`.
 
 ### 6.4 Project-Centered Development
 
@@ -326,7 +326,7 @@ Canonical statuses:
 - `needs_attention`
 - `running`
 - `retry_scheduled`
-- `blocked`
+- `failed`
 - `closed`
 - `merged`
 
@@ -501,7 +501,7 @@ Notifications are emitted when:
 - the agent reports ambiguity or blocker
 - the agent explicitly requests an operator decision for a non-trivial change
 - branch protection or push failure prevents completion
-- a PR remains blocked beyond a configured window
+- a PR remains failed beyond a configured window
 
 Notification sinks should be pluggable. Initial sinks:
 
@@ -800,7 +800,7 @@ The MVP is done when all of the following are true:
 
 1. running the binary starts a local web server
 2. opening the local page shows tracked PR rows from the backend
-3. the daemon can poll a provider and derive `waiting_ci`, `waiting_review`, `waiting_merge`, `needs_attention`, and `running` or `blocked`
+3. the daemon can poll a provider and derive `waiting_ci`, `waiting_review`, `waiting_merge`, `needs_attention`, and `running` or `failed`
 4. the backend can invoke a runner abstraction for one actionable PR
 5. there is at least one `cargo test` simulated integration test that:
    - uses a fake GitHub provider

@@ -95,6 +95,7 @@ pub enum TrackingStatus {
     Draft,
     Paused,
     NeedsDecision,
+    Failed,
     Conflict,
     WaitingCi,
     WaitingReview,
@@ -102,7 +103,6 @@ pub enum TrackingStatus {
     NeedsAttention,
     Running,
     RetryScheduled,
-    Blocked,
     Closed,
     Merged,
 }
@@ -113,6 +113,7 @@ impl TrackingStatus {
             Self::Draft => "draft",
             Self::Paused => "paused",
             Self::NeedsDecision => "needs decision",
+            Self::Failed => "failed",
             Self::Conflict => "conflict",
             Self::WaitingCi => "waiting for CI",
             Self::WaitingReview => "waiting review",
@@ -120,7 +121,6 @@ impl TrackingStatus {
             Self::NeedsAttention => "needs attention",
             Self::Running => "running",
             Self::RetryScheduled => "retrying",
-            Self::Blocked => "blocked",
             Self::Closed => "closed",
             Self::Merged => "merged",
         }

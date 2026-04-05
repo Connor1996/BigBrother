@@ -1902,8 +1902,8 @@ async fn failed_runs_retry_on_subsequent_polls_and_auto_pause_after_five_retries
         let prs = prs_payload["prs"].as_array().expect("prs array");
         assert_eq!(
             status_for(prs, "openai/symphony#7"),
-            Some("retrying"),
-            "failed runs should stay retry-scheduled until the retry budget is exhausted",
+            Some("failed"),
+            "failed runs should surface a failed status while the signal remains actionable",
         );
         assert_eq!(is_paused_for(prs, "openai/symphony#7"), Some(false));
         assert_eq!(
@@ -1922,8 +1922,8 @@ async fn failed_runs_retry_on_subsequent_polls_and_auto_pause_after_five_retries
     let prs = prs_payload["prs"].as_array().expect("prs array");
     assert_eq!(
         status_for(prs, "openai/symphony#7"),
-        Some("paused"),
-        "the PR should auto-pause after the fifth retry fails",
+        Some("failed"),
+        "the PR should keep showing failed even after auto-pause once the retry budget is exhausted",
     );
     assert_eq!(is_paused_for(prs, "openai/symphony#7"), Some(true));
     assert_eq!(
@@ -1967,8 +1967,8 @@ async fn resume_clears_retry_state_and_rechecks_the_current_signal() {
         .expect("tracked PR should exist");
     assert_eq!(
         resumed.status,
-        TrackingStatus::NeedsAttention,
-        "resume should recalculate status from the current PR signal instead of staying paused",
+        TrackingStatus::Failed,
+        "resume should keep surfacing failed while the same actionable signal still has a failed last run",
     );
     assert!(!resumed.persisted.paused);
     assert_eq!(resumed.persisted.consecutive_failures, 0);
@@ -1983,7 +1983,7 @@ async fn resume_clears_retry_state_and_rechecks_the_current_signal() {
 
     let prs_payload = get_json(supervisor, "/api/prs").await;
     let prs = prs_payload["prs"].as_array().expect("prs array");
-    assert_eq!(status_for(prs, "openai/symphony#7"), Some("retrying"));
+    assert_eq!(status_for(prs, "openai/symphony#7"), Some("failed"));
     assert_eq!(is_paused_for(prs, "openai/symphony#7"), Some(false));
 }
 
