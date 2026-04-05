@@ -36,6 +36,7 @@ const INDEX_HTML: &str = r#"<!doctype html>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>BigBrother</title>
+  <link rel="icon" type="image/png" href="/assets/bigbrother-mark.png">
   <style>
     :root {
       color-scheme: light;
@@ -1001,6 +1002,7 @@ const PR_DETAIL_HTML: &str = r##"<!doctype html>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>BigBrother Run View</title>
+  <link rel="icon" type="image/png" href="/assets/bigbrother-mark.png">
   <style>
     :root {
       color-scheme: light;

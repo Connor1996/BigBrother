@@ -988,6 +988,9 @@ async fn dashboard_html_exposes_top_right_pr_review_request_and_activity_tabs() 
     );
     assert!(
         html.contains("<title>BigBrother</title>")
+            && html.contains(
+                r#"<link rel="icon" type="image/png" href="/assets/bigbrother-mark.png">"#
+            )
             && html.contains(">BigBrother</h1>")
             && html.contains("src=\"/assets/bigbrother-mark.png\""),
         "dashboard should expose the BigBrother brand and PNG mole icon asset, got: {html}",
@@ -1023,6 +1026,7 @@ async fn pr_detail_page_uses_bigbrother_branding() {
 
     assert!(
         html.contains("<title>BigBrother Run View</title>")
+            && html.contains(r#"<link rel="icon" type="image/png" href="/assets/bigbrother-mark.png">"#)
             && html.contains("<div class=\"brand-lockup\">")
             && html.contains("<h1>BigBrother</h1>")
             && html.contains("Back to dashboard")
