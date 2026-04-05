@@ -2,6 +2,11 @@
 
 `BigBrother` is the product name for the Rust-based GitHub PR supervisor implemented in the `symphony-rs` repository.
 
+If you want a prose-first introduction for teammates, start with
+[`docs/bigbrother_getting_started.md`](/Users/Connor/Coding/symphony-rs/docs/bigbrother_getting_started.md).
+If you want Codex to perform most of the first-time setup, use the copy-paste prompt in
+[`docs/bigbrother_agent_setup_prompt.md`](/Users/Connor/Coding/symphony-rs/docs/bigbrother_agent_setup_prompt.md).
+
 Current status:
 
 - the MVP now runs as a local Rust daemon plus HTTP server
@@ -70,6 +75,12 @@ cp symphony-rs.example.toml symphony-rs.toml
 ```bash
 export GITHUB_TOKEN=...
 ```
+
+If you keep `author = "$GITHUB_USER"` in the copied config, also export `GITHUB_USER` to your
+GitHub login. Otherwise replace `author` with your real login or remove the field so BigBrother
+can resolve the viewer login directly from GitHub. If you customize `workspace.root`, prefer an
+absolute path such as `/Users/alice/Coding`; the config loader does not currently expand `~` or
+`$HOME/Coding`.
 
 3. Build and launch the local daemon and dashboard server from the project root using the optimized release binary:
 
