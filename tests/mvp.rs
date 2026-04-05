@@ -940,8 +940,9 @@ async fn dashboard_html_exposes_top_right_pr_review_request_and_activity_tabs() 
         "dashboard should render the status column without secondary annotations, got: {html}",
     );
     assert!(
-        html.contains("health.active_tracked_prs"),
-        "dashboard should render the tracked count using active non-paused PRs, got: {html}",
+        html.contains("const trackedCount = typeof health.active_tracked_prs === \"number\"")
+            && html.contains("`${trackedCount}/${health.all_prs}`"),
+        "dashboard should render the tracked count as tracked/total, got: {html}",
     );
     assert!(
         html.contains(r#"<th class="metric-col">Status</th>"#)
@@ -956,12 +957,14 @@ async fn dashboard_html_exposes_top_right_pr_review_request_and_activity_tabs() 
         "review request inbox should render the compact four-column layout, got: {html}",
     );
     assert!(
-        html.contains("pause-button") && html.contains("resume-button"),
-        "dashboard should expose distinct pause and resume button styling hooks, got: {html}",
+        html.contains("track-button")
+            && html.contains("untrack-button")
+            && html.contains("action-stack"),
+        "dashboard should expose stacked track and untrack action controls, got: {html}",
     );
     assert!(
         html.contains("background: #c76a6a;") && html.contains("background: #4b907a;"),
-        "dashboard should use the lighter pause and resume button fills, got: {html}",
+        "dashboard should use the lighter untrack and track button fills, got: {html}",
     );
     assert!(
         html.contains("retry-button")
@@ -976,10 +979,8 @@ async fn dashboard_html_exposes_top_right_pr_review_request_and_activity_tabs() 
         "dashboard should render deep review with the same filled action button style family and magnifying glass icon, got: {html}",
     );
     assert!(
-        html.contains("button-icon")
-            && html.contains("&#9654;")
-            && html.contains("&#10074;&#10074;"),
-        "dashboard should render play and pause icons for the action buttons, got: {html}",
+        html.contains("button-icon") && html.contains("&#43;") && html.contains("&#8722;"),
+        "dashboard should render plus and minus icons for the tracking action buttons, got: {html}",
     );
     assert!(
         html.contains(r#"if (label === "requested review") return "pill warn";"#)

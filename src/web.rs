@@ -354,21 +354,31 @@ const INDEX_HTML: &str = r#"<!doctype html>
       transition: background 120ms ease, transform 120ms ease;
     }
 
-    .action-button.pause-button {
+    .action-stack {
+      display: inline-grid;
+      gap: 8px;
+      justify-items: center;
+    }
+
+    .action-stack .action-button {
+      min-width: 104px;
+    }
+
+    .action-button.untrack-button {
       background: #c76a6a;
       color: #fff;
     }
 
-    .action-button.pause-button:hover:not(:disabled) {
+    .action-button.untrack-button:hover:not(:disabled) {
       background: #b75b5b;
     }
 
-    .action-button.resume-button {
+    .action-button.track-button {
       background: #4b907a;
       color: #fff;
     }
 
-    .action-button.resume-button:hover:not(:disabled) {
+    .action-button.track-button:hover:not(:disabled) {
       background: #3f7f6b;
     }
 
@@ -396,7 +406,7 @@ const INDEX_HTML: &str = r#"<!doctype html>
       transform: translateY(-1px);
     }
 
-    .action-button:not(.pause-button):not(.resume-button):not(.deep-review-button):not(.retry-button):not(.addressed-button):hover:not(:disabled) {
+    .action-button:not(.untrack-button):not(.track-button):not(.deep-review-button):not(.retry-button):not(.addressed-button):hover:not(:disabled) {
       background: rgba(255, 255, 255, 1);
     }
 
@@ -679,9 +689,11 @@ const INDEX_HTML: &str = r#"<!doctype html>
     }
 
     function renderAction(pr) {
+      const actions = [];
+
       if (pr.status === "failed") {
         const pending = pendingRetryKeys.has(pr.key);
-        return `
+        actions.push(`
           <button
             class="action-button retry-button"
             ${pending ? "disabled" : ""}
@@ -690,12 +702,12 @@ const INDEX_HTML: &str = r#"<!doctype html>
             <span class="button-icon" aria-hidden="true">&#8635;</span>
             <span>${pending ? "Retrying..." : "Retry"}</span>
           </button>
-        `;
+        `);
       }
 
       if (pr.status === "needs decision") {
         const pending = pendingPauseKeys.has(pr.key);
-        return `
+        actions.push(`
           <button
             class="action-button addressed-button"
             ${pending ? "disabled" : ""}
@@ -704,27 +716,30 @@ const INDEX_HTML: &str = r#"<!doctype html>
             <span class="button-icon" aria-hidden="true">&#10003;</span>
             <span>${pending ? "Updating..." : "Addressed"}</span>
           </button>
-        `;
+        `);
       }
 
-      if (!pr.can_toggle_pause) return "-";
+      if (pr.can_toggle_pause) {
+        const pending = pendingPauseKeys.has(pr.key);
+        const isPaused = effectivePaused(pr);
+        const nextPaused = !isPaused;
+        const label = pending ? "Updating..." : (isPaused ? "Track" : "Untrack");
+        const variantClass = isPaused ? "track-button" : "untrack-button";
+        const icon = isPaused ? "&#43;" : "&#8722;";
+        actions.push(`
+          <button
+            class="action-button ${variantClass}"
+            ${pending ? "disabled" : ""}
+            onclick="togglePause('${encodeURIComponent(pr.key)}', ${nextPaused})"
+          >
+            <span class="button-icon" aria-hidden="true">${icon}</span>
+            <span>${label}</span>
+          </button>
+        `);
+      }
 
-      const pending = pendingPauseKeys.has(pr.key);
-      const isPaused = effectivePaused(pr);
-      const nextPaused = !isPaused;
-      const label = pending ? "Updating..." : (isPaused ? "Resume" : "Pause");
-      const variantClass = isPaused ? "resume-button" : "pause-button";
-      const icon = isPaused ? "&#9654;" : "&#10074;&#10074;";
-      return `
-        <button
-          class="action-button ${variantClass}"
-          ${pending ? "disabled" : ""}
-          onclick="togglePause('${encodeURIComponent(pr.key)}', ${nextPaused})"
-        >
-          <span class="button-icon" aria-hidden="true">${icon}</span>
-          <span>${label}</span>
-        </button>
-      `;
+      if (!actions.length) return "-";
+      return `<div class="action-stack">${actions.join("")}</div>`;
     }
 
     function renderStatus(pr) {
@@ -968,7 +983,10 @@ const INDEX_HTML: &str = r#"<!doctype html>
       const activityPayload = await activityRes.json();
 
       document.getElementById("health-status").textContent = health.ok ? "Healthy" : "Attention needed";
-      document.getElementById("health-count").textContent = `${health.active_tracked_prs}/${health.all_prs}`;
+      const trackedCount = typeof health.active_tracked_prs === "number"
+        ? health.active_tracked_prs
+        : health.tracked_prs;
+      document.getElementById("health-count").textContent = `${trackedCount}/${health.all_prs}`;
       document.getElementById("health-running").textContent = String(health.running_prs);
       document.getElementById("health-poll").textContent = fmtTime(health.last_poll_finished_at);
       latestPrs = prsPayload.prs || [];

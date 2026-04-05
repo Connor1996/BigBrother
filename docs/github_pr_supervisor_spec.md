@@ -684,18 +684,18 @@ The MVP UI can be a single page that shows:
 
 - daemon health
 - last poll time
-- a `Tracked PRs` hero stat rendered as `active/all`, where `active` excludes paused PRs (including auto-paused `needs decision` entries) and `all` comes from the latest authored-PR search total and never drops below the number of rows currently shown
+- a `Tracked PRs` hero stat rendered as `tracked/all`, where `tracked` excludes rows the operator has explicitly untracked/paused (including auto-paused `needs decision` entries) and `all` comes from the latest authored-PR search total and never drops below the number of rows currently shown
 - a right-aligned dashboard tab switch for `PRs`, `Review Requests`, and `Activity`
 - current tracked PR rows
 - current review-request inbox rows for PRs that currently request the operator's review
 - the review-request inbox should stay lightweight: it should list matching PRs without hydrating CI, reviews, review comments, or issue comments until the operator opens a detail view or starts a deep review
 - each PR’s status, CI state, review state, and latest action summary, with no separate attention column and no secondary status-note annotation underneath the status pill
 - paused rows should show the paused status without any extra note underneath
-- if an operator explicitly paused a PR earlier, that visible `paused` state should take precedence over a stale `failed` display until the operator resumes it
+- if an operator explicitly untracked a PR earlier, that visible `paused` state should take precedence over a stale `failed` display until the operator tracks it again
 - PRs in `needs decision` should still keep their underlying auto-paused execution freeze, but the visible status pill should read `needs decision` rather than `paused`
-- the non-description columns centered for easier scanning, with red `Pause`, green `Resume`, and yellow `Retry` / `Addressed` controls in the action column using white labels plus simple icons
+- the non-description columns centered for easier scanning, with red `Untrack`, green `Track`, and yellow `Retry` / `Addressed` controls in the action column using white labels plus simple icons
 - a row-level link into a dedicated PR detail page for run output, showing an embedded read-only terminal while a run is active and the saved last run output after the run completes
-- a row-level pause/resume control for each tracked PR
+- a row-level `Track` / `Untrack` control for each tracked PR
 - a row-level manual `Retry` action for `failed` PRs and a row-level `Addressed` action for `needs decision` PRs
 - a row-level `Deep Review` action for review-request inbox rows that runs a manual deep review and comments the result back onto the PR
 - a visually subdued treatment for paused rows so they read as intentionally muted rather than inactive by accident
@@ -706,7 +706,7 @@ The MVP UI does not need:
 - split panes
 - SSE or WebSocket delivery for live updates
 - advanced filtering
-- broader manual controls beyond pause/resume and the minimum required for testing
+- broader manual controls beyond track/untrack and the minimum required for testing
 
 ### 20.1 PR List
 
