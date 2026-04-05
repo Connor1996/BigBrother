@@ -688,7 +688,9 @@ const INDEX_HTML: &str = r#"<!doctype html>
     }
 
     function renderStatus(pr, detail = pr.attention_reason) {
-      const note = detail ? `<div class="status-note">${escapeHtml(detail)}</div>` : "";
+      const note = effectivePaused(pr) || !detail
+        ? ""
+        : `<div class="status-note">${escapeHtml(detail)}</div>`;
       return `
         <div class="status-stack">
           <span class="${pillClass(pr.status)}">${escapeHtml(pr.status)}</span>

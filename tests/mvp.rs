@@ -786,6 +786,10 @@ async fn dashboard_html_exposes_top_right_pr_review_request_and_activity_tabs() 
         "dashboard should fold attention context into the status column instead of rendering a dedicated Attention column, got: {html}",
     );
     assert!(
+        html.contains(r#"const note = effectivePaused(pr) || !detail"#),
+        "dashboard should hide paused status annotations while keeping other status notes, got: {html}",
+    );
+    assert!(
         html.contains("health.active_tracked_prs"),
         "dashboard should render the tracked count using active non-paused PRs, got: {html}",
     );
