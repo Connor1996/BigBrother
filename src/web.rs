@@ -32,6 +32,12 @@ use crate::{
 
 const BIGBROTHER_MARK_PATH: &str = "/assets/bigbrother-mark.png";
 const BIGBROTHER_MARK_PNG: &[u8] = include_bytes!("../assets/bigbrother-mark.png");
+const XTERM_CSS_PATH: &str = "/assets/xterm.min.css";
+const XTERM_CSS: &[u8] = include_bytes!("../assets/xterm.min.css");
+const XTERM_JS_PATH: &str = "/assets/xterm.min.js";
+const XTERM_JS: &[u8] = include_bytes!("../assets/xterm.min.js");
+const XTERM_ADDON_FIT_JS_PATH: &str = "/assets/xterm-addon-fit.min.js";
+const XTERM_ADDON_FIT_JS: &[u8] = include_bytes!("../assets/xterm-addon-fit.min.js");
 
 const INDEX_HTML: &str = r#"<!doctype html>
 <html lang="en">
@@ -631,7 +637,7 @@ const INDEX_HTML: &str = r#"<!doctype html>
     const pendingRetryKeys = new Set();
     const pendingDeepReviewKeys = new Set();
     const optimisticPausedStates = new Map();
-    const dashboardViewStorageKey = "symphony-rs.dashboard-view";
+    const dashboardViewStorageKey = "bigbrother.dashboard-view";
     let latestPrs = [];
     let latestReviewRequests = [];
     let currentView = "prs";
@@ -1024,9 +1030,9 @@ const PR_DETAIL_HTML: &str = r##"<!doctype html>
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>BigBrother Run View</title>
   <link rel="icon" type="image/png" href="/assets/bigbrother-mark.png">
-  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/xterm@5.5.0/css/xterm.min.css">
-  <script src="https://cdn.jsdelivr.net/npm/xterm@5.5.0/lib/xterm.min.js"></script>
-  <script src="https://cdn.jsdelivr.net/npm/xterm-addon-fit@0.8.0/lib/xterm-addon-fit.min.js"></script>
+  <link rel="stylesheet" href="/assets/xterm.min.css">
+  <script src="/assets/xterm.min.js"></script>
+  <script src="/assets/xterm-addon-fit.min.js"></script>
   <style>
     :root {
       color-scheme: light;
@@ -1423,35 +1429,41 @@ const PR_DETAIL_HTML: &str = r##"<!doctype html>
         return null;
       }
 
-      terminal = new window.Terminal({
-        convertEol: false,
-        disableStdin: true,
-        cursorBlink: false,
-        scrollback: 6000,
-        theme: {
-          background: "#1e1e1e",
-          foreground: "#cccccc",
-          cursor: "#aeafad",
-          cursorAccent: "#1e1e1e",
-          selectionBackground: "rgba(255, 255, 255, 0.18)",
-          black: "#000000",
-          red: "#cd3131",
-          green: "#0dbc79",
-          yellow: "#e5e510",
-          blue: "#2472c8",
-          magenta: "#bc3fbc",
-          cyan: "#11a8cd",
-          white: "#e5e5e5",
-          brightBlack: "#666666",
-          brightRed: "#f14c4c",
-          brightGreen: "#23d18b",
-          brightYellow: "#f5f543",
-          brightBlue: "#3b8eea",
-          brightMagenta: "#d670d6",
-          brightCyan: "#29b8db",
-          brightWhite: "#ffffff"
-        }
-      });
+      try {
+        terminal = new window.Terminal({
+          convertEol: false,
+          disableStdin: true,
+          cursorBlink: false,
+          scrollback: 6000,
+          theme: {
+            background: "#1e1e1e",
+            foreground: "#cccccc",
+            cursor: "#aeafad",
+            cursorAccent: "#1e1e1e",
+            selectionBackground: "rgba(255, 255, 255, 0.18)",
+            black: "#000000",
+            red: "#cd3131",
+            green: "#0dbc79",
+            yellow: "#e5e510",
+            blue: "#2472c8",
+            magenta: "#bc3fbc",
+            cyan: "#11a8cd",
+            white: "#e5e5e5",
+            brightBlack: "#666666",
+            brightRed: "#f14c4c",
+            brightGreen: "#23d18b",
+            brightYellow: "#f5f543",
+            brightBlue: "#3b8eea",
+            brightMagenta: "#d670d6",
+            brightCyan: "#29b8db",
+            brightWhite: "#ffffff"
+          }
+        });
+      } catch (error) {
+        console.error("Failed to initialize terminal renderer", error);
+        terminal = null;
+        return null;
+      }
 
       if (window.FitAddon && window.FitAddon.FitAddon) {
         fitAddon = new window.FitAddon.FitAddon();
@@ -1505,7 +1517,7 @@ const PR_DETAIL_HTML: &str = r##"<!doctype html>
       terminalSocketKey = null;
     }
 
-    function showTerminalFallback(text) {
+    function showTextOutput(text) {
       closeTerminalSocket();
       renderedTerminalKey = null;
       renderedTerminalRecording = null;
@@ -1519,7 +1531,7 @@ const PR_DETAIL_HTML: &str = r##"<!doctype html>
     function showTerminalReplay(pr, shouldReset) {
       const activeTerminal = ensureTerminal();
       if (!activeTerminal) {
-        showTerminalFallback(pr.terminal_recording || pr.detail_output || detailOutputStatusText(pr));
+        showTextOutput("Terminal renderer failed to load. Reload the page to try again.");
         return false;
       }
 
@@ -1597,9 +1609,11 @@ const PR_DETAIL_HTML: &str = r##"<!doctype html>
           connectTerminalSocket(pr);
           return;
         }
+
+        return;
       }
 
-      showTerminalFallback(pr.detail_output || pr.terminal_recording || detailOutputStatusText(pr));
+      showTextOutput(pr.detail_output || detailOutputStatusText(pr));
     }
 
     async function refresh() {
@@ -1610,7 +1624,7 @@ const PR_DETAIL_HTML: &str = r##"<!doctype html>
         document.getElementById("subtitle").textContent = "Open this page from the dashboard so the PR key is included.";
         document.getElementById("terminal-meta").textContent = "-";
         document.getElementById("terminal-label").textContent = "Last Run Output";
-        showTerminalFallback("No PR key was provided.");
+        showTextOutput("No PR key was provided.");
         return;
       }
 
@@ -1639,7 +1653,7 @@ const PR_DETAIL_HTML: &str = r##"<!doctype html>
       document.getElementById("subtitle").textContent = error.message;
       document.getElementById("terminal-label").textContent = "Last Run Output";
       document.getElementById("terminal-meta").textContent = "-";
-      showTerminalFallback(error.message);
+      showTextOutput(error.message);
     });
     setInterval(() => refresh().catch(() => {}), 1500);
   </script>
@@ -1763,6 +1777,9 @@ pub fn router(supervisor: Arc<Supervisor>) -> Router {
         .route("/", get(index))
         .route("/pr", get(pr_detail_page))
         .route(BIGBROTHER_MARK_PATH, get(bigbrother_mark))
+        .route(XTERM_CSS_PATH, get(xterm_css))
+        .route(XTERM_JS_PATH, get(xterm_js))
+        .route(XTERM_ADDON_FIT_JS_PATH, get(xterm_addon_fit_js))
         .route("/api/health", get(health))
         .route("/api/activity", get(activity))
         .route("/api/prs", get(list_prs))
@@ -1805,6 +1822,33 @@ async fn pr_detail_page() -> Html<&'static str> {
 
 async fn bigbrother_mark() -> impl IntoResponse {
     ([(header::CONTENT_TYPE, "image/png")], BIGBROTHER_MARK_PNG)
+}
+
+async fn xterm_css() -> impl IntoResponse {
+    (
+        [(header::CONTENT_TYPE, "text/css; charset=utf-8")],
+        XTERM_CSS,
+    )
+}
+
+async fn xterm_js() -> impl IntoResponse {
+    (
+        [(
+            header::CONTENT_TYPE,
+            "application/javascript; charset=utf-8",
+        )],
+        XTERM_JS,
+    )
+}
+
+async fn xterm_addon_fit_js() -> impl IntoResponse {
+    (
+        [(
+            header::CONTENT_TYPE,
+            "application/javascript; charset=utf-8",
+        )],
+        XTERM_ADDON_FIT_JS,
+    )
 }
 
 async fn health(State(supervisor): State<Arc<Supervisor>>) -> Json<HealthResponse> {
@@ -2310,12 +2354,12 @@ mod tests {
 
     fn sample_pr() -> PullRequest {
         PullRequest {
-            key: "openai/symphony#7".to_owned(),
-            repo_full_name: "openai/symphony".to_owned(),
+            key: "openai/bigbrother#7".to_owned(),
+            repo_full_name: "openai/bigbrother".to_owned(),
             number: 7,
             title: "Test".to_owned(),
             body: None,
-            url: "https://github.com/openai/symphony/pull/7".to_owned(),
+            url: "https://github.com/openai/bigbrother/pull/7".to_owned(),
             author_login: "connor".to_owned(),
             labels: vec![],
             created_at: chrono::Utc.with_ymd_and_hms(2026, 3, 31, 18, 0, 0).unwrap(),
@@ -2326,8 +2370,8 @@ mod tests {
             head_ref: "feature/test".to_owned(),
             base_sha: "def456".to_owned(),
             base_ref: "main".to_owned(),
-            clone_url: "https://github.com/openai/symphony.git".to_owned(),
-            ssh_url: "git@github.com:openai/symphony.git".to_owned(),
+            clone_url: "https://github.com/openai/bigbrother.git".to_owned(),
+            ssh_url: "git@github.com:openai/bigbrother.git".to_owned(),
             ci_status: CiStatus::Failure,
             ci_updated_at: Some(
                 chrono::Utc

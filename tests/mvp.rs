@@ -13,10 +13,7 @@ use axum::{
     body::{to_bytes, Body},
     http::{header, Request},
 };
-use chrono::{TimeZone, Utc};
-use futures::future::BoxFuture;
-use serde_json::{json, Value};
-use symphony_rs::{
+use bigbrother::{
     config::{
         AgentConfig, AgentPromptTemplates, DaemonConfig, ResolvedConfig, ResolvedGitHubConfig,
         ResolvedNotificationsConfig, ResolvedWorkspaceConfig, UiConfig,
@@ -30,6 +27,9 @@ use symphony_rs::{
     service::{AgentRunner, GitHubProvider, GitHubRequestStats, PollQueryState, Supervisor},
     web,
 };
+use chrono::{TimeZone, Utc};
+use futures::future::BoxFuture;
+use serde_json::{json, Value};
 use tokio::sync::Semaphore;
 use tokio::time::{timeout, Duration};
 use tower::util::ServiceExt;
@@ -432,7 +432,7 @@ async fn mvp_flow_tracks_prs_runs_actionable_one_and_does_not_duplicate() {
     let prs = running_payload["prs"].as_array().expect("prs array");
     assert_eq!(prs.len(), 2, "both PRs should be visible");
     assert_eq!(
-        status_for(prs, "openai/symphony#7"),
+        status_for(prs, "openai/bigbrother#7"),
         Some("running"),
         "actionable PR should become running while runner is active",
     );
@@ -451,12 +451,12 @@ async fn mvp_flow_tracks_prs_runs_actionable_one_and_does_not_duplicate() {
     let post_run_payload = get_json(supervisor.clone(), "/api/prs").await;
     let prs = post_run_payload["prs"].as_array().expect("prs array");
     assert_eq!(
-        status_for(prs, "openai/symphony#7"),
+        status_for(prs, "openai/bigbrother#7"),
         Some("waiting review"),
         "completed actionable PR should settle into waiting review after the signal is processed",
     );
     assert_eq!(
-        summary_for(prs, "openai/symphony#7"),
+        summary_for(prs, "openai/bigbrother#7"),
         Some("CI failure handling completed"),
         "latest summary should stay concise and trigger-aware",
     );
@@ -509,7 +509,7 @@ async fn pause_api_toggles_review_wait_state_for_a_tracked_pr() {
         supervisor.clone(),
         "/api/prs/pause",
         json!({
-            "key": "openai/symphony#1",
+            "key": "openai/bigbrother#1",
             "paused": true,
         }),
     )
@@ -520,8 +520,8 @@ async fn pause_api_toggles_review_wait_state_for_a_tracked_pr() {
 
     let prs_payload = get_json(supervisor.clone(), "/api/prs").await;
     let prs = prs_payload["prs"].as_array().expect("prs array");
-    assert_eq!(status_for(prs, "openai/symphony#1"), Some("untracked"));
-    assert_eq!(is_paused_for(prs, "openai/symphony#1"), Some(true));
+    assert_eq!(status_for(prs, "openai/bigbrother#1"), Some("untracked"));
+    assert_eq!(is_paused_for(prs, "openai/bigbrother#1"), Some(true));
     let paused_health = get_json(supervisor.clone(), "/api/health").await;
     assert_eq!(paused_health["tracked_prs"], 1);
     assert_eq!(paused_health["active_tracked_prs"], 0);
@@ -531,7 +531,7 @@ async fn pause_api_toggles_review_wait_state_for_a_tracked_pr() {
         supervisor.clone(),
         "/api/prs/pause",
         json!({
-            "key": "openai/symphony#1",
+            "key": "openai/bigbrother#1",
             "paused": false,
         }),
     )
@@ -541,8 +541,11 @@ async fn pause_api_toggles_review_wait_state_for_a_tracked_pr() {
 
     let prs_payload = get_json(supervisor, "/api/prs").await;
     let prs = prs_payload["prs"].as_array().expect("prs array");
-    assert_eq!(status_for(prs, "openai/symphony#1"), Some("waiting review"));
-    assert_eq!(is_paused_for(prs, "openai/symphony#1"), Some(false));
+    assert_eq!(
+        status_for(prs, "openai/bigbrother#1"),
+        Some("waiting review")
+    );
+    assert_eq!(is_paused_for(prs, "openai/bigbrother#1"), Some(false));
 }
 
 #[tokio::test]
@@ -571,14 +574,17 @@ async fn non_trivial_run_becomes_needs_decision_and_resume_clears_it() {
 
     let prs_payload = get_json(supervisor.clone(), "/api/prs").await;
     let prs = prs_payload["prs"].as_array().expect("prs array");
-    assert_eq!(status_for(prs, "openai/symphony#7"), Some("needs decision"));
-    assert_eq!(is_paused_for(prs, "openai/symphony#7"), Some(true));
     assert_eq!(
-        summary_for(prs, "openai/symphony#7"),
+        status_for(prs, "openai/bigbrother#7"),
+        Some("needs decision")
+    );
+    assert_eq!(is_paused_for(prs, "openai/bigbrother#7"), Some(true));
+    assert_eq!(
+        summary_for(prs, "openai/bigbrother#7"),
         Some("operator decision required")
     );
 
-    let detail = get_json(supervisor.clone(), "/api/pr?key=openai%2Fsymphony%237").await;
+    let detail = get_json(supervisor.clone(), "/api/pr?key=openai%2Fbigbrother%237").await;
     assert_eq!(detail["status"], json!("needs decision"));
     assert_eq!(detail["is_paused"], json!(true));
     assert_eq!(
@@ -591,7 +597,7 @@ async fn non_trivial_run_becomes_needs_decision_and_resume_clears_it() {
     );
 
     let resumed = supervisor
-        .set_pr_paused("openai/symphony#7", false)
+        .set_pr_paused("openai/bigbrother#7", false)
         .await
         .expect("resume should succeed")
         .expect("PR should exist");
@@ -627,7 +633,7 @@ async fn review_needs_decision_resume_marks_current_review_signal_processed() {
         .expect("poll should process review-feedback PR");
 
     let resumed = supervisor
-        .set_pr_paused("openai/symphony#19", false)
+        .set_pr_paused("openai/bigbrother#19", false)
         .await
         .expect("resume should succeed")
         .expect("PR should exist");
@@ -845,7 +851,7 @@ async fn scheduled_poll_keeps_paused_pr_snapshot_frozen() {
         .await
         .expect("initial poll should succeed");
     supervisor
-        .set_pr_paused("openai/symphony#1", true)
+        .set_pr_paused("openai/bigbrother#1", true)
         .await
         .expect("pause operation should succeed")
         .expect("tracked PR should exist");
@@ -870,7 +876,7 @@ async fn scheduled_poll_keeps_paused_pr_snapshot_frozen() {
         .expect("dashboard state mutex should not be poisoned");
     let tracked = state
         .tracked_prs
-        .get("openai/symphony#1")
+        .get("openai/bigbrother#1")
         .expect("paused PR should remain tracked");
     assert_eq!(tracked.pull_request.title, "Keep polling healthy");
     assert_eq!(tracked.status, TrackingStatus::Untracked);
@@ -1028,7 +1034,9 @@ async fn pr_detail_page_uses_bigbrother_branding() {
     assert!(
         html.contains("<title>BigBrother Run View</title>")
             && html.contains(r#"<link rel="icon" type="image/png" href="/assets/bigbrother-mark.png">"#)
-            && html.contains(r#"<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/xterm@5.5.0/css/xterm.min.css">"#)
+            && html.contains(r#"<link rel="stylesheet" href="/assets/xterm.min.css">"#)
+            && html.contains(r#"<script src="/assets/xterm.min.js"></script>"#)
+            && html.contains(r#"<script src="/assets/xterm-addon-fit.min.js"></script>"#)
             && html.contains(r#"/api/pr/terminal/ws?key=${encodeURIComponent(pr.key)}"#)
             && html.contains("<div class=\"brand-lockup\">")
             && html.contains("<h1>BigBrother</h1>")
@@ -1036,6 +1044,7 @@ async fn pr_detail_page_uses_bigbrother_branding() {
             && html.contains("src=\"/assets/bigbrother-mark.png\"")
             && html.contains("id=\"title\" class=\"pr-title\"")
             && html.contains("id=\"subtitle\" class=\"pr-meta\"")
+            && !html.contains("cdn.jsdelivr.net")
             && !html.contains("Open GitHub PR")
             && !html.contains("Attention:")
             && !html.contains("PR run details and saved output.")
@@ -1086,6 +1095,68 @@ async fn bigbrother_brand_asset_is_served_as_png() {
 }
 
 #[tokio::test]
+async fn terminal_assets_are_served_locally() {
+    let supervisor = Arc::new(
+        Supervisor::new(
+            sample_config(
+                unique_temp_path("state.json"),
+                unique_temp_path("workspaces"),
+            ),
+            Arc::new(FakeGitHubProvider { prs: vec![] }),
+            Arc::new(FakeAgentRunner {
+                invocations: Arc::new(AtomicUsize::new(0)),
+                started: Arc::new(Semaphore::new(0)),
+                allow_finish: Arc::new(Semaphore::new(0)),
+            }),
+        )
+        .expect("supervisor should initialize"),
+    );
+
+    for (path, expected_content_type, expected_body_fragment) in [
+        ("/assets/xterm.min.css", "text/css; charset=utf-8", ".xterm"),
+        (
+            "/assets/xterm.min.js",
+            "application/javascript; charset=utf-8",
+            "Terminal",
+        ),
+        (
+            "/assets/xterm-addon-fit.min.js",
+            "application/javascript; charset=utf-8",
+            "FitAddon",
+        ),
+    ] {
+        let response = web::router(supervisor.clone())
+            .oneshot(
+                Request::builder()
+                    .uri(path)
+                    .body(Body::empty())
+                    .expect("request should build"),
+            )
+            .await
+            .expect("route should respond");
+        assert_eq!(response.status(), 200, "{path} should be served");
+        assert_eq!(
+            response.headers().get(header::CONTENT_TYPE).unwrap(),
+            expected_content_type,
+            "{path} should use the correct content type",
+        );
+
+        let bytes = to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("body should collect");
+        let body = String::from_utf8(bytes.to_vec()).expect("asset body should be UTF-8");
+        assert!(
+            body.contains(expected_body_fragment),
+            "{path} should include the expected runtime content",
+        );
+        assert!(
+            !body.contains("Couldn't find the requested release version"),
+            "{path} should not serve a broken CDN placeholder",
+        );
+    }
+}
+
+#[tokio::test]
 async fn review_requests_api_lists_requested_review_prs() {
     let supervisor = Arc::new(
         Supervisor::new(
@@ -1115,7 +1186,7 @@ async fn review_requests_api_lists_requested_review_prs() {
     let payload = get_json(supervisor, "/api/review-requests").await;
     let prs = payload["prs"].as_array().expect("review request array");
     assert_eq!(prs.len(), 1);
-    assert_eq!(prs[0]["key"], json!("openai/symphony#18"));
+    assert_eq!(prs[0]["key"], json!("openai/bigbrother#18"));
     assert_eq!(prs[0]["status"], json!("requested review"));
     assert_eq!(prs[0]["ci_status"], json!("-"));
     assert_eq!(prs[0]["review_status"], json!("-"));
@@ -1154,7 +1225,7 @@ async fn deep_review_action_runs_requested_review_pr_and_persists_output() {
     let started = post_json(
         supervisor.clone(),
         "/api/review-requests/deep-review",
-        json!({ "key": "openai/symphony#18" }),
+        json!({ "key": "openai/bigbrother#18" }),
     )
     .await;
     assert_eq!(started["ok"], json!(true));
@@ -1169,7 +1240,7 @@ async fn deep_review_action_runs_requested_review_pr_and_persists_output() {
 
     let running = get_json(supervisor.clone(), "/api/review-requests").await;
     let prs = running["prs"].as_array().expect("review request array");
-    assert_eq!(status_for(prs, "openai/symphony#18"), Some("running"));
+    assert_eq!(status_for(prs, "openai/bigbrother#18"), Some("running"));
 
     runner.allow_finish.add_permits(1);
     wait_for_invocations(&runner.invocations, 1).await;
@@ -1177,13 +1248,13 @@ async fn deep_review_action_runs_requested_review_pr_and_persists_output() {
 
     let completed = get_json(supervisor.clone(), "/api/review-requests").await;
     let prs = completed["prs"].as_array().expect("review request array");
-    assert_eq!(status_for(prs, "openai/symphony#18"), Some("reviewed"));
+    assert_eq!(status_for(prs, "openai/bigbrother#18"), Some("reviewed"));
     assert_eq!(
-        summary_for(prs, "openai/symphony#18"),
+        summary_for(prs, "openai/bigbrother#18"),
         Some("deep review completed"),
     );
 
-    let detail = get_json(supervisor, "/api/pr?key=openai%2Fsymphony%2318").await;
+    let detail = get_json(supervisor, "/api/pr?key=openai%2Fbigbrother%2318").await;
     assert_eq!(detail["status"], json!("reviewed"));
     assert_eq!(detail["latest_summary"], json!("deep review completed"));
     assert_eq!(
@@ -1195,7 +1266,7 @@ async fn deep_review_action_runs_requested_review_pr_and_persists_output() {
         .lock()
         .expect("provider comments mutex should not be poisoned");
     assert_eq!(comments.len(), 1);
-    assert_eq!(comments[0].0, "openai/symphony#18");
+    assert_eq!(comments[0].0, "openai/bigbrother#18");
     assert!(
         comments[0].1.contains("### Deep Review")
             && comments[0]
@@ -1234,7 +1305,10 @@ async fn approved_green_pr_is_exposed_as_waiting_merge() {
 
     let prs_payload = get_json(supervisor, "/api/prs").await;
     let prs = prs_payload["prs"].as_array().expect("prs array");
-    assert_eq!(status_for(prs, "openai/symphony#9"), Some("waiting merge"));
+    assert_eq!(
+        status_for(prs, "openai/bigbrother#9"),
+        Some("waiting merge")
+    );
 }
 
 #[tokio::test]
@@ -1265,7 +1339,7 @@ async fn approved_pr_with_pending_ci_reports_waiting_for_ci() {
     let prs_payload = get_json(supervisor, "/api/prs").await;
     let prs = prs_payload["prs"].as_array().expect("prs array");
     assert_eq!(
-        status_for(prs, "openai/symphony#10"),
+        status_for(prs, "openai/bigbrother#10"),
         Some("waiting for CI")
     );
 }
@@ -1297,7 +1371,7 @@ async fn conflicting_pr_is_exposed_as_conflict() {
 
     let prs_payload = get_json(supervisor, "/api/prs").await;
     let prs = prs_payload["prs"].as_array().expect("prs array");
-    assert_eq!(status_for(prs, "openai/symphony#11"), Some("conflict"));
+    assert_eq!(status_for(prs, "openai/bigbrother#11"), Some("conflict"));
 }
 
 #[tokio::test]
@@ -1330,7 +1404,7 @@ async fn unresolved_conflict_run_remains_actionable_after_resume() {
     let prs_payload = get_json(supervisor.clone(), "/api/prs").await;
     let prs = prs_payload["prs"].as_array().expect("prs array");
     assert_eq!(
-        status_for(prs, "openai/symphony#11"),
+        status_for(prs, "openai/bigbrother#11"),
         Some("conflict"),
         "a conflict run that leaves the PR conflicting should stay actionable",
     );
@@ -1340,23 +1414,23 @@ async fn unresolved_conflict_run_remains_actionable_after_resume() {
     )
     .expect("state file should be valid json");
     assert_eq!(
-        persisted["prs"]["openai/symphony#11"]["last_processed_conflict_head_sha"],
+        persisted["prs"]["openai/bigbrother#11"]["last_processed_conflict_head_sha"],
         Value::Null,
         "an unresolved conflict must not be marked as processed",
     );
     assert_eq!(
-        persisted["prs"]["openai/symphony#11"]["last_run_status"],
+        persisted["prs"]["openai/bigbrother#11"]["last_run_status"],
         json!("success"),
         "without an immediate post-run recheck, the run result itself stays successful",
     );
 
     supervisor
-        .set_pr_paused("openai/symphony#11", true)
+        .set_pr_paused("openai/bigbrother#11", true)
         .await
         .expect("pause operation should succeed")
         .expect("tracked PR should exist");
     let resumed = supervisor
-        .set_pr_paused("openai/symphony#11", false)
+        .set_pr_paused("openai/bigbrother#11", false)
         .await
         .expect("resume operation should succeed")
         .expect("tracked PR should exist");
@@ -1409,7 +1483,7 @@ async fn review_run_success_leaves_same_pr_ci_failure_actionable() {
     let prs_payload = get_json(supervisor.clone(), "/api/prs").await;
     let prs = prs_payload["prs"].as_array().expect("prs array");
     assert_eq!(
-        status_for(prs, "openai/symphony#12"),
+        status_for(prs, "openai/bigbrother#12"),
         Some("needs attention"),
         "the review-triggered success should not consume the unchanged failing CI signal",
     );
@@ -1472,7 +1546,7 @@ async fn running_pr_exposes_live_terminal() {
     let prs = running_payload["prs"].as_array().expect("prs array");
     let running_pr = prs
         .iter()
-        .find(|pr| pr["key"] == json!("openai/symphony#7"))
+        .find(|pr| pr["key"] == json!("openai/bigbrother#7"))
         .expect("running PR should be visible");
     assert_eq!(running_pr["status"], json!("running"));
     assert_eq!(running_pr["details_label"], json!("Started"));
@@ -1484,8 +1558,8 @@ async fn running_pr_exposes_live_terminal() {
     assert_eq!(running_pr["terminal_recording"], Value::Null);
     assert_eq!(running_pr["detail_output"], Value::Null);
 
-    let detail_payload = get_json(supervisor.clone(), "/api/pr?key=openai%2Fsymphony%237").await;
-    assert_eq!(detail_payload["key"], json!("openai/symphony#7"));
+    let detail_payload = get_json(supervisor.clone(), "/api/pr?key=openai%2Fbigbrother%237").await;
+    assert_eq!(detail_payload["key"], json!("openai/bigbrother#7"));
     assert_eq!(
         detail_payload["latest_summary"],
         json!("investigating CI failure")
@@ -1533,7 +1607,7 @@ async fn completed_pr_detail_shows_saved_run_output() {
         .await
         .expect("poll should finish the fake run");
 
-    let detail_payload = get_json(supervisor.clone(), "/api/pr?key=openai%2Fsymphony%237").await;
+    let detail_payload = get_json(supervisor.clone(), "/api/pr?key=openai%2Fbigbrother%237").await;
     assert_eq!(detail_payload["status"], json!("waiting review"));
     assert_eq!(detail_payload["details_label"], json!("Last run"));
     assert!(detail_payload["details_at"].is_string());
@@ -1604,7 +1678,7 @@ async fn running_pr_does_not_fall_back_to_saved_terminal_snapshot() {
         );
     }
 
-    let detail_payload = get_json(supervisor, "/api/pr?key=openai%2Fsymphony%237").await;
+    let detail_payload = get_json(supervisor, "/api/pr?key=openai%2Fbigbrother%237").await;
     assert_eq!(detail_payload["status"], json!("running"));
     assert_eq!(detail_payload["live_output"], Value::Null);
     assert_eq!(detail_payload["detail_output"], Value::Null);
@@ -1661,7 +1735,7 @@ async fn saved_run_timestamp_is_exposed_in_pr_list() {
     let prs = prs_payload["prs"].as_array().expect("prs array");
     let pr = prs
         .iter()
-        .find(|pr| pr["key"] == json!("openai/symphony#7"))
+        .find(|pr| pr["key"] == json!("openai/bigbrother#7"))
         .expect("tracked PR should be visible");
     assert_eq!(pr["details_label"], json!("Last run"));
     assert_eq!(
@@ -1714,7 +1788,7 @@ async fn paused_pr_does_not_auto_run_until_resumed() {
     }
 
     let paused = supervisor
-        .set_pr_paused("openai/symphony#7", true)
+        .set_pr_paused("openai/bigbrother#7", true)
         .await
         .expect("pause operation should succeed")
         .expect("tracked PR should exist");
@@ -1732,7 +1806,7 @@ async fn paused_pr_does_not_auto_run_until_resumed() {
     );
 
     let resumed = supervisor
-        .set_pr_paused("openai/symphony#7", false)
+        .set_pr_paused("openai/bigbrother#7", false)
         .await
         .expect("resume operation should succeed")
         .expect("tracked PR should exist");
@@ -1791,13 +1865,13 @@ async fn resume_targeted_check_fetches_only_the_resumed_pr() {
     }
 
     supervisor
-        .set_pr_paused("openai/symphony#7", true)
+        .set_pr_paused("openai/bigbrother#7", true)
         .await
         .expect("pause operation should succeed")
         .expect("tracked PR should exist");
 
     let resumed = supervisor
-        .set_pr_paused("openai/symphony#7", false)
+        .set_pr_paused("openai/bigbrother#7", false)
         .await
         .expect("resume operation should succeed")
         .expect("tracked PR should exist");
@@ -1851,12 +1925,12 @@ async fn health_keeps_total_matching_prs_after_targeted_resume_check() {
     assert_eq!(initial_health["all_prs"], 7);
 
     supervisor
-        .set_pr_paused("openai/symphony#1", true)
+        .set_pr_paused("openai/bigbrother#1", true)
         .await
         .expect("pause operation should succeed")
         .expect("tracked PR should exist");
     supervisor
-        .set_pr_paused("openai/symphony#1", false)
+        .set_pr_paused("openai/bigbrother#1", false)
         .await
         .expect("resume operation should succeed")
         .expect("tracked PR should exist");
@@ -1902,7 +1976,7 @@ async fn paused_state_survives_supervisor_restart() {
         supervisor,
         "/api/prs/pause",
         json!({
-            "key": "openai/symphony#1",
+            "key": "openai/bigbrother#1",
             "paused": true,
         }),
     )
@@ -1935,8 +2009,8 @@ async fn paused_state_survives_supervisor_restart() {
 
     let prs_payload = get_json(restarted, "/api/prs").await;
     let prs = prs_payload["prs"].as_array().expect("prs array");
-    assert_eq!(status_for(prs, "openai/symphony#1"), Some("untracked"));
-    assert_eq!(is_paused_for(prs, "openai/symphony#1"), Some(true));
+    assert_eq!(status_for(prs, "openai/bigbrother#1"), Some("untracked"));
+    assert_eq!(is_paused_for(prs, "openai/bigbrother#1"), Some(true));
 }
 
 #[tokio::test]
@@ -1967,11 +2041,11 @@ async fn failed_runs_stay_failed_until_manually_retried() {
     let prs_payload = get_json(supervisor.clone(), "/api/prs").await;
     let prs = prs_payload["prs"].as_array().expect("prs array");
     assert_eq!(
-        status_for(prs, "openai/symphony#7"),
+        status_for(prs, "openai/bigbrother#7"),
         Some("failed"),
         "failed runs should surface a failed status while the signal remains actionable",
     );
-    assert_eq!(is_paused_for(prs, "openai/symphony#7"), Some(false));
+    assert_eq!(is_paused_for(prs, "openai/bigbrother#7"), Some(false));
     assert_eq!(
         runner.invocations.load(Ordering::SeqCst),
         1,
@@ -1985,8 +2059,8 @@ async fn failed_runs_stay_failed_until_manually_retried() {
 
     let prs_payload = get_json(supervisor, "/api/prs").await;
     let prs = prs_payload["prs"].as_array().expect("prs array");
-    assert_eq!(status_for(prs, "openai/symphony#7"), Some("failed"));
-    assert_eq!(is_paused_for(prs, "openai/symphony#7"), Some(false));
+    assert_eq!(status_for(prs, "openai/bigbrother#7"), Some("failed"));
+    assert_eq!(is_paused_for(prs, "openai/bigbrother#7"), Some(false));
     assert_eq!(
         runner.invocations.load(Ordering::SeqCst),
         1,
@@ -2022,7 +2096,7 @@ async fn retry_action_rechecks_the_current_failed_signal() {
     let retried = post_json(
         supervisor.clone(),
         "/api/prs/retry",
-        json!({ "key": "openai/symphony#7" }),
+        json!({ "key": "openai/bigbrother#7" }),
     )
     .await;
     assert_eq!(retried["pr"]["status"], json!("failed"));
@@ -2038,8 +2112,8 @@ async fn retry_action_rechecks_the_current_failed_signal() {
 
     let prs_payload = get_json(supervisor, "/api/prs").await;
     let prs = prs_payload["prs"].as_array().expect("prs array");
-    assert_eq!(status_for(prs, "openai/symphony#7"), Some("failed"));
-    assert_eq!(is_paused_for(prs, "openai/symphony#7"), Some(false));
+    assert_eq!(status_for(prs, "openai/bigbrother#7"), Some("failed"));
+    assert_eq!(is_paused_for(prs, "openai/bigbrother#7"), Some(false));
 }
 
 async fn get_json(supervisor: Arc<Supervisor>, path: &str) -> Value {
@@ -2155,7 +2229,7 @@ fn sample_config(state_path: PathBuf, workspace_root: PathBuf) -> ResolvedConfig
         workspace: ResolvedWorkspaceConfig {
             root: workspace_root,
             repo_map: BTreeMap::new(),
-            git_transport: symphony_rs::config::GitTransport::Https,
+            git_transport: bigbrother::config::GitTransport::Https,
         },
         agent: AgentConfig {
             command: "fake-agent".to_owned(),
@@ -2173,7 +2247,7 @@ fn sample_config(state_path: PathBuf, workspace_root: PathBuf) -> ResolvedConfig
 
 fn idle_pr() -> PullRequest {
     base_pr(
-        "openai/symphony#1",
+        "openai/bigbrother#1",
         1,
         "Keep polling healthy",
         "idle-sha",
@@ -2187,7 +2261,7 @@ fn idle_pr() -> PullRequest {
 
 fn actionable_pr() -> PullRequest {
     base_pr(
-        "openai/symphony#7",
+        "openai/bigbrother#7",
         7,
         "Fix broken CI",
         "actionable-sha",
@@ -2201,7 +2275,7 @@ fn actionable_pr() -> PullRequest {
 
 fn review_request_pr() -> PullRequest {
     base_pr(
-        "openai/symphony#18",
+        "openai/bigbrother#18",
         18,
         "Please review this risky refactor",
         "review-request-sha",
@@ -2215,7 +2289,7 @@ fn review_request_pr() -> PullRequest {
 
 fn review_feedback_only_pr() -> PullRequest {
     base_pr(
-        "openai/symphony#19",
+        "openai/bigbrother#19",
         19,
         "Needs manual judgment on reviewer request",
         "review-feedback-sha",
@@ -2229,7 +2303,7 @@ fn review_feedback_only_pr() -> PullRequest {
 
 fn approved_green_pr() -> PullRequest {
     base_pr(
-        "openai/symphony#9",
+        "openai/bigbrother#9",
         9,
         "Ready to land",
         "approved-green-sha",
@@ -2243,7 +2317,7 @@ fn approved_green_pr() -> PullRequest {
 
 fn approved_pending_pr() -> PullRequest {
     base_pr(
-        "openai/symphony#10",
+        "openai/bigbrother#10",
         10,
         "Approved but checks still running",
         "approved-pending-sha",
@@ -2257,7 +2331,7 @@ fn approved_pending_pr() -> PullRequest {
 
 fn conflicting_pr() -> PullRequest {
     let mut pr = base_pr(
-        "openai/symphony#11",
+        "openai/bigbrother#11",
         11,
         "Needs base branch merge",
         "conflict-sha",
@@ -2274,7 +2348,7 @@ fn conflicting_pr() -> PullRequest {
 
 fn review_and_ci_pr() -> PullRequest {
     base_pr(
-        "openai/symphony#12",
+        "openai/bigbrother#12",
         12,
         "Needs review updates and CI fixes",
         "review-ci-sha",
@@ -2299,11 +2373,11 @@ fn base_pr(
 ) -> PullRequest {
     PullRequest {
         key: key.to_owned(),
-        repo_full_name: "openai/symphony".to_owned(),
+        repo_full_name: "openai/bigbrother".to_owned(),
         number,
         title: title.to_owned(),
         body: Some("Test PR".to_owned()),
-        url: format!("https://github.com/openai/symphony/pull/{number}"),
+        url: format!("https://github.com/openai/bigbrother/pull/{number}"),
         author_login: "connor".to_owned(),
         labels: vec![],
         created_at: Utc.with_ymd_and_hms(2026, 3, 30, 18, 0, 0).unwrap(),
@@ -2314,8 +2388,8 @@ fn base_pr(
         head_ref: format!("feature/{number}"),
         base_sha: format!("base-sha-{number}"),
         base_ref: "main".to_owned(),
-        clone_url: "https://github.com/openai/symphony.git".to_owned(),
-        ssh_url: "git@github.com:openai/symphony.git".to_owned(),
+        clone_url: "https://github.com/openai/bigbrother.git".to_owned(),
+        ssh_url: "git@github.com:openai/bigbrother.git".to_owned(),
         ci_status,
         ci_updated_at,
         review_decision,
@@ -2352,5 +2426,5 @@ fn unique_temp_path(file_name: &str) -> PathBuf {
         .expect("clock should work")
         .as_nanos();
     let counter = TEMP_PATH_COUNTER.fetch_add(1, Ordering::SeqCst);
-    std::env::temp_dir().join(format!("symphony-rs-{nonce}-{counter}-{file_name}"))
+    std::env::temp_dir().join(format!("bigbrother-{nonce}-{counter}-{file_name}"))
 }

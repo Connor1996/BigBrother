@@ -989,12 +989,12 @@ mod tests {
 
     fn sample_pull_request() -> PullRequest {
         PullRequest {
-            key: "openai/symphony#7".to_owned(),
-            repo_full_name: "openai/symphony".to_owned(),
+            key: "openai/bigbrother#7".to_owned(),
+            repo_full_name: "openai/bigbrother".to_owned(),
             number: 7,
             title: "Improve polling".to_owned(),
             body: Some("Reduce GitHub load".to_owned()),
-            url: "https://github.com/openai/symphony/pull/7".to_owned(),
+            url: "https://github.com/openai/bigbrother/pull/7".to_owned(),
             author_login: "author".to_owned(),
             labels: vec!["automation".to_owned()],
             created_at: chrono::Utc.with_ymd_and_hms(2026, 3, 31, 18, 0, 0).unwrap(),
@@ -1005,8 +1005,8 @@ mod tests {
             head_ref: "feature/polling".to_owned(),
             base_sha: "def456".to_owned(),
             base_ref: "main".to_owned(),
-            clone_url: "https://github.com/openai/symphony.git".to_owned(),
-            ssh_url: "git@github.com:openai/symphony.git".to_owned(),
+            clone_url: "https://github.com/openai/bigbrother.git".to_owned(),
+            ssh_url: "git@github.com:openai/bigbrother.git".to_owned(),
             ci_status: CiStatus::Success,
             ci_updated_at: Some(
                 chrono::Utc
@@ -1140,11 +1140,11 @@ mod tests {
     #[test]
     fn build_pull_request_from_search_item_keeps_review_requests_lightweight() {
         let pr = build_pull_request_from_search_item(
-            "openai/symphony",
+            "openai/bigbrother",
             SearchItem {
                 number: 18,
-                repository_url: "https://api.github.com/repos/openai/symphony".to_owned(),
-                html_url: "https://github.com/openai/symphony/pull/18".to_owned(),
+                repository_url: "https://api.github.com/repos/openai/bigbrother".to_owned(),
+                html_url: "https://github.com/openai/bigbrother/pull/18".to_owned(),
                 title: "Review me".to_owned(),
                 body: Some("Please review".to_owned()),
                 user: GitHubUser {
@@ -1158,8 +1158,8 @@ mod tests {
             },
         );
 
-        assert_eq!(pr.key, "openai/symphony#18");
-        assert_eq!(pr.repo_full_name, "openai/symphony");
+        assert_eq!(pr.key, "openai/bigbrother#18");
+        assert_eq!(pr.repo_full_name, "openai/bigbrother");
         assert_eq!(pr.title, "Review me");
         assert_eq!(pr.ci_status, CiStatus::Unknown);
         assert_eq!(pr.review_decision, ReviewDecision::Clean);

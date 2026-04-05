@@ -202,7 +202,7 @@ impl AppConfig {
             .state_path
             .as_deref()
             .map(|value| resolve_path(value, &config_dir))
-            .unwrap_or_else(|| config_dir.join("symphony-rs-state.json"));
+            .unwrap_or_else(|| config_dir.join("bigbrother-state.json"));
         let notifications = resolve_notifications(self.notifications, &config_dir)?;
 
         Ok(ResolvedConfig {
@@ -445,7 +445,7 @@ fn default_notification_timeout_secs() -> u64 {
 }
 
 fn default_feishu_notification_label() -> String {
-    "symphony-rs".to_owned()
+    "bigbrother".to_owned()
 }
 
 fn resolve_agent_config(raw: RawAgentConfig) -> Result<AgentConfig> {
@@ -561,13 +561,13 @@ mod tests {
             api_token: "token".to_owned(),
             api_base_url: default_github_api_base_url(),
             author: None,
-            query: Some("is:pr is:open author:{author} label:symphony".to_owned()),
+            query: Some("is:pr is:open author:{author} label:bigbrother".to_owned()),
             max_prs: 25,
         };
 
         assert_eq!(
             build_search_query(&config, "connor"),
-            "is:pr is:open author:connor label:symphony"
+            "is:pr is:open author:connor label:bigbrother"
         );
     }
 
@@ -577,9 +577,9 @@ mod tests {
             .duration_since(std::time::UNIX_EPOCH)
             .expect("time")
             .as_nanos();
-        let dir = std::env::temp_dir().join(format!("symphony-rs-config-{unique}"));
+        let dir = std::env::temp_dir().join(format!("bigbrother-config-{unique}"));
         std::fs::create_dir_all(dir.join("repos/custom")).expect("temp config dir should create");
-        let config_path = dir.join("symphony-rs.toml");
+        let config_path = dir.join("bigbrother.toml");
         std::fs::write(
             &config_path,
             r#"
@@ -611,9 +611,9 @@ repo_map = { "tidbcloud/tidb-cse" = "./repos/custom/tidb-cse-local" }
             .duration_since(std::time::UNIX_EPOCH)
             .expect("time")
             .as_nanos();
-        let dir = std::env::temp_dir().join(format!("symphony-rs-config-{unique}"));
+        let dir = std::env::temp_dir().join(format!("bigbrother-config-{unique}"));
         std::fs::create_dir_all(&dir).expect("temp config dir should create");
-        let config_path = dir.join("symphony-rs.toml");
+        let config_path = dir.join("bigbrother.toml");
         std::fs::write(
             &config_path,
             r#"
@@ -637,9 +637,9 @@ dangerously_bypass_approvals_and_sandbox = true
             .duration_since(std::time::UNIX_EPOCH)
             .expect("time")
             .as_nanos();
-        let dir = std::env::temp_dir().join(format!("symphony-rs-config-{unique}"));
+        let dir = std::env::temp_dir().join(format!("bigbrother-config-{unique}"));
         std::fs::create_dir_all(&dir).expect("temp config dir should create");
-        let config_path = dir.join("symphony-rs.toml");
+        let config_path = dir.join("bigbrother.toml");
         std::fs::write(
             &config_path,
             r#"
@@ -660,9 +660,9 @@ api_token = "token"
             .duration_since(std::time::UNIX_EPOCH)
             .expect("time")
             .as_nanos();
-        let dir = std::env::temp_dir().join(format!("symphony-rs-config-{unique}"));
+        let dir = std::env::temp_dir().join(format!("bigbrother-config-{unique}"));
         std::fs::create_dir_all(&dir).expect("temp config dir should create");
-        let config_path = dir.join("symphony-rs.toml");
+        let config_path = dir.join("bigbrother.toml");
         std::fs::write(
             &config_path,
             r#"
@@ -686,7 +686,7 @@ model_reasoning_effort = "high"
             .duration_since(std::time::UNIX_EPOCH)
             .expect("time")
             .as_nanos();
-        let dir = std::env::temp_dir().join(format!("symphony-rs-config-{unique}"));
+        let dir = std::env::temp_dir().join(format!("bigbrother-config-{unique}"));
         let prompts_dir = dir.join("prompts");
         std::fs::create_dir_all(&prompts_dir).expect("prompt fixture dir should create");
         std::fs::write(
@@ -734,9 +734,9 @@ model_reasoning_effort = "high"
             .duration_since(std::time::UNIX_EPOCH)
             .expect("time")
             .as_nanos();
-        let dir = std::env::temp_dir().join(format!("symphony-rs-config-{unique}"));
+        let dir = std::env::temp_dir().join(format!("bigbrother-config-{unique}"));
         std::fs::create_dir_all(&dir).expect("temp config dir should create");
-        let config_path = dir.join("symphony-rs.toml");
+        let config_path = dir.join("bigbrother.toml");
         std::fs::write(
             &config_path,
             r#"

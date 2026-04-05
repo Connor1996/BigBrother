@@ -301,13 +301,13 @@ These are intentionally deferred until after the MVP above lands.
   - parent project
   - linked resources
   - linked PRs
-- [ ] Define task lifecycle mapping between local states and the migrated Symphony workflow
+- [ ] Define task lifecycle mapping between local states and the migrated BigBrother workflow
 - [ ] Add task list and task detail UI for the develop panel
 - [ ] Support promoting a task from development work into review/merge tracking
 
-## 22. Workflow Migration From `~/Coding/symphony`
+## 22. Workflow Migration From `~/Coding/bigbrother`
 
-- [ ] Extract the lifecycle ideas from `~/Coding/symphony` that should carry over:
+- [ ] Extract the lifecycle ideas from `~/Coding/bigbrother` that should carry over:
   - explicit phase/state routing
   - human review vs merging separation
   - project-centered work management

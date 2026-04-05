@@ -1,4 +1,4 @@
-# Symphony RS Instructions
+# BigBrother Instructions
 
 ## Global Repository Rules
 

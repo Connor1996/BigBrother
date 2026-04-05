@@ -6,7 +6,7 @@ Owner: `BigBrother` implementation track
 
 Repository note:
 
-- this specification applies to the standalone `symphony-rs` project under `~/Coding/symphony-rs`
+- this specification applies to the standalone `bigbrother` project under `~/Coding/bigbrother`
 - paths in this document are relative to that repository root unless stated otherwise
 
 ## 1. Goal
@@ -587,7 +587,7 @@ The summary should be loaded by default; full content should be fetched lazily.
 ## 17. Task Model And Workflow Migration
 
 The develop panel should expose Linear-like task management while staying compatible with the
-workflow ideas in `~/Coding/symphony`.
+workflow ideas in `~/Coding/bigbrother`.
 
 The migration intent is:
 
@@ -749,8 +749,10 @@ Panels:
 - run history
 - a browser-rendered `xterm.js` terminal for active runs, fed from the raw PTY stream over WebSocket so Codex CLI redraws, ANSI styling, and live scrollback are preserved in the detail view
 - the same terminal presentation for completed runs whenever a PTY session was captured, replayed from the saved terminal recording rather than a one-screen snapshot so operators can inspect the final terminal context after the run ends
+- the detail page should serve its `xterm.js` runtime assets locally from BigBrother itself rather than relying on a third-party CDN, so terminal rendering still works when the browser cannot fetch external assets
 - saved terminal recordings should keep the full PTY stream instead of trimming down to a short in-memory screen excerpt, so completed runs retain their available scrollback
 - saved last run output as a wrapped monospace text fallback only when no PTY terminal recording is available for the last run (for example, failures before the terminal session starts), and that fallback should omit internal transcript wrapper headers such as `Prompt Sent To Codex CLI` / `Codex CLI Output`
+- if the terminal renderer itself fails to initialize, the UI should show a short renderer-error message instead of dumping raw PTY control bytes into a plain text block
 - latest run output summary rendered as a short operator-facing status line rather than raw terminal or transcript text
 - when a run ends in `needs decision`, the saved last run output should show the full operator-facing explanation and requested decision, while the summary stays short
 - workspace path
@@ -794,7 +796,7 @@ The feed should make daemon progress legible even when no PR is currently runnin
 
 Current state in this repository is a prototype spike that already contains:
 
-- the standalone repository split from the parent `symphony` repo
+- the standalone repository split from the parent `bigbrother` repo
 - GitHub polling logic
 - local state handling
 - persisted per-PR track/untrack state

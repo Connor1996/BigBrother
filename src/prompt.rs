@@ -152,12 +152,12 @@ mod tests {
 
     fn sample_pr() -> PullRequest {
         PullRequest {
-            key: "openai/symphony#7".to_owned(),
-            repo_full_name: "openai/symphony".to_owned(),
+            key: "openai/bigbrother#7".to_owned(),
+            repo_full_name: "openai/bigbrother".to_owned(),
             number: 7,
             title: "Prompt test".to_owned(),
             body: Some("Test body".to_owned()),
-            url: "https://github.com/openai/symphony/pull/7".to_owned(),
+            url: "https://github.com/openai/bigbrother/pull/7".to_owned(),
             author_login: "connor".to_owned(),
             labels: vec![],
             created_at: Utc.with_ymd_and_hms(2026, 3, 31, 12, 0, 0).unwrap(),
@@ -166,8 +166,8 @@ mod tests {
             head_ref: "feature/test".to_owned(),
             base_sha: "base456".to_owned(),
             base_ref: "main".to_owned(),
-            clone_url: "https://github.com/openai/symphony.git".to_owned(),
-            ssh_url: "git@github.com:openai/symphony.git".to_owned(),
+            clone_url: "https://github.com/openai/bigbrother.git".to_owned(),
+            ssh_url: "git@github.com:openai/bigbrother.git".to_owned(),
             ci_status: CiStatus::Failure,
             ci_updated_at: None,
             review_decision: ReviewDecision::ChangesRequested,
@@ -199,9 +199,8 @@ mod tests {
         assert!(prompt.contains("If that merge produces conflicts, resolve them first"));
         assert!(prompt.contains("If the required change is material or high-risk"));
         assert!(prompt.contains("BIGBROTHER_NEEDS_DECISION: <short reason>"));
-        assert!(
-            prompt.contains("git push \"$SYMPHONY_PR_PUSH_REMOTE\" HEAD:\"$SYMPHONY_PR_HEAD_REF\"")
-        );
+        assert!(prompt
+            .contains("git push \"$BIGBROTHER_PR_PUSH_REMOTE\" HEAD:\"$BIGBROTHER_PR_HEAD_REF\""));
         assert!(prompt.contains("leave a concise PR comment containing exactly `/retest`"));
         assert!(prompt.contains("whether you merged base"));
         assert!(prompt.contains("Additional operator instructions:\n- Extra operator note."));
@@ -246,7 +245,7 @@ mod tests {
             Some("- Custom note."),
         );
 
-        assert!(prompt.contains("Runbook for openai/symphony #7"));
+        assert!(prompt.contains("Runbook for openai/bigbrother #7"));
         assert!(prompt.contains("Additional operator instructions:\n- Custom note."));
         assert!(!prompt.contains("Working rules:"));
     }

@@ -30,7 +30,7 @@ command = "codex"
 # Explicit Codex reasoning effort override passed via `-c model_reasoning_effort=...`.
 # BigBrother defaults this to `xhigh` even if you omit it.
 model_reasoning_effort = "xhigh"
-# When true, Symphony launches `codex` with `--dangerously-bypass-approvals-and-sandbox`.
+# When true, BigBrother launches `codex` with `--dangerously-bypass-approvals-and-sandbox`.
 # Leave this off unless the host environment is already externally sandboxed and you want
 # Codex to have full local access.
 # dangerously_bypass_approvals_and_sandbox = true
@@ -45,14 +45,10 @@ additional_instructions = """
 """
 
 # Optional override for the persisted local state file.
-# state_path = "./symphony-rs-state.json"
-
-# Dashboard refresh frequency in the browser UI.
-[ui]
-refresh_hz = 2
+# state_path = "./bigbrother-state.json"
 
 # Private DM mode via an enterprise self-built app bot.
-# [notifications.feishu]
+[notifications.feishu]
 # Feishu app ID for the self-built bot application.
 # app_id = "$FEISHU_APP_ID"
 # Feishu app secret for the same bot application.

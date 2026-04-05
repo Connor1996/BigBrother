@@ -75,14 +75,14 @@ Before you begin, make sure the machine already has:
 - a working `codex` command
 - whatever Git credentials you normally use to push back to your PR branches
 
-The smoothest layout is to keep `symphony-rs` next to the repositories you want BigBrother to discover. If your machine already keeps code under `~/Coding`, cloning `symphony-rs` there makes the default `workspace.root = ".."` work nicely because BigBrother will look for sibling repositories such as `../tikv`, `../tidb`, or `../tidb-cse`. If `symphony-rs` lives somewhere else, set `workspace.root` to an absolute path such as `/Users/alice/Coding`. Avoid `~` and `$HOME/Coding` in the TOML file for now; the current config loader does not expand those forms.
+The smoothest layout is to keep `bigbrother` next to the repositories you want BigBrother to discover. If your machine already keeps code under `~/Coding`, cloning `bigbrother` there makes the default `workspace.root = ".."` work nicely because BigBrother will look for sibling repositories such as `../tikv`, `../tidb`, or `../tidb-cse`. If `bigbrother` lives somewhere else, set `workspace.root` to an absolute path such as `/Users/alice/Coding`. Avoid `~` and `$HOME/Coding` in the TOML file for now; the current config loader does not expand those forms.
 
 From the repository root:
 
 1. Copy the example config.
 
 ```bash
-cp symphony-rs.example.toml symphony-rs.toml
+cp bigbrother.example.toml bigbrother.toml
 ```
 
 2. Export the GitHub credentials BigBrother will use.
@@ -94,7 +94,7 @@ export GITHUB_USER=...
 
 If you keep `author = "$GITHUB_USER"` in the config, `GITHUB_USER` needs to be set to your GitHub login. If you do not want that extra environment variable, replace the `author` field with your real login or remove the field entirely and let BigBrother resolve the viewer login from GitHub at runtime.
 
-3. Open `symphony-rs.toml` and make it describe your machine.
+3. Open `bigbrother.toml` and make it describe your machine.
 
 What you usually need to check:
 
@@ -111,14 +111,14 @@ The current Feishu integration is outbound only. BigBrother can send run updates
 
 ```bash
 cargo build --release
-target/release/symphony-rs --config symphony-rs.toml
+target/release/bigbrother --config bigbrother.toml
 ```
 
 The dashboard should now be available at [http://127.0.0.1:8787/](http://127.0.0.1:8787/).
 
 ## If you want an agent to do the setup
 
-We are not at the point of a true one-command setup flow yet, but you can already hand most of the work to Codex. The repo includes a copy-paste setup prompt at [`docs/bigbrother_agent_setup_prompt.md`](/Users/Connor/Coding/symphony-rs/docs/bigbrother_agent_setup_prompt.md). It tells Codex to inspect the machine, patch `symphony-rs.toml`, avoid unresolved placeholders, wire Feishu only when credentials are available, launch the daemon, and verify that the dashboard responds.
+We are not at the point of a true one-command setup flow yet, but you can already hand most of the work to Codex. The repo includes a copy-paste setup prompt at [`docs/bigbrother_agent_setup_prompt.md`](/Users/Connor/Coding/bigbrother/docs/bigbrother_agent_setup_prompt.md). It tells Codex to inspect the machine, patch `bigbrother.toml`, avoid unresolved placeholders, wire Feishu only when credentials are available, launch the daemon, and verify that the dashboard responds.
 
 That is the current best approximation of “agent-assisted setup” without pretending the product already has a built-in setup wizard.
 
@@ -126,7 +126,7 @@ That is the current best approximation of “agent-assisted setup” without pre
 
 The recovery model is intentionally simple.
 
-- To stop BigBrother, stop the `symphony-rs` process like any other local daemon.
+- To stop BigBrother, stop the `bigbrother` process like any other local daemon.
 - To inspect what happened, open the PR detail page from the dashboard and read the saved run output or terminal recording.
 - To take over manually, click `Untrack` first so the daemon stands down, then continue the work in a checkout you control.
 - To see where BigBrother was operating, look under `<workspace.root>/bigbrother-worktrees`.

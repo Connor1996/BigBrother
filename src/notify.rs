@@ -259,13 +259,13 @@ mod tests {
         .expect("sink should build");
         let text = sink.format_text(&Notification::new(
             EventLevel::Info,
-            "agent run completed for openai/symphony#42",
+            "agent run completed for openai/bigbrother#42",
             "Summary: fixed CI",
         ));
 
         assert_eq!(
             text,
-            "[connor-mbp][info] agent run completed for openai/symphony#42\n\nSummary: fixed CI"
+            "[connor-mbp][info] agent run completed for openai/bigbrother#42\n\nSummary: fixed CI"
         );
     }
 

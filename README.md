@@ -1,11 +1,11 @@
 # BigBrother
 
-`BigBrother` is the product name for the Rust-based GitHub PR supervisor implemented in the `symphony-rs` repository.
+`BigBrother` is the product name for the Rust-based GitHub PR supervisor implemented in the `bigbrother` repository.
 
 If you want a prose-first introduction for teammates, start with
-[`docs/bigbrother_getting_started.md`](/Users/Connor/Coding/symphony-rs/docs/bigbrother_getting_started.md).
+[`docs/bigbrother_getting_started.md`](/Users/Connor/Coding/bigbrother/docs/bigbrother_getting_started.md).
 If you want Codex to perform most of the first-time setup, use the copy-paste prompt in
-[`docs/bigbrother_agent_setup_prompt.md`](/Users/Connor/Coding/symphony-rs/docs/bigbrother_agent_setup_prompt.md).
+[`docs/bigbrother_agent_setup_prompt.md`](/Users/Connor/Coding/bigbrother/docs/bigbrother_agent_setup_prompt.md).
 
 Current status:
 
@@ -67,7 +67,7 @@ The UI shows the authored PR list, a `Review Requests` tab for PRs that currentl
 1. Copy the example config:
 
 ```bash
-cp symphony-rs.example.toml symphony-rs.toml
+cp bigbrother.example.toml bigbrother.toml
 ```
 
 2. Export a GitHub token:
@@ -86,11 +86,11 @@ absolute path such as `/Users/alice/Coding`; the config loader does not currentl
 
 ```bash
 cargo build --release
-target/release/symphony-rs --config symphony-rs.toml
+target/release/bigbrother --config bigbrother.toml
 ```
 
 The example config sets `workspace.root = ".."`, which means BigBrother will look for sibling
-repositories next to `symphony-rs` before it tries any explicit `workspace.repo_map` overrides.
+repositories next to `bigbrother` before it tries any explicit `workspace.repo_map` overrides.
 It also means BigBrother will place its centralized managed worktrees under
 `../bigbrother-worktrees`, with one reusable detached-HEAD worktree per repository such as
 `../bigbrother-worktrees/tikv-bigbrother`.
@@ -106,7 +106,7 @@ present on the host and can preserve ANSI-colored terminal output in the browser
 http://127.0.0.1:8787/
 ```
 
-For long-running local use, prefer `target/release/symphony-rs` over `cargo run` so the daemon
+For long-running local use, prefer `target/release/bigbrother` over `cargo run` so the daemon
 stays on the optimized release build. The binary is already server-only in this MVP. `--headless`
 is kept as a compatibility no-op for older command lines.
 
@@ -142,16 +142,16 @@ the easiest option.
 ## Prompt Templates
 
 The default agent prompts now live in Markdown files under
-[`prompts/`](/Users/Connor/Coding/symphony-rs/prompts/README.md). That makes the built-in prompt
+[`prompts/`](/Users/Connor/Coding/bigbrother/prompts/README.md). That makes the built-in prompt
 wording visible in the repo and lets each operator tweak the repository prompt files directly.
 
 BigBrother ships these default prompt files:
 
-- [`prompts/actionable.md`](/Users/Connor/Coding/symphony-rs/prompts/actionable.md) for CI failures, merge conflicts, and review-feedback runs
-- [`prompts/deep_review.md`](/Users/Connor/Coding/symphony-rs/prompts/deep_review.md) for manual deep reviews
-- [`prompts/ci_failure_rules.md`](/Users/Connor/Coding/symphony-rs/prompts/ci_failure_rules.md) for the CI-only `/retest` guidance block
-- [`prompts/workspace_ready.md`](/Users/Connor/Coding/symphony-rs/prompts/workspace_ready.md) and [`prompts/resumed_conflict.md`](/Users/Connor/Coding/symphony-rs/prompts/resumed_conflict.md) for workspace-preparation notes
-- [`prompts/deep_review_artifact.md`](/Users/Connor/Coding/symphony-rs/prompts/deep_review_artifact.md) for the deep-review artifact instructions
+- [`prompts/actionable.md`](/Users/Connor/Coding/bigbrother/prompts/actionable.md) for CI failures, merge conflicts, and review-feedback runs
+- [`prompts/deep_review.md`](/Users/Connor/Coding/bigbrother/prompts/deep_review.md) for manual deep reviews
+- [`prompts/ci_failure_rules.md`](/Users/Connor/Coding/bigbrother/prompts/ci_failure_rules.md) for the CI-only `/retest` guidance block
+- [`prompts/workspace_ready.md`](/Users/Connor/Coding/bigbrother/prompts/workspace_ready.md) and [`prompts/resumed_conflict.md`](/Users/Connor/Coding/bigbrother/prompts/resumed_conflict.md) for workspace-preparation notes
+- [`prompts/deep_review_artifact.md`](/Users/Connor/Coding/bigbrother/prompts/deep_review_artifact.md) for the deep-review artifact instructions
 
 BigBrother reads those templates from the repository's own `prompts/*.md` files. To customize
 prompts on a given machine, edit the repo files directly.
@@ -175,7 +175,7 @@ always passes it explicitly to `codex exec` via `-c model_reasoning_effort="..."
 `--color always` and passes the prompt as the initial `codex exec` prompt argument so the PTY
 session looks closer to a native terminal run.
 
-The default prompt templates ask the agent to inspect GitHub feedback and CI, merge the latest base branch itself when needed, resolve conflicts before declaring success, fix code in-place, run targeted validation, and push back to the PR branch if it can. Because the managed worktree uses detached HEAD, the prompt also tells the agent not to create or rely on a local branch and to publish explicitly with `git push "$SYMPHONY_PR_PUSH_REMOTE" HEAD:"$SYMPHONY_PR_HEAD_REF"`. They also tell the agent to stop and ask for operator direction before making material or high-risk changes instead of changing code unilaterally. When the agent decides a change is non-trivial, it emits a machine-readable `BIGBROTHER_NEEDS_DECISION:` marker; BigBrother then sets the PR to `needs decision`, auto-freezes future automatic runs for that PR under the hood, and stores the full operator-facing explanation in the PR details output until you explicitly clear it from the dashboard.
+The default prompt templates ask the agent to inspect GitHub feedback and CI, merge the latest base branch itself when needed, resolve conflicts before declaring success, fix code in-place, run targeted validation, and push back to the PR branch if it can. Because the managed worktree uses detached HEAD, the prompt also tells the agent not to create or rely on a local branch and to publish explicitly with `git push "$BIGBROTHER_PR_PUSH_REMOTE" HEAD:"$BIGBROTHER_PR_HEAD_REF"`. They also tell the agent to stop and ask for operator direction before making material or high-risk changes instead of changing code unilaterally. When the agent decides a change is non-trivial, it emits a machine-readable `BIGBROTHER_NEEDS_DECISION:` marker; BigBrother then sets the PR to `needs decision`, auto-freezes future automatic runs for that PR under the hood, and stores the full operator-facing explanation in the PR details output until you explicitly clear it from the dashboard.
 
 If a `needs decision` run came from review feedback and you address that feedback manually, clicking
 `Addressed` marks the currently displayed review signal as handled before the immediate targeted

@@ -63,7 +63,7 @@ mod tests {
             .duration_since(UNIX_EPOCH)
             .expect("time")
             .as_nanos();
-        let path = std::env::temp_dir().join(format!("symphony-rs-state-{unique}.json"));
+        let path = std::env::temp_dir().join(format!("bigbrother-state-{unique}.json"));
         let store = StateStore::new(&path);
 
         let loaded = store.load().expect("state should load");
@@ -76,12 +76,12 @@ mod tests {
             .duration_since(UNIX_EPOCH)
             .expect("time")
             .as_nanos();
-        let path = std::env::temp_dir().join(format!("symphony-rs-state-{unique}.json"));
+        let path = std::env::temp_dir().join(format!("bigbrother-state-{unique}.json"));
         fs::write(
             &path,
             r#"{
   "prs": {
-    "openai/symphony#1": {
+    "openai/bigbrother#1": {
       "last_run_status": "success"
     }
   }
@@ -93,7 +93,7 @@ mod tests {
         let loaded = store.load().expect("state should load");
         let pr = loaded
             .prs
-            .get("openai/symphony#1")
+            .get("openai/bigbrother#1")
             .expect("fixture PR should load");
 
         assert!(!pr.paused, "missing paused field should default to false");

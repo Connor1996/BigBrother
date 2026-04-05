@@ -1880,12 +1880,12 @@ mod tests {
 
     fn sample_pr() -> PullRequest {
         PullRequest {
-            key: "openai/symphony#42".to_owned(),
-            repo_full_name: "openai/symphony".to_owned(),
+            key: "openai/bigbrother#42".to_owned(),
+            repo_full_name: "openai/bigbrother".to_owned(),
             number: 42,
             title: "Fix poller".to_owned(),
             body: None,
-            url: "https://github.com/openai/symphony/pull/42".to_owned(),
+            url: "https://github.com/openai/bigbrother/pull/42".to_owned(),
             author_login: "connor".to_owned(),
             labels: vec![],
             created_at: Utc.with_ymd_and_hms(2026, 3, 30, 18, 0, 0).unwrap(),
@@ -1894,8 +1894,8 @@ mod tests {
             head_ref: "feature".to_owned(),
             base_sha: "def456".to_owned(),
             base_ref: "main".to_owned(),
-            clone_url: "https://github.com/openai/symphony.git".to_owned(),
-            ssh_url: "git@github.com:openai/symphony.git".to_owned(),
+            clone_url: "https://github.com/openai/bigbrother.git".to_owned(),
+            ssh_url: "git@github.com:openai/bigbrother.git".to_owned(),
             ci_status: CiStatus::Success,
             ci_updated_at: None,
             review_decision: ReviewDecision::Clean,
@@ -1943,8 +1943,7 @@ mod tests {
             },
             ui: UiConfig::default(),
             notifications: ResolvedNotificationsConfig::default(),
-            state_path: std::env::temp_dir()
-                .join(format!("symphony-rs-service-test-{unique}.json")),
+            state_path: std::env::temp_dir().join(format!("bigbrother-service-test-{unique}.json")),
         }
     }
 
@@ -2269,13 +2268,13 @@ mod tests {
     #[test]
     fn preferred_pr_is_selected_first_for_targeted_rechecks() {
         let mut first = sample_pr();
-        first.key = "openai/symphony#1".to_owned();
+        first.key = "openai/bigbrother#1".to_owned();
         first.number = 1;
         first.ci_status = CiStatus::Failure;
         first.ci_updated_at = Some(Utc.with_ymd_and_hms(2026, 3, 30, 18, 5, 0).unwrap());
 
         let mut second = sample_pr();
-        second.key = "openai/symphony#2".to_owned();
+        second.key = "openai/bigbrother#2".to_owned();
         second.number = 2;
         second.ci_status = CiStatus::Failure;
         second.ci_updated_at = Some(Utc.with_ymd_and_hms(2026, 3, 30, 18, 6, 0).unwrap());

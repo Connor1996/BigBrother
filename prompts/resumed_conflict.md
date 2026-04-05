@@ -1,3 +1,3 @@
 - Workspace preparation detected an unresolved merge-conflict workspace from a previous run for this same PR.
 - Continue from the existing conflict markers in the managed worktree, finish the base-branch merge yourself in the current detached HEAD, then continue with the trigger-specific fix, validation, and push if safe.
-- If you need to publish commits, push explicitly with `git push "$SYMPHONY_PR_PUSH_REMOTE" HEAD:"$SYMPHONY_PR_HEAD_REF"`.
+- If you need to publish commits, push explicitly with `git push "$BIGBROTHER_PR_PUSH_REMOTE" HEAD:"$BIGBROTHER_PR_HEAD_REF"`.

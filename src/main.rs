@@ -5,7 +5,7 @@ use std::{
 };
 
 use anyhow::Result;
-use symphony_rs::{
+use bigbrother::{
     config::AppConfig, daemon, github::GitHubClient, model::EventLevel, runner::ShellAgentRunner,
     service::Supervisor, web,
 };
@@ -56,7 +56,7 @@ struct CliOptions {
 
 impl CliOptions {
     fn parse(args: Vec<String>) -> Result<Self> {
-        let mut config_path = PathBuf::from("symphony-rs.toml");
+        let mut config_path = PathBuf::from("bigbrother.toml");
         let mut headless = false;
         let mut index = 0;
 
@@ -91,5 +91,5 @@ impl CliOptions {
 }
 
 fn print_usage() {
-    println!("Usage: symphony-rs [--config <path>] [--headless]");
+    println!("Usage: bigbrother [--config <path>] [--headless]");
 }

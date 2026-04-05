@@ -31,7 +31,7 @@ Working rules:
 - In that non-trivial case, start your final response with exactly one line in this format: `BIGBROTHER_NEEDS_DECISION: <short reason>`.
 - After that marker line, include a concise operator-facing explanation of what changed, why it is non-trivial, and what decision you need.
 {{trigger_specific_rules}}- If code changes are needed, make them, run targeted validation, commit, and push back to the same PR branch.
-- When pushing from this managed worktree, use `git push "$SYMPHONY_PR_PUSH_REMOTE" HEAD:"$SYMPHONY_PR_HEAD_REF"` instead of relying on an upstream branch.
+- When pushing from this managed worktree, use `git push "$BIGBROTHER_PR_PUSH_REMOTE" HEAD:"$BIGBROTHER_PR_HEAD_REF"` instead of relying on an upstream branch.
 - If reviewer feedback needs a textual response, leave a concise response on the PR thread when tooling is available.
 - If you are blocked by missing auth, missing secrets, or ambiguous product decisions, stop and explain the blocker clearly.
 - Final output should summarize whether you merged base, how conflicts were resolved if any, what changed, what was validated, and any remaining blocker.

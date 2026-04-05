@@ -27,7 +27,7 @@ const DEEP_REVIEW_TARGET_DIR: &str = "target/bigbrother-deep-review";
 const MANAGED_WORKTREE_DIR: &str = "bigbrother-worktrees";
 const MANAGED_WORKTREE_SUFFIX: &str = "-bigbrother";
 const SOURCE_REMOTE_NAME: &str = "origin";
-const PR_REMOTE_NAME: &str = "symphony-pr";
+const PR_REMOTE_NAME: &str = "bigbrother-pr";
 const MANAGED_PR_HEAD_REF: &str = "refs/bigbrother/pr-head";
 const MANAGED_BASE_REF: &str = "refs/bigbrother/base";
 
@@ -96,7 +96,7 @@ impl PromptFile {
             .context("system clock is before UNIX_EPOCH")?
             .as_nanos();
         let path = std::env::temp_dir().join(format!(
-            "symphony-rs-prompt-{}-{nonce}.txt",
+            "bigbrother-prompt-{}-{nonce}.txt",
             std::process::id()
         ));
         fs::write(&path, prompt)
@@ -826,10 +826,10 @@ fn build_pty_command(
             .path
             .to_str()
             .ok_or_else(|| anyhow!("prompt file path is not valid UTF-8"))?;
-        command.arg("exec \"$@\" <\"$SYMPHONY_PROMPT_PATH\"");
-        command.env("SYMPHONY_PROMPT_PATH", prompt_path);
+        command.arg("exec \"$@\" <\"$BIGBROTHER_PROMPT_PATH\"");
+        command.env("BIGBROTHER_PROMPT_PATH", prompt_path);
     }
-    command.arg("symphony-agent");
+    command.arg("bigbrother-agent");
     for arg in build_agent_command_argv(&request.agent, prompt_as_argument.then_some(prompt)) {
         command.arg(arg);
     }
@@ -837,19 +837,19 @@ fn build_pty_command(
     command.cwd(workspace_path);
     command.env("TERM", "xterm-256color");
     command.env("COLORTERM", "truecolor");
-    command.env("SYMPHONY_PR_REPO", &request.pull_request.repo_full_name);
+    command.env("BIGBROTHER_PR_REPO", &request.pull_request.repo_full_name);
     command.env(
-        "SYMPHONY_PR_NUMBER",
+        "BIGBROTHER_PR_NUMBER",
         request.pull_request.number.to_string(),
     );
-    command.env("SYMPHONY_PR_URL", &request.pull_request.url);
-    command.env("SYMPHONY_PR_HEAD_REF", &request.pull_request.head_ref);
-    command.env("SYMPHONY_PR_BASE_REF", &request.pull_request.base_ref);
-    command.env("SYMPHONY_PR_BASE_SHA", &request.pull_request.base_sha);
-    command.env("SYMPHONY_PR_HEAD_SHA", &request.pull_request.head_sha);
-    command.env("SYMPHONY_PR_PUSH_REMOTE", PR_REMOTE_NAME);
+    command.env("BIGBROTHER_PR_URL", &request.pull_request.url);
+    command.env("BIGBROTHER_PR_HEAD_REF", &request.pull_request.head_ref);
+    command.env("BIGBROTHER_PR_BASE_REF", &request.pull_request.base_ref);
+    command.env("BIGBROTHER_PR_BASE_SHA", &request.pull_request.base_sha);
+    command.env("BIGBROTHER_PR_HEAD_SHA", &request.pull_request.head_sha);
+    command.env("BIGBROTHER_PR_PUSH_REMOTE", PR_REMOTE_NAME);
     command.env(
-        "SYMPHONY_PR_HAS_CONFLICT",
+        "BIGBROTHER_PR_HAS_CONFLICT",
         if request.pull_request.has_conflicts {
             "1"
         } else {
@@ -857,16 +857,16 @@ fn build_pty_command(
         },
     );
     if let Some(mergeable_state) = request.pull_request.mergeable_state.as_deref() {
-        command.env("SYMPHONY_PR_MERGEABLE_STATE", mergeable_state);
+        command.env("BIGBROTHER_PR_MERGEABLE_STATE", mergeable_state);
     }
-    command.env("SYMPHONY_TRIGGER", request.trigger.label());
+    command.env("BIGBROTHER_TRIGGER", request.trigger.label());
     command.env(
-        "SYMPHONY_WORKSPACE",
+        "BIGBROTHER_WORKSPACE",
         workspace_path.to_string_lossy().to_string(),
     );
-    command.env("SYMPHONY_BASE_BRANCH_MERGED", "0");
+    command.env("BIGBROTHER_BASE_BRANCH_MERGED", "0");
     command.env(
-        "SYMPHONY_BASE_BRANCH_FETCHED",
+        "BIGBROTHER_BASE_BRANCH_FETCHED",
         if sync_report.fetched_base_branch {
             "1"
         } else {
@@ -874,7 +874,7 @@ fn build_pty_command(
         },
     );
     command.env(
-        "SYMPHONY_WORKSPACE_CONFLICTS_PRESENT",
+        "BIGBROTHER_WORKSPACE_CONFLICTS_PRESENT",
         if sync_report.resumed_conflict_workspace {
             "1"
         } else {
@@ -1138,7 +1138,7 @@ mod tests {
             .expect("time")
             .as_nanos();
         let counter = TEMP_COUNTER.fetch_add(1, Ordering::SeqCst);
-        std::env::temp_dir().join(format!("symphony-rs-runner-{nonce}-{counter}-{name}"))
+        std::env::temp_dir().join(format!("bigbrother-runner-{nonce}-{counter}-{name}"))
     }
 
     fn sample_workspace(root: PathBuf) -> ResolvedWorkspaceConfig {
@@ -1204,7 +1204,7 @@ mod tests {
         let remote = unique_temp_path("remote.git");
         let seed = unique_temp_path("seed");
         let root = unique_temp_path("root");
-        let workspace_repo = root.join("symphony");
+        let workspace_repo = root.join("bigbrother");
 
         init_bare_repo(&remote).await;
         init_git_repo(&seed).await;
@@ -1282,7 +1282,7 @@ mod tests {
             .await
             .expect("head sha should resolve");
 
-        let mut pr = sample_pr("openai/symphony");
+        let mut pr = sample_pr("openai/bigbrother");
         pr.clone_url = remote_str.to_owned();
         pr.ssh_url = remote_str.to_owned();
         pr.head_ref = "feature/test".to_owned();
@@ -1358,7 +1358,7 @@ mod tests {
         assert!(instructions.contains("merge the latest base branch"));
         assert!(instructions.contains("detached-HEAD mode"));
         assert!(instructions
-            .contains("git push \"$SYMPHONY_PR_PUSH_REMOTE\" HEAD:\"$SYMPHONY_PR_HEAD_REF\""));
+            .contains("git push \"$BIGBROTHER_PR_PUSH_REMOTE\" HEAD:\"$BIGBROTHER_PR_HEAD_REF\""));
     }
 
     #[test]
@@ -1486,7 +1486,7 @@ mod tests {
     async fn resolve_checkout_uses_explicit_repo_map_first() {
         let root = unique_temp_path("root");
         let mapped = unique_temp_path("mapped-repo");
-        let auto = root.join("symphony");
+        let auto = root.join("bigbrother");
         init_git_repo(&mapped).await;
         seed_repo(&mapped).await;
         init_git_repo(&auto).await;
@@ -1495,16 +1495,16 @@ mod tests {
         let mut workspace = sample_workspace(root);
         workspace
             .repo_map
-            .insert("openai/symphony".to_owned(), mapped.clone());
+            .insert("openai/bigbrother".to_owned(), mapped.clone());
 
-        let resolved = resolve_checkout(&workspace, &sample_pr("openai/symphony"))
+        let resolved = resolve_checkout(&workspace, &sample_pr("openai/bigbrother"))
             .await
             .expect("mapped repo should resolve");
         let resolved_path =
             std::fs::canonicalize(&resolved.path).expect("resolved repo should canonicalize");
         assert_eq!(
             resolved_path.clone(),
-            std::fs::canonicalize(managed_worktree_path(&workspace, "openai/symphony"))
+            std::fs::canonicalize(managed_worktree_path(&workspace, "openai/bigbrother"))
                 .expect("managed worktree should canonicalize")
         );
         assert!(
@@ -1521,17 +1521,17 @@ mod tests {
     #[tokio::test]
     async fn resolve_checkout_falls_back_to_same_name_under_root() {
         let root = unique_temp_path("root");
-        let repo = root.join("symphony");
+        let repo = root.join("bigbrother");
         init_git_repo(&repo).await;
         seed_repo(&repo).await;
 
         let workspace = sample_workspace(root);
-        let resolved = resolve_checkout(&workspace, &sample_pr("openai/symphony"))
+        let resolved = resolve_checkout(&workspace, &sample_pr("openai/bigbrother"))
             .await
             .expect("same-name repo should resolve");
         assert_eq!(
             std::fs::canonicalize(resolved.path).expect("resolved repo should canonicalize"),
-            std::fs::canonicalize(managed_worktree_path(&workspace, "openai/symphony"))
+            std::fs::canonicalize(managed_worktree_path(&workspace, "openai/bigbrother"))
                 .expect("managed worktree should canonicalize")
         );
         assert!(
@@ -1547,14 +1547,14 @@ mod tests {
 
         let error = resolve_checkout(
             &sample_workspace(root.clone()),
-            &sample_pr("openai/symphony"),
+            &sample_pr("openai/bigbrother"),
         )
         .await
         .expect_err("missing repo should fail");
         assert!(
             error
                 .to_string()
-                .contains(&root.join("symphony").display().to_string()),
+                .contains(&root.join("bigbrother").display().to_string()),
             "error should mention the missing auto-discovery path",
         );
     }
@@ -1562,7 +1562,7 @@ mod tests {
     #[tokio::test]
     async fn resolve_checkout_uses_clean_managed_worktree_even_when_source_repo_is_dirty() {
         let root = unique_temp_path("root");
-        let repo = root.join("symphony");
+        let repo = root.join("bigbrother");
         init_git_repo(&repo).await;
         std::fs::write(repo.join("tracked.txt"), "original").expect("tracked file should write");
         run_command("git", &["add", "tracked.txt"], Some(&repo))
@@ -1574,7 +1574,7 @@ mod tests {
         std::fs::write(repo.join("tracked.txt"), "modified").expect("tracked file should rewrite");
 
         let workspace = sample_workspace(root);
-        let resolved = resolve_checkout(&workspace, &sample_pr("openai/symphony"))
+        let resolved = resolve_checkout(&workspace, &sample_pr("openai/bigbrother"))
             .await
             .expect("dirty source repo should still allow managed worktree creation");
         assert!(

@@ -1,5 +1,5 @@
 /target/
-/symphony-rs.toml
-/symphony-rs-state.json
+/bigbrother.toml
+/bigbrother-state.json
 /workspaces/
 .DS_Store
