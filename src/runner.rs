@@ -24,6 +24,12 @@ pub(crate) const NEEDS_DECISION_PREFIX: &str = "BIGBROTHER_NEEDS_DECISION:";
 const DEFAULT_PTY_ROWS: u16 = 36;
 const DEFAULT_PTY_COLS: u16 = 120;
 const DEEP_REVIEW_TARGET_DIR: &str = "target/bigbrother-deep-review";
+const MANAGED_WORKTREE_DIR: &str = "bigbrother-worktrees";
+const MANAGED_WORKTREE_SUFFIX: &str = "-bigbrother";
+const SOURCE_REMOTE_NAME: &str = "origin";
+const PR_REMOTE_NAME: &str = "symphony-pr";
+const MANAGED_PR_HEAD_REF: &str = "refs/bigbrother/pr-head";
+const MANAGED_BASE_REF: &str = "refs/bigbrother/base";
 
 #[derive(Debug, Clone)]
 pub struct RunRequest {
@@ -368,50 +374,148 @@ async fn resolve_checkout(
                 candidate.display()
             )
         })?;
-    let path = PathBuf::from(repo_root.trim());
+    let source_root = PathBuf::from(repo_root.trim());
+    let managed_path = managed_worktree_path(workspace, &pr.repo_full_name);
+    fs::create_dir_all(managed_worktree_root(workspace)).with_context(|| {
+        format!(
+            "failed to create managed worktree root at {}",
+            managed_worktree_root(workspace).display()
+        )
+    })?;
 
-    let tracked_changes = run_command_capture(
-        "git",
-        &["status", "--porcelain", "--untracked-files=no"],
-        Some(&path),
-    )
-    .await
-    .context("failed to inspect local checkout state")?;
-    if !tracked_changes.trim().is_empty() {
-        if can_resume_existing_conflict_workspace(&path, pr).await? {
+    if managed_path.exists() && managed_worktree_matches_source(&managed_path, &source_root).await?
+    {
+        let tracked_changes = run_command_capture(
+            "git",
+            &["status", "--porcelain", "--untracked-files=no"],
+            Some(&managed_path),
+        )
+        .await
+        .context("failed to inspect managed worktree state")?;
+        if !tracked_changes.trim().is_empty()
+            && can_resume_existing_conflict_workspace(&managed_path, pr).await?
+        {
             return Ok(CheckoutResolution {
-                path,
+                path: managed_path,
                 resumed_conflict_workspace: true,
             });
         }
 
-        return Err(anyhow!(
-            "local checkout {} has tracked changes; refusing to reuse a dirty repository",
-            path.display()
-        ));
+        if tracked_changes.trim().is_empty() {
+            return Ok(CheckoutResolution {
+                path: managed_path,
+                resumed_conflict_workspace: false,
+            });
+        }
     }
 
+    recreate_managed_worktree(&source_root, &managed_path).await?;
+
     Ok(CheckoutResolution {
-        path,
+        path: managed_path,
         resumed_conflict_workspace: false,
     })
+}
+
+fn managed_worktree_root(workspace: &ResolvedWorkspaceConfig) -> PathBuf {
+    workspace.root.join(MANAGED_WORKTREE_DIR)
+}
+
+fn managed_worktree_path(workspace: &ResolvedWorkspaceConfig, repo_full_name: &str) -> PathBuf {
+    managed_worktree_root(workspace).join(format!(
+        "{}{}",
+        repo_dir_name(repo_full_name),
+        MANAGED_WORKTREE_SUFFIX
+    ))
+}
+
+async fn managed_worktree_matches_source(managed_path: &Path, source_root: &Path) -> Result<bool> {
+    let managed_common_dir = match git_common_dir(managed_path).await {
+        Ok(path) => path,
+        Err(_) => return Ok(false),
+    };
+    let source_common_dir = git_common_dir(source_root).await?;
+
+    Ok(managed_common_dir == source_common_dir)
+}
+
+async fn git_common_dir(path: &Path) -> Result<PathBuf> {
+    let raw = run_command_capture("git", &["rev-parse", "--git-common-dir"], Some(path))
+        .await
+        .with_context(|| format!("failed to resolve git common dir for {}", path.display()))?;
+    let common_dir = PathBuf::from(raw.trim());
+    let absolute = if common_dir.is_absolute() {
+        common_dir
+    } else {
+        path.join(common_dir)
+    };
+
+    std::fs::canonicalize(&absolute).with_context(|| {
+        format!(
+            "failed to canonicalize git common dir {}",
+            absolute.display()
+        )
+    })
+}
+
+async fn recreate_managed_worktree(source_root: &Path, managed_path: &Path) -> Result<()> {
+    run_command("git", &["worktree", "prune"], Some(source_root))
+        .await
+        .context("failed to prune stale managed worktree entries")?;
+
+    if managed_path.exists() {
+        let path_str = managed_path
+            .to_str()
+            .ok_or_else(|| anyhow!("managed worktree path is not valid UTF-8"))?;
+        let _ = run_command(
+            "git",
+            &["worktree", "remove", "--force", path_str],
+            Some(source_root),
+        )
+        .await;
+        if managed_path.exists() {
+            fs::remove_dir_all(managed_path).with_context(|| {
+                format!(
+                    "failed to remove previous managed worktree at {}",
+                    managed_path.display()
+                )
+            })?;
+        }
+    }
+
+    if let Some(parent) = managed_path.parent() {
+        fs::create_dir_all(parent).with_context(|| {
+            format!(
+                "failed to create managed worktree parent directory at {}",
+                parent.display()
+            )
+        })?;
+    }
+
+    let path_str = managed_path
+        .to_str()
+        .ok_or_else(|| anyhow!("managed worktree path is not valid UTF-8"))?;
+    run_command(
+        "git",
+        &["worktree", "add", "--force", "--detach", path_str, "HEAD"],
+        Some(source_root),
+    )
+    .await
+    .with_context(|| {
+        format!(
+            "failed to create managed worktree at {} from {}",
+            managed_path.display(),
+            source_root.display()
+        )
+    })?;
+
+    Ok(())
 }
 
 async fn can_resume_existing_conflict_workspace(
     workspace: &Path,
     pr: &PullRequest,
 ) -> Result<bool> {
-    let current_branch = run_command_capture(
-        "git",
-        &["rev-parse", "--abbrev-ref", "HEAD"],
-        Some(workspace),
-    )
-    .await
-    .context("failed to inspect current branch for conflict resume")?;
-    if current_branch.trim() != pr.head_ref {
-        return Ok(false);
-    }
-
     let current_head_sha = run_command_capture("git", &["rev-parse", "HEAD"], Some(workspace))
         .await
         .context("failed to inspect current HEAD for conflict resume")?;
@@ -445,15 +549,17 @@ async fn sync_workspace(
         GitTransport::Ssh => pr.ssh_url.as_str(),
         GitTransport::Https => pr.clone_url.as_str(),
     };
-    let remote_name = "symphony-pr";
-
-    if run_command_capture("git", &["remote", "get-url", remote_name], Some(workspace))
-        .await
-        .is_ok()
+    if run_command_capture(
+        "git",
+        &["remote", "get-url", PR_REMOTE_NAME],
+        Some(workspace),
+    )
+    .await
+    .is_ok()
     {
         run_command(
             "git",
-            &["remote", "set-url", remote_name, remote_url],
+            &["remote", "set-url", PR_REMOTE_NAME, remote_url],
             Some(workspace),
         )
         .await
@@ -461,51 +567,64 @@ async fn sync_workspace(
     } else {
         run_command(
             "git",
-            &["remote", "add", remote_name, remote_url],
+            &["remote", "add", PR_REMOTE_NAME, remote_url],
             Some(workspace),
         )
         .await
         .context("failed to add PR remote")?;
     }
 
+    run_command("git", &["reset", "--hard"], Some(workspace))
+        .await
+        .context("failed to reset managed worktree before sync")?;
+    run_command("git", &["clean", "-fd"], Some(workspace))
+        .await
+        .context("failed to clean managed worktree before sync")?;
+
     run_command(
         "git",
-        &["fetch", remote_name, &pr.head_ref],
+        &[
+            "fetch",
+            PR_REMOTE_NAME,
+            &format!("+refs/heads/{}:{MANAGED_PR_HEAD_REF}", pr.head_ref),
+        ],
         Some(workspace),
     )
     .await
     .context("failed to fetch head branch")?;
-    run_command(
-        "git",
-        &["fetch", remote_name, &pr.base_ref],
-        Some(workspace),
-    )
-    .await
-    .context("failed to fetch base branch")?;
-    run_command(
+    match run_command(
         "git",
         &[
-            "checkout",
-            "-B",
-            &pr.head_ref,
-            &format!("{remote_name}/{}", pr.head_ref),
+            "fetch",
+            SOURCE_REMOTE_NAME,
+            &format!("+refs/heads/{}:{MANAGED_BASE_REF}", pr.base_ref),
         ],
         Some(workspace),
     )
     .await
-    .context("failed to check out PR branch")?;
+    {
+        Ok(()) => {}
+        Err(_) => {
+            run_command(
+                "git",
+                &[
+                    "fetch",
+                    PR_REMOTE_NAME,
+                    &format!("+refs/heads/{}:{MANAGED_BASE_REF}", pr.base_ref),
+                ],
+                Some(workspace),
+            )
+            .await
+            .context("failed to fetch base branch")?;
+        }
+    }
     run_command(
         "git",
-        &[
-            "branch",
-            "--set-upstream-to",
-            &format!("{remote_name}/{}", pr.head_ref),
-            &pr.head_ref,
-        ],
+        &["checkout", "--detach", MANAGED_PR_HEAD_REF],
         Some(workspace),
     )
     .await
-    .context("failed to set PR branch upstream")?;
+    .context("failed to check out detached PR head")?;
 
     Ok(WorkspaceSyncReport {
         fetched_pr_branch: true,
@@ -714,6 +833,7 @@ fn build_pty_command(
     command.env("SYMPHONY_PR_BASE_REF", &request.pull_request.base_ref);
     command.env("SYMPHONY_PR_BASE_SHA", &request.pull_request.base_sha);
     command.env("SYMPHONY_PR_HEAD_SHA", &request.pull_request.head_sha);
+    command.env("SYMPHONY_PR_PUSH_REMOTE", PR_REMOTE_NAME);
     command.env(
         "SYMPHONY_PR_HAS_CONFLICT",
         if request.pull_request.has_conflicts {
@@ -1024,6 +1144,11 @@ mod tests {
             .expect("git commit should succeed");
     }
 
+    async fn seed_repo(path: &Path) {
+        fs::write(path.join("README.md"), "seed\n").expect("seed file should write");
+        commit_all(path, "seed").await;
+    }
+
     async fn init_bare_repo(path: &Path) {
         let bare = path.to_str().expect("path should be utf-8");
         run_command("git", &["init", "--bare", bare], None)
@@ -1197,6 +1322,9 @@ mod tests {
         .expect("actionable instructions should exist");
 
         assert!(instructions.contains("merge the latest base branch"));
+        assert!(instructions.contains("detached-HEAD mode"));
+        assert!(instructions
+            .contains("git push \"$SYMPHONY_PR_PUSH_REMOTE\" HEAD:\"$SYMPHONY_PR_HEAD_REF\""));
     }
 
     #[test]
@@ -1266,28 +1394,10 @@ mod tests {
         );
     }
 
-    async fn simulate_agent_merge_conflict(workspace_repo: &Path, pr: &PullRequest) {
-        run_command(
-            "git",
-            &[
-                "checkout",
-                "-B",
-                &pr.head_ref,
-                &format!("origin/{}", pr.head_ref),
-            ],
-            Some(workspace_repo),
-        )
-        .await
-        .expect("feature branch should check out in workspace");
-
+    async fn simulate_agent_merge_conflict(workspace_repo: &Path) {
         let merge_result = run_command_output(
             "git",
-            &[
-                "merge",
-                "--no-edit",
-                "--no-ff",
-                &format!("origin/{}", pr.base_ref),
-            ],
+            &["merge", "--no-edit", "--no-ff", MANAGED_BASE_REF],
             Some(workspace_repo),
         )
         .await
@@ -1311,7 +1421,9 @@ mod tests {
         let mapped = unique_temp_path("mapped-repo");
         let auto = root.join("symphony");
         init_git_repo(&mapped).await;
+        seed_repo(&mapped).await;
         init_git_repo(&auto).await;
+        seed_repo(&auto).await;
 
         let mut workspace = sample_workspace(root);
         workspace
@@ -1321,13 +1433,21 @@ mod tests {
         let resolved = resolve_checkout(&workspace, &sample_pr("openai/symphony"))
             .await
             .expect("mapped repo should resolve");
+        let resolved_path =
+            std::fs::canonicalize(&resolved.path).expect("resolved repo should canonicalize");
         assert_eq!(
-            std::fs::canonicalize(resolved.path).expect("resolved repo should canonicalize"),
-            std::fs::canonicalize(mapped).expect("mapped repo should canonicalize")
+            resolved_path.clone(),
+            std::fs::canonicalize(managed_worktree_path(&workspace, "openai/symphony"))
+                .expect("managed worktree should canonicalize")
         );
         assert!(
             !resolved.resumed_conflict_workspace,
             "clean mapped repo should not be treated as a conflict resume",
+        );
+        assert_ne!(
+            resolved_path,
+            std::fs::canonicalize(mapped).expect("mapped repo should canonicalize"),
+            "runner should operate in the managed worktree rather than the discovery repo",
         );
     }
 
@@ -1336,13 +1456,16 @@ mod tests {
         let root = unique_temp_path("root");
         let repo = root.join("symphony");
         init_git_repo(&repo).await;
+        seed_repo(&repo).await;
 
-        let resolved = resolve_checkout(&sample_workspace(root), &sample_pr("openai/symphony"))
+        let workspace = sample_workspace(root);
+        let resolved = resolve_checkout(&workspace, &sample_pr("openai/symphony"))
             .await
             .expect("same-name repo should resolve");
         assert_eq!(
             std::fs::canonicalize(resolved.path).expect("resolved repo should canonicalize"),
-            std::fs::canonicalize(repo).expect("repo should canonicalize")
+            std::fs::canonicalize(managed_worktree_path(&workspace, "openai/symphony"))
+                .expect("managed worktree should canonicalize")
         );
         assert!(
             !resolved.resumed_conflict_workspace,
@@ -1370,7 +1493,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn resolve_checkout_rejects_dirty_repositories() {
+    async fn resolve_checkout_uses_clean_managed_worktree_even_when_source_repo_is_dirty() {
         let root = unique_temp_path("root");
         let repo = root.join("symphony");
         init_git_repo(&repo).await;
@@ -1383,21 +1506,33 @@ mod tests {
             .expect("git commit should succeed");
         std::fs::write(repo.join("tracked.txt"), "modified").expect("tracked file should rewrite");
 
-        let error = resolve_checkout(&sample_workspace(root), &sample_pr("openai/symphony"))
+        let workspace = sample_workspace(root);
+        let resolved = resolve_checkout(&workspace, &sample_pr("openai/symphony"))
             .await
-            .expect_err("dirty repo should fail");
+            .expect("dirty source repo should still allow managed worktree creation");
         assert!(
-            error.to_string().contains("tracked changes"),
-            "error should explain that dirty repositories are rejected",
+            resolved.path.starts_with(managed_worktree_root(&workspace)),
+            "resolved checkout should live under the managed worktree root",
+        );
+        let tracked_file = fs::read_to_string(resolved.path.join("tracked.txt"))
+            .expect("managed worktree should expose committed tracked file contents");
+        assert_eq!(
+            tracked_file, "original",
+            "managed worktree should be built from committed source history, not dirty source files",
         );
     }
 
     #[tokio::test]
     async fn resolve_checkout_allows_resuming_matching_conflict_workspace() {
         let (workspace, pr) = prepare_workspace_scenario(true).await;
-        let repo = workspace.root.join("symphony");
+        let initial = resolve_checkout(&workspace, &pr)
+            .await
+            .expect("managed worktree should resolve");
+        sync_workspace(&initial.path, workspace.git_transport, &pr)
+            .await
+            .expect("managed worktree sync should succeed");
 
-        simulate_agent_merge_conflict(&repo, &pr).await;
+        simulate_agent_merge_conflict(&initial.path).await;
 
         let resolved = resolve_checkout(&workspace, &pr)
             .await
@@ -1408,16 +1543,18 @@ mod tests {
         );
         assert_eq!(
             std::fs::canonicalize(resolved.path).expect("resolved repo should canonicalize"),
-            std::fs::canonicalize(repo).expect("repo should canonicalize")
+            std::fs::canonicalize(initial.path).expect("managed worktree should canonicalize")
         );
     }
 
     #[tokio::test]
-    async fn sync_workspace_fetches_branches_and_checks_out_pr_branch_without_merging_base() {
+    async fn sync_workspace_fetches_refs_and_checks_out_detached_head_without_merging_base() {
         let (workspace, pr) = prepare_workspace_scenario(false).await;
-        let repo = workspace.root.join("symphony");
+        let resolved = resolve_checkout(&workspace, &pr)
+            .await
+            .expect("managed worktree should resolve");
 
-        let report = sync_workspace(&repo, workspace.git_transport, &pr)
+        let report = sync_workspace(&resolved.path, workspace.git_transport, &pr)
             .await
             .expect("workspace sync should succeed");
 
@@ -1434,20 +1571,44 @@ mod tests {
             "a clean sync should not look like a resumed conflict workspace",
         );
         assert!(
-            !repo.join("base.txt").exists(),
+            !resolved.path.join("base.txt").exists(),
             "runner should not merge the base branch into the workspace anymore",
         );
         assert!(
-            !has_unmerged_paths(&repo)
+            !has_unmerged_paths(&resolved.path)
                 .await
                 .expect("unmerged path detection should work"),
             "plain workspace sync should not leave merge conflicts behind",
         );
 
-        let current_branch =
-            run_command_capture("git", &["rev-parse", "--abbrev-ref", "HEAD"], Some(&repo))
+        let current_branch = run_command_capture(
+            "git",
+            &["rev-parse", "--abbrev-ref", "HEAD"],
+            Some(&resolved.path),
+        )
+        .await
+        .expect("current branch should resolve");
+        assert_eq!(current_branch, "HEAD");
+        let current_head_sha =
+            run_command_capture("git", &["rev-parse", "HEAD"], Some(&resolved.path))
                 .await
-                .expect("current branch should resolve");
-        assert_eq!(current_branch, pr.head_ref);
+                .expect("current head sha should resolve");
+        assert_eq!(current_head_sha, pr.head_sha);
+        let local_head_branch = run_command_output(
+            "git",
+            &[
+                "show-ref",
+                "--verify",
+                "--quiet",
+                &format!("refs/heads/{}", pr.head_ref),
+            ],
+            Some(&resolved.path),
+        )
+        .await
+        .expect("show-ref should execute");
+        assert!(
+            !local_head_branch.status.success(),
+            "managed worktree should not create a local branch for the PR head",
+        );
     }
 }

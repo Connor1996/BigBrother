@@ -53,6 +53,7 @@ The UI shows the authored PR list, a `Review Requests` tab for PRs that currentl
 - existing local checkouts for the repositories you want BigBrother to operate on
   - by default it looks under `workspace.root` for a directory named after the repo, such as `../tikv` for `tikv/tikv`
   - if auto-discovery is not enough, you can provide `workspace.repo_map` entries in the config
+  - these paths are only used to discover the source repository; BigBrother runs edits in its own managed worktrees under `<workspace.root>/bigbrother-worktrees`
 - credentials for pushing back to your PR branches
   - SSH is the default git transport in the example config
 
@@ -79,6 +80,9 @@ target/release/symphony-rs --config symphony-rs.toml
 
 The example config sets `workspace.root = ".."`, which means BigBrother will look for sibling
 repositories next to `symphony-rs` before it tries any explicit `workspace.repo_map` overrides.
+It also means BigBrother will place its centralized managed worktrees under
+`../bigbrother-worktrees`, with one reusable detached-HEAD worktree per repository such as
+`../bigbrother-worktrees/tikv-bigbrother`.
 If you enable `agent.dangerously_bypass_approvals_and_sandbox`, BigBrother will invoke Codex with
 full unsandboxed access, so only use that on a machine you already trust.
 By default, BigBrother also injects `-c model_reasoning_effort="xhigh"` into `codex exec` so the
@@ -144,10 +148,10 @@ prompts on a given machine, edit the repo files directly.
 
 When BigBrother detects a PR that needs attention, it:
 
-1. resolves an existing local repository checkout for the PR
-2. syncs the PR head branch into that checkout
-3. fetches the latest base branch refs into that checkout without merging them
-4. if a later retry sees the same unresolved merge-conflict workspace for the same PR head/base pair, it resumes from that workspace instead of rejecting it as a generic dirty checkout
+1. resolves an existing local source repository for the PR via `workspace.repo_map` or `<workspace.root>/<repo-name>`
+2. creates or reuses a centralized BigBrother-managed worktree for that repo under `<workspace.root>/bigbrother-worktrees/<repo-name>-bigbrother`
+3. syncs the PR head and latest base refs into that managed worktree and checks out the PR head in detached-HEAD mode
+4. if the same PR later retries with the same unresolved merge state, it resumes from that managed worktree; if a different PR for the same repo needs the worktree first, BigBrother can rebuild it and take over
 5. asks the agent to merge the latest base branch, resolve conflicts if needed, and then continue with the CI or review fix
 6. builds an execution prompt from the PR context and trigger reason
 7. pipes that prompt to the configured agent command
@@ -157,7 +161,7 @@ When the configured agent command is `codex`, BigBrother treats reasoning effort
 agent setting. The `[agent] model_reasoning_effort` config defaults to `xhigh`, and the runner
 always passes it explicitly to `codex exec` via `-c model_reasoning_effort="..."`.
 
-The default prompt templates ask the agent to inspect GitHub feedback and CI, merge the latest base branch itself when needed, resolve conflicts before declaring success, fix code in-place, run targeted validation, and push back to the PR branch if it can. They also tell the agent to stop and ask for operator direction before making material or high-risk changes instead of changing code unilaterally. When the agent decides a change is non-trivial, it emits a machine-readable `BIGBROTHER_NEEDS_DECISION:` marker; BigBrother then sets the PR to `needs decision`, auto-freezes future automatic runs for that PR under the hood, and stores the full operator-facing explanation in the PR details output until you explicitly clear it from the dashboard.
+The default prompt templates ask the agent to inspect GitHub feedback and CI, merge the latest base branch itself when needed, resolve conflicts before declaring success, fix code in-place, run targeted validation, and push back to the PR branch if it can. Because the managed worktree uses detached HEAD, the prompt also tells the agent not to create or rely on a local branch and to publish explicitly with `git push "$SYMPHONY_PR_PUSH_REMOTE" HEAD:"$SYMPHONY_PR_HEAD_REF"`. They also tell the agent to stop and ask for operator direction before making material or high-risk changes instead of changing code unilaterally. When the agent decides a change is non-trivial, it emits a machine-readable `BIGBROTHER_NEEDS_DECISION:` marker; BigBrother then sets the PR to `needs decision`, auto-freezes future automatic runs for that PR under the hood, and stores the full operator-facing explanation in the PR details output until you explicitly clear it from the dashboard.
 
 If a `needs decision` run came from review feedback and you address that feedback manually, clicking
 `Addressed` marks the currently displayed review signal as handled before the immediate targeted
@@ -172,8 +176,9 @@ Manual deep reviews use the `$deep-review` skill in read-only mode: they write t
 - review feedback detection is based on reviews, inline review comments, and issue comments from people other than the PR author
 - CI attention is triggered only when a failing status/check is newer than the last processed CI signal for that PR
 - successful runs only consume the trigger they were started for; unchanged review and CI signals on the same PR stay independently actionable
-- repository resolution prefers `workspace.repo_map` when present, then falls back to `<workspace.root>/<repo-name>`
-- BigBrother reuses existing local checkouts and refuses to operate on a tracked repo that has local tracked changes
+- repository discovery prefers `workspace.repo_map` when present, then falls back to `<workspace.root>/<repo-name>`
+- BigBrother derives a centralized managed worktree root at `<workspace.root>/bigbrother-worktrees` and uses one reusable detached-HEAD worktree per repository
+- the source discovery repository may be dirty because BigBrother no longer edits it directly; the managed worktree is the only execution workspace
 - the current UI is local-only and intentionally minimal
 - state persistence is still JSON-backed for MVP
 

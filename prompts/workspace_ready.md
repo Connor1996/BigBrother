@@ -1,3 +1,4 @@
-- Workspace preparation fetched the PR head branch and latest base branch refs and checked out the PR branch locally.
-- If the base and head branches differ, you must merge the latest base branch into the PR branch yourself before addressing the trigger-specific issue.
-
+- Workspace preparation fetched the PR head branch and latest base branch refs into a dedicated BigBrother-managed worktree and checked out the PR head in detached-HEAD mode.
+- Do not create or rely on a local branch for this PR inside that managed worktree.
+- If the base and head branches differ, you must merge the latest base branch into the current detached HEAD yourself before addressing the trigger-specific issue.
+- If you need to publish commits, push explicitly with `git push "$SYMPHONY_PR_PUSH_REMOTE" HEAD:"$SYMPHONY_PR_HEAD_REF"`.

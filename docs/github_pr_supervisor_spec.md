@@ -165,7 +165,7 @@ When CI fails or new actionable feedback appears:
 
 1. daemon detects the trigger
 2. daemon decides whether auto-repair is allowed
-3. daemon resolves and syncs an existing local checkout for the PR
+3. daemon resolves the local source repository for the PR, then prepares a managed execution worktree for it
 4. daemon runs the configured agent command with a prompt derived from PR state
 5. daemon captures result, updates state, and refreshes UI
 6. if the run fails, the daemon leaves the PR in `failed` until the operator explicitly requests a retry
@@ -426,20 +426,23 @@ Per-PR checkout resolution order:
 
 Rules:
 
-- resolved checkout paths must point to an existing local git repository
+- resolved source-repository paths must point to an existing local git repository
 - automatically discovered paths must stay under `workspace.root`
-- the daemon must sync the tracked PR branch before each run
+- the daemon must derive a centralized managed worktree root at `<workspace.root>/bigbrother-worktrees`
+- each repository should use a single reusable managed worktree at `<managed-root>/<repo-name>-bigbrother`
+- the daemon must sync the tracked PR head into that managed worktree before each run
 - the daemon must also fetch the latest base branch before each run
-- the daemon should not merge the base branch into the checked-out PR branch before launching the
-  agent
-- the agent should perform the base-branch merge itself inside the prepared workspace
-- if the agent leaves a conflicted merge state behind, a later run should keep that conflicted
-  workspace available so the agent can resume resolving it instead of starting over
+- the daemon must check out the PR head in detached-HEAD mode inside the managed worktree rather than creating a local branch
+- the daemon should not merge the base branch before launching the agent
+- the agent should perform the base-branch merge itself inside the prepared managed worktree
+- if the agent leaves a conflicted merge state behind, a later run for the same PR should keep that conflicted
+  managed worktree available so the agent can resume resolving it instead of starting over
 - if a later run sees the same PR head SHA, the same base SHA in `MERGE_HEAD`, and unresolved
   paths already present in the working tree, it should resume from that conflict workspace instead
   of rejecting it as a generic dirty checkout
-- the daemon must not create a brand-new clone as part of the normal PR execution path
-- the daemon should refuse to reuse a checkout with tracked local modifications
+- a different PR for the same repository may preempt that single managed worktree and rebuild it from the source repository when needed
+- the daemon must not create a brand-new clone per PR as part of the normal execution path; it should derive managed worktrees from the discovered source repository instead
+- the daemon may rebuild or hard-reset its managed worktree, but it must not rewrite the discovered source repository checkout
 
 Git transport:
 
@@ -479,12 +482,13 @@ The agent prompt must include:
 - current base and head SHAs
 - current head SHA
 - whether the daemon resumed an existing unresolved conflict workspace
-- explicit instruction that the agent itself should merge the latest base branch into the PR branch
+- explicit instruction that the agent itself should merge the latest base branch into the current HEAD
   when needed
 - explicit instruction that merge conflicts must be resolved before the trigger-specific fix is
   considered complete
 - explicit instruction to work only in the synced workspace
-- explicit instruction to push only to the PR branch when safe
+- explicit instruction that the managed workspace may be detached HEAD and should not create a local PR branch
+- explicit instruction to push only to the PR branch when safe, using an explicit `git push <remote> HEAD:<head_ref>` form
 - explicit instruction to stop and explain blockers when unsafe
 - explicit instruction that material or high-risk changes must be escalated to the operator for a
   decision instead of being applied unilaterally
@@ -776,7 +780,8 @@ The feed should make daemon progress legible even when no PR is currently runnin
 - auto-discovered checkout paths must stay under the configured `workspace.root`
 - explicitly configured `workspace.repo_map` paths may live elsewhere, but must resolve to an existing local git repository
 - agent subprocess cwd must equal workspace path
-- existing local checkouts must not be silently rewritten when they contain tracked local modifications
+- discovered source repositories must not be silently rewritten when they contain tracked local modifications
+- managed worktrees under `<workspace.root>/bigbrother-worktrees` may be rebuilt or hard-reset by the daemon
 - shell packaging must not bypass backend policy
 - if the operator explicitly enables unsandboxed Codex execution in config, the backend must pass
   that through deliberately rather than smuggling dangerous flags inside opaque free-form args
@@ -790,7 +795,8 @@ Current state in this repository is a prototype spike that already contains:
 - local state handling
 - persisted per-PR track/untrack state
 - retry bookkeeping for failed runs and targeted manual retries from the dashboard
-- existing-checkout resolution via `workspace.root` plus explicit `workspace.repo_map` overrides
+- source-repository discovery via `workspace.root` plus explicit `workspace.repo_map` overrides
+- centralized managed worktrees derived from those source repositories
 - agent runner skeleton
 - a minimal local web dashboard
 
@@ -803,7 +809,7 @@ Phase-complete v0 means:
 1. daemon can track configured authored PRs
 2. web UI shows current state and live updates
 3. actionable CI/review changes trigger runs exactly once per new signal
-4. agent runs happen in resolved existing local checkouts, without cloning new per-PR workspaces in the normal path
+4. agent runs happen in centralized per-repository managed worktrees derived from resolved source repositories, without cloning new per-PR workspaces in the normal path
 5. blocker cases notify the user
 6. runtime state survives restart via SQLite
 
