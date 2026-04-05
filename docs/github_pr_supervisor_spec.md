@@ -406,6 +406,9 @@ Default v0 policy:
 - if the agent explicitly reports that the required change is material or otherwise non-trivial, mark the PR as `needs_decision`, persist the operator-facing reason, and auto-pause future automatic runs for that PR until resumed
 - resuming a paused PR resets retry bookkeeping and triggers an immediate targeted re-check for that PR instead of waiting for the next daemon poll
 - resuming a `needs_decision` PR should also clear the persisted decision reason before triggering that immediate targeted re-check
+- if that `needs_decision` state came from `ReviewFeedback`, resuming it should also mark the
+  currently displayed review signal as handled manually so the immediate re-check does not rerun on
+  the same unchanged review activity
 - the immediate resume re-check should prefer the resumed PR over unrelated actionable PRs, while still respecting the configured global concurrency
 - the immediate resume re-check should fetch only the resumed PR from GitHub rather than refreshing the entire authored PR set
 - while a PR remains paused, scheduled polls should preserve its last visible state instead of

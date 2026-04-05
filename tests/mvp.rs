@@ -601,6 +601,53 @@ async fn non_trivial_run_becomes_needs_decision_and_resume_clears_it() {
 }
 
 #[tokio::test]
+async fn review_needs_decision_resume_marks_current_review_signal_processed() {
+    let runner = NeedsDecisionAgentRunner {
+        invocations: Arc::new(AtomicUsize::new(0)),
+    };
+    let review_pr = review_feedback_only_pr();
+    let expected_review_signal = review_pr.latest_reviewer_activity_at;
+    let supervisor = Arc::new(
+        Supervisor::new(
+            sample_config(
+                unique_temp_path("state.json"),
+                unique_temp_path("workspaces"),
+            ),
+            Arc::new(FakeGitHubProvider {
+                prs: vec![review_pr],
+            }),
+            Arc::new(runner.clone()),
+        )
+        .expect("supervisor should initialize"),
+    );
+
+    supervisor
+        .poll_once()
+        .await
+        .expect("poll should process review-feedback PR");
+
+    let resumed = supervisor
+        .set_pr_paused("openai/symphony#19", false)
+        .await
+        .expect("resume should succeed")
+        .expect("PR should exist");
+    assert_eq!(resumed.status, TrackingStatus::WaitingReview);
+    assert!(!resumed.persisted.paused);
+    assert_eq!(resumed.persisted.needs_decision_reason, None);
+    assert_eq!(
+        resumed.persisted.last_processed_review_comment_at,
+        expected_review_signal
+    );
+
+    tokio::time::sleep(Duration::from_millis(50)).await;
+    assert_eq!(
+        runner.invocations.load(Ordering::SeqCst),
+        1,
+        "resume should not rerun on the same review signal after manual handling"
+    );
+}
+
+#[tokio::test]
 async fn activity_api_exposes_recent_daemon_events() {
     let supervisor = Arc::new(
         Supervisor::new(
@@ -2155,6 +2202,20 @@ fn review_request_pr() -> PullRequest {
         ReviewDecision::Commented,
         0,
         Some(Utc.with_ymd_and_hms(2026, 3, 30, 18, 20, 0).unwrap()),
+    )
+}
+
+fn review_feedback_only_pr() -> PullRequest {
+    base_pr(
+        "openai/symphony#19",
+        19,
+        "Needs manual judgment on reviewer request",
+        "review-feedback-sha",
+        CiStatus::Success,
+        None,
+        ReviewDecision::ChangesRequested,
+        0,
+        Some(Utc.with_ymd_and_hms(2026, 3, 30, 18, 21, 0).unwrap()),
     )
 }
 

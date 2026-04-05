@@ -158,6 +158,11 @@ always passes it explicitly to `codex exec` via `-c model_reasoning_effort="..."
 
 The default prompt templates ask the agent to inspect GitHub feedback and CI, merge the latest base branch itself when needed, resolve conflicts before declaring success, fix code in-place, run targeted validation, and push back to the PR branch if it can. They also tell the agent to stop and ask for operator direction before making material or high-risk changes instead of changing code unilaterally. When the agent decides a change is non-trivial, it emits a machine-readable `BIGBROTHER_NEEDS_DECISION:` marker; BigBrother then sets the PR to `needs decision`, auto-pauses future automatic runs for that PR under the hood, and stores the full operator-facing explanation in the PR details output until you resume it.
 
+If a `needs decision` run came from review feedback and you address that feedback manually, hitting
+`Resume` marks the currently displayed review signal as handled before the immediate targeted
+re-check. That prevents the daemon from re-running immediately on the same unchanged review
+activity, while still allowing newer reviewer activity to become actionable later.
+
 Manual deep reviews use the `$deep-review` skill in read-only mode: they write the final review markdown under `target/bigbrother-deep-review`, and the backend posts only that final review artifact back to the PR as a comment when the run succeeds.
 
 ## Current Assumptions

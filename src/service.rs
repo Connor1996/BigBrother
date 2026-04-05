@@ -358,6 +358,11 @@ impl Supervisor {
                     .or_default();
                 persisted.paused = paused;
                 if !paused {
+                    if previous.needs_decision_reason.is_some()
+                        && previous.last_run_trigger == Some(AttentionReason::ReviewFeedback)
+                    {
+                        mark_current_review_signal_processed(persisted, &tracked.pull_request);
+                    }
                     persisted.clear_retry_state();
                     persisted.clear_needs_decision();
                 }
@@ -1393,6 +1398,11 @@ fn record_successful_run(
     persisted.clear_retry_state();
 }
 
+fn mark_current_review_signal_processed(persisted: &mut PersistentPrState, pr: &PullRequest) {
+    persisted.last_processed_review_comment_at = pr.latest_reviewer_activity_at;
+    persisted.last_processed_comment_at = pr.latest_reviewer_activity_at;
+}
+
 fn record_needs_decision(persisted: &mut PersistentPrState, reason: &str) {
     persisted.clear_retry_state();
     persisted.paused = true;
@@ -1896,6 +1906,44 @@ mod tests {
         assert_eq!(
             determine_attention_reason(&pr, &persisted),
             Some(AttentionReason::CiFailed)
+        );
+    }
+
+    #[test]
+    fn marking_current_review_signal_processed_clears_same_review_feedback() {
+        let mut pr = sample_pr();
+        pr.review_decision = ReviewDecision::ChangesRequested;
+        pr.latest_reviewer_activity_at = Some(Utc.with_ymd_and_hms(2026, 3, 30, 18, 5, 0).unwrap());
+
+        let mut persisted = PersistentPrState::default();
+        mark_current_review_signal_processed(&mut persisted, &pr);
+
+        assert_eq!(
+            persisted.last_processed_review_comment_at,
+            pr.latest_reviewer_activity_at
+        );
+        assert_eq!(
+            persisted.last_processed_comment_at,
+            pr.latest_reviewer_activity_at
+        );
+        assert_eq!(determine_attention_reason(&pr, &persisted), None);
+    }
+
+    #[test]
+    fn marking_current_review_signal_processed_keeps_newer_review_feedback_actionable() {
+        let mut pr = sample_pr();
+        pr.review_decision = ReviewDecision::ChangesRequested;
+        let current = Utc.with_ymd_and_hms(2026, 3, 30, 18, 5, 0).unwrap();
+        let newer = Utc.with_ymd_and_hms(2026, 3, 30, 18, 7, 0).unwrap();
+        pr.latest_reviewer_activity_at = Some(current);
+
+        let mut persisted = PersistentPrState::default();
+        mark_current_review_signal_processed(&mut persisted, &pr);
+
+        pr.latest_reviewer_activity_at = Some(newer);
+        assert_eq!(
+            determine_attention_reason(&pr, &persisted),
+            Some(AttentionReason::ReviewFeedback)
         );
     }
 
