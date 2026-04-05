@@ -6,7 +6,7 @@ use std::{
 use anyhow::Result;
 use chrono::{DateTime, Utc};
 use futures::future::BoxFuture;
-use tokio::sync::{mpsc, Mutex as AsyncMutex};
+use tokio::sync::{broadcast, mpsc, Mutex as AsyncMutex};
 
 use crate::{
     config::ResolvedConfig,
@@ -109,6 +109,7 @@ pub struct PollQueryState {
 }
 
 const MAX_LIVE_OUTPUT_CHARS: usize = 16_000;
+const MAX_TERMINAL_RECORDING_CHARS: usize = 120_000;
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct GitHubRequestStats {
@@ -236,6 +237,18 @@ struct ActiveRun {
     trigger: AttentionReason,
 }
 
+#[derive(Debug, Clone)]
+pub struct TerminalStreamChunk {
+    pub chunk: String,
+    pub last_output_at: DateTime<Utc>,
+}
+
+pub struct TerminalSubscription {
+    pub initial_recording: Option<String>,
+    pub last_output_at: Option<DateTime<Utc>>,
+    pub receiver: broadcast::Receiver<TerminalStreamChunk>,
+}
+
 #[derive(Debug)]
 struct SupervisorInner {
     persisted_state: PersistentStateFile,
@@ -251,6 +264,7 @@ pub struct Supervisor {
     shared_state: Arc<Mutex<DashboardState>>,
     inner: AsyncMutex<SupervisorInner>,
     poll_lock: AsyncMutex<()>,
+    terminal_streams: Arc<AsyncMutex<HashMap<String, broadcast::Sender<TerminalStreamChunk>>>>,
 }
 
 impl Supervisor {
@@ -284,6 +298,7 @@ impl Supervisor {
                 active_runs: HashMap::new(),
             }),
             poll_lock: AsyncMutex::new(()),
+            terminal_streams: Arc::new(AsyncMutex::new(HashMap::new())),
         })
     }
 
@@ -310,6 +325,39 @@ impl Supervisor {
             .lock()
             .expect("dashboard state mutex poisoned")
             .clone()
+    }
+
+    pub async fn subscribe_terminal(&self, pr_key: &str) -> Option<TerminalSubscription> {
+        let (initial_recording, last_output_at) = {
+            let state = self
+                .shared_state
+                .lock()
+                .expect("dashboard state mutex poisoned");
+            let runner = state
+                .tracked_prs
+                .get(pr_key)
+                .and_then(|tracked| tracked.runner.as_ref())
+                .or_else(|| {
+                    state
+                        .review_requests
+                        .get(pr_key)
+                        .and_then(|review_request| review_request.runner.as_ref())
+                })?;
+            if runner.status != TrackingStatus::Running {
+                return None;
+            }
+            (runner.live_terminal.clone(), runner.last_terminal_output_at)
+        };
+
+        let receiver = terminal_stream_sender(&self.terminal_streams, pr_key)
+            .await
+            .subscribe();
+
+        Some(TerminalSubscription {
+            initial_recording,
+            last_output_at,
+            receiver,
+        })
     }
 
     pub fn push_event(
@@ -649,16 +697,36 @@ impl Supervisor {
         runner_request.output_updates = Some(output_tx);
         let output_pr_key = pr_key.clone();
         let shared_state = self.shared_state.clone();
+        let terminal_streams = self.terminal_streams.clone();
         let output_forwarder = tokio::spawn(async move {
             let mut buffered_output = String::new();
             while let Some(update) = output_rx.recv().await {
-                let mut state = shared_state.lock().expect("dashboard state mutex poisoned");
-                update_runner_output(&mut state, &output_pr_key, &mut buffered_output, update);
+                let terminal_chunk = match &update {
+                    RunUpdate::TerminalChunk {
+                        chunk,
+                        last_output_at,
+                    } => Some((chunk.clone(), *last_output_at)),
+                    RunUpdate::TranscriptChunk(_) => None,
+                };
+                {
+                    let mut state = shared_state.lock().expect("dashboard state mutex poisoned");
+                    update_runner_output(&mut state, &output_pr_key, &mut buffered_output, update);
+                }
+                if let Some((chunk, last_output_at)) = terminal_chunk {
+                    broadcast_terminal_chunk(
+                        &terminal_streams,
+                        &output_pr_key,
+                        chunk,
+                        last_output_at,
+                    )
+                    .await;
+                }
             }
         });
 
         let outcome = self.runner.run(runner_request).await;
         output_forwarder.await.ok();
+        remove_terminal_stream(&self.terminal_streams, &pr_key).await;
         let mut outcome = outcome;
         let mut posted_comment = false;
         if outcome.success {
@@ -876,16 +944,42 @@ impl Supervisor {
             runner_request.output_updates = Some(output_tx);
             let output_pr_key = pr_key.clone();
             let shared_state = self.shared_state.clone();
+            let terminal_streams = self.terminal_streams.clone();
             let output_forwarder = tokio::spawn(async move {
                 let mut buffered_output = String::new();
                 while let Some(update) = output_rx.recv().await {
-                    let mut state = shared_state.lock().expect("dashboard state mutex poisoned");
-                    update_runner_output(&mut state, &output_pr_key, &mut buffered_output, update);
+                    let terminal_chunk = match &update {
+                        RunUpdate::TerminalChunk {
+                            chunk,
+                            last_output_at,
+                        } => Some((chunk.clone(), *last_output_at)),
+                        RunUpdate::TranscriptChunk(_) => None,
+                    };
+                    {
+                        let mut state =
+                            shared_state.lock().expect("dashboard state mutex poisoned");
+                        update_runner_output(
+                            &mut state,
+                            &output_pr_key,
+                            &mut buffered_output,
+                            update,
+                        );
+                    }
+                    if let Some((chunk, last_output_at)) = terminal_chunk {
+                        broadcast_terminal_chunk(
+                            &terminal_streams,
+                            &output_pr_key,
+                            chunk,
+                            last_output_at,
+                        )
+                        .await;
+                    }
                 }
             });
 
             let outcome = self.runner.run(runner_request).await;
             output_forwarder.await.ok();
+            remove_terminal_stream(&self.terminal_streams, &pr_key).await;
 
             let mut inner = self.inner.lock().await;
             let active_run = inner.active_runs.remove(&pr_key);
@@ -1089,7 +1183,12 @@ fn build_tracked_prs(
     for pr in prs {
         tracked.insert(
             pr.key.clone(),
-            build_tracked_pr(pr, persisted_state, active_runs),
+            build_tracked_pr(
+                pr,
+                persisted_state,
+                active_runs,
+                previous_tracked.get(&pr.key),
+            ),
         );
     }
 
@@ -1105,7 +1204,12 @@ fn build_tracked_prs(
 
         tracked.insert(
             pr_key.clone(),
-            build_tracked_pr(&previous.pull_request, persisted_state, active_runs),
+            build_tracked_pr(
+                &previous.pull_request,
+                persisted_state,
+                active_runs,
+                Some(previous),
+            ),
         );
     }
 
@@ -1123,7 +1227,12 @@ fn build_review_requests(
     for pr in prs {
         review_requests.insert(
             pr.key.clone(),
-            build_review_request(pr, persisted_state, active_runs),
+            build_review_request(
+                pr,
+                persisted_state,
+                active_runs,
+                previous_review_requests.get(&pr.key),
+            ),
         );
     }
 
@@ -1135,7 +1244,12 @@ fn build_review_requests(
         if previous.runner.is_some() {
             review_requests.insert(
                 pr_key.clone(),
-                build_review_request(&previous.pull_request, persisted_state, active_runs),
+                build_review_request(
+                    &previous.pull_request,
+                    persisted_state,
+                    active_runs,
+                    Some(previous),
+                ),
             );
         }
     }
@@ -1147,6 +1261,7 @@ fn build_tracked_pr(
     pr: &PullRequest,
     persisted_state: &PersistentStateFile,
     active_runs: &HashMap<String, ActiveRun>,
+    previous: Option<&TrackedPr>,
 ) -> TrackedPr {
     let persisted = persisted_state
         .prs
@@ -1161,17 +1276,8 @@ fn build_tracked_pr(
         status: derive_status(pr, &persisted, attention_reason, active_run.is_some()),
         attention_reason,
         persisted,
-        runner: active_run.map(|active| RunnerState {
-            status: TrackingStatus::Running,
-            started_at: active.started_at,
-            finished_at: None,
-            attempt: 1,
-            trigger: active.trigger,
-            summary: active.trigger.active_summary().to_owned(),
-            live_output: None,
-            live_terminal: None,
-            last_terminal_output_at: None,
-            exit_code: None,
+        runner: active_run.map(|active| {
+            restore_runner_state(previous.and_then(|tracked| tracked.runner.as_ref()), active)
         }),
     }
 }
@@ -1180,6 +1286,7 @@ fn build_review_request(
     pr: &PullRequest,
     persisted_state: &PersistentStateFile,
     active_runs: &HashMap<String, ActiveRun>,
+    previous: Option<&ReviewRequestPr>,
 ) -> ReviewRequestPr {
     let persisted = persisted_state
         .prs
@@ -1193,18 +1300,33 @@ fn build_review_request(
         persisted,
         runner: active_run
             .filter(|active| active.trigger == AttentionReason::DeepReview)
-            .map(|active| RunnerState {
-                status: TrackingStatus::Running,
-                started_at: active.started_at,
-                finished_at: None,
-                attempt: 1,
-                trigger: active.trigger,
-                summary: active.trigger.active_summary().to_owned(),
-                live_output: None,
-                live_terminal: None,
-                last_terminal_output_at: None,
-                exit_code: None,
+            .map(|active| {
+                restore_runner_state(
+                    previous.and_then(|review_request| review_request.runner.as_ref()),
+                    active,
+                )
             }),
+    }
+}
+
+fn restore_runner_state(previous: Option<&RunnerState>, active: &ActiveRun) -> RunnerState {
+    let preserved = previous.filter(|runner| {
+        runner.started_at == active.started_at
+            && runner.trigger == active.trigger
+            && runner.status == TrackingStatus::Running
+    });
+
+    RunnerState {
+        status: TrackingStatus::Running,
+        started_at: active.started_at,
+        finished_at: None,
+        attempt: preserved.map_or(1, |runner| runner.attempt),
+        trigger: active.trigger,
+        summary: active.trigger.active_summary().to_owned(),
+        live_output: preserved.and_then(|runner| runner.live_output.clone()),
+        live_terminal: preserved.and_then(|runner| runner.live_terminal.clone()),
+        last_terminal_output_at: preserved.and_then(|runner| runner.last_terminal_output_at),
+        exit_code: None,
     }
 }
 
@@ -1440,11 +1562,12 @@ fn update_runner_output(
             append_live_output(buffered_output, &chunk);
             runner.live_output = Some(buffered_output.clone());
         }
-        RunUpdate::TerminalSnapshot {
-            screen,
+        RunUpdate::TerminalChunk {
+            chunk,
             last_output_at,
         } => {
-            runner.live_terminal = Some(screen);
+            let recording = runner.live_terminal.get_or_insert_with(String::new);
+            append_terminal_recording(recording, &chunk);
             runner.last_terminal_output_at = Some(last_output_at);
         }
     }
@@ -1484,7 +1607,7 @@ fn persist_run_metadata(
     );
     persisted.last_run_summary = Some(outcome.summary.clone());
     persisted.last_run_output = capped_run_output(outcome.captured_output.as_deref());
-    persisted.last_run_terminal = capped_run_output(outcome.captured_terminal.as_deref());
+    persisted.last_run_terminal = capped_terminal_recording(outcome.captured_terminal.as_deref());
     persisted.last_terminal_output_at = outcome.last_terminal_output_at;
     persisted.last_run_trigger = trigger;
 }
@@ -1528,6 +1651,38 @@ fn deep_review_comment_failure(mut outcome: RunOutcome, error: &str) -> RunOutco
     outcome.summary = AttentionReason::DeepReview.failure_summary().to_owned();
     outcome.captured_output = Some(captured_output);
     outcome
+}
+
+async fn terminal_stream_sender(
+    terminal_streams: &Arc<AsyncMutex<HashMap<String, broadcast::Sender<TerminalStreamChunk>>>>,
+    pr_key: &str,
+) -> broadcast::Sender<TerminalStreamChunk> {
+    let mut streams = terminal_streams.lock().await;
+    streams
+        .entry(pr_key.to_owned())
+        .or_insert_with(|| broadcast::channel(256).0)
+        .clone()
+}
+
+async fn broadcast_terminal_chunk(
+    terminal_streams: &Arc<AsyncMutex<HashMap<String, broadcast::Sender<TerminalStreamChunk>>>>,
+    pr_key: &str,
+    chunk: String,
+    last_output_at: DateTime<Utc>,
+) {
+    let sender = terminal_stream_sender(terminal_streams, pr_key).await;
+    let _ = sender.send(TerminalStreamChunk {
+        chunk,
+        last_output_at,
+    });
+}
+
+async fn remove_terminal_stream(
+    terminal_streams: &Arc<AsyncMutex<HashMap<String, broadcast::Sender<TerminalStreamChunk>>>>,
+    pr_key: &str,
+) {
+    let mut streams = terminal_streams.lock().await;
+    streams.remove(pr_key);
 }
 
 fn poll_failed_notification(preferred_pr_key: Option<&str>, error: &anyhow::Error) -> Notification {
@@ -1656,6 +1811,21 @@ fn append_live_output(buffer: &mut String, chunk: &str) {
     }
 }
 
+fn append_terminal_recording(buffer: &mut String, chunk: &str) {
+    buffer.push_str(chunk);
+
+    let total_chars = buffer.chars().count();
+    if total_chars <= MAX_TERMINAL_RECORDING_CHARS {
+        return;
+    }
+
+    let trim_chars = total_chars - MAX_TERMINAL_RECORDING_CHARS;
+    let trim_end = char_boundary(buffer, trim_chars);
+    if trim_end > 0 {
+        buffer.drain(..trim_end);
+    }
+}
+
 fn capped_run_output(output: Option<&str>) -> Option<String> {
     let output = output?;
     if output.trim().is_empty() {
@@ -1664,6 +1834,17 @@ fn capped_run_output(output: Option<&str>) -> Option<String> {
 
     let mut capped = String::new();
     append_live_output(&mut capped, output);
+    Some(capped)
+}
+
+fn capped_terminal_recording(output: Option<&str>) -> Option<String> {
+    let output = output?;
+    if output.trim().is_empty() {
+        return None;
+    }
+
+    let mut capped = String::new();
+    append_terminal_recording(&mut capped, output);
     Some(capped)
 }
 

@@ -283,8 +283,8 @@ impl AgentRunner for FakeAgentRunner {
             };
             if let Some(output_updates) = request.output_updates.as_ref() {
                 let _ = output_updates.send(RunUpdate::TranscriptChunk(transcript.clone()));
-                let _ = output_updates.send(RunUpdate::TerminalSnapshot {
-                    screen: "$ codex exec\nThinking...\ncargo test -q".to_owned(),
+                let _ = output_updates.send(RunUpdate::TerminalChunk {
+                    chunk: "$ codex exec\nThinking...\ncargo test -q".to_owned(),
                     last_output_at: Utc::now(),
                 });
             }
@@ -328,8 +328,8 @@ impl AgentRunner for AlwaysFailingAgentRunner {
             let transcript = fake_cli_transcript(&request, "codex: run failed before fix\n");
             if let Some(output_updates) = request.output_updates.as_ref() {
                 let _ = output_updates.send(RunUpdate::TranscriptChunk(transcript.clone()));
-                let _ = output_updates.send(RunUpdate::TerminalSnapshot {
-                    screen: "$ codex exec\nrun failed before fix".to_owned(),
+                let _ = output_updates.send(RunUpdate::TerminalChunk {
+                    chunk: "$ codex exec\nrun failed before fix".to_owned(),
                     last_output_at: Utc::now(),
                 });
             }
@@ -1028,20 +1028,21 @@ async fn pr_detail_page_uses_bigbrother_branding() {
     assert!(
         html.contains("<title>BigBrother Run View</title>")
             && html.contains(r#"<link rel="icon" type="image/png" href="/assets/bigbrother-mark.png">"#)
+            && html.contains(r#"<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/xterm@5.5.0/css/xterm.min.css">"#)
+            && html.contains(r#"/api/pr/terminal/ws?key=${encodeURIComponent(pr.key)}"#)
             && html.contains("<div class=\"brand-lockup\">")
             && html.contains("<h1>BigBrother</h1>")
             && html.contains("Back to dashboard")
             && html.contains("src=\"/assets/bigbrother-mark.png\"")
             && html.contains("id=\"title\" class=\"pr-title\"")
             && html.contains("id=\"subtitle\" class=\"pr-meta\"")
-            && html.contains(r#"isRunning ? "terminal-shell" : "output""#)
             && !html.contains("Open GitHub PR")
             && !html.contains("Attention:")
             && !html.contains("PR run details and saved output.")
             && html.contains("a {\n      color: inherit;\n    }")
             && html.contains("<label>CI</label>")
             && html.contains("<label>Reviews</label>"),
-        "run detail page should reuse the homepage branding/layout while keeping the CI and reviews cards, got: {html}",
+        "run detail page should reuse the homepage branding/layout, load xterm, and keep the CI and reviews cards, got: {html}",
     );
 }
 
@@ -1480,10 +1481,8 @@ async fn running_pr_exposes_live_terminal() {
         running_pr["latest_summary"],
         json!("investigating CI failure")
     );
-    assert_eq!(
-        running_pr["detail_output"],
-        json!("$ codex exec\nThinking...\ncargo test -q")
-    );
+    assert_eq!(running_pr["terminal_recording"], Value::Null);
+    assert_eq!(running_pr["detail_output"], Value::Null);
 
     let detail_payload = get_json(supervisor.clone(), "/api/pr?key=openai%2Fsymphony%237").await;
     assert_eq!(detail_payload["key"], json!("openai/symphony#7"));
@@ -1492,9 +1491,14 @@ async fn running_pr_exposes_live_terminal() {
         json!("investigating CI failure")
     );
     assert_eq!(
-        detail_payload["detail_output"],
+        detail_payload["terminal_recording"],
         json!("$ codex exec\nThinking...\ncargo test -q")
     );
+    if let Some(detail_output) = detail_payload["detail_output"].as_str() {
+        assert!(detail_output.starts_with("=== Prompt Sent To Codex CLI ===\n"));
+        assert!(detail_output.contains("=== Codex CLI Output ===\n"));
+        assert!(detail_output.contains("codex: inspecting workspace\ncargo test -q\n"));
+    }
     assert!(detail_payload["last_terminal_output_at"].is_string());
     assert_eq!(detail_payload["live_output"], Value::Null);
 
@@ -1535,6 +1539,10 @@ async fn completed_pr_detail_shows_saved_run_output() {
     assert_eq!(detail_payload["status"], json!("waiting review"));
     assert_eq!(detail_payload["details_label"], json!("Last run"));
     assert!(detail_payload["details_at"].is_string());
+    assert_eq!(
+        detail_payload["terminal_recording"],
+        json!("$ codex exec\nThinking...\ncargo test -q")
+    );
     assert_eq!(
         detail_payload["detail_output"],
         json!("codex: inspecting workspace\ncargo test -q")
@@ -1602,6 +1610,7 @@ async fn running_pr_does_not_fall_back_to_saved_terminal_snapshot() {
     assert_eq!(detail_payload["status"], json!("running"));
     assert_eq!(detail_payload["live_output"], Value::Null);
     assert_eq!(detail_payload["detail_output"], Value::Null);
+    assert_eq!(detail_payload["terminal_recording"], Value::Null);
 }
 
 #[tokio::test]

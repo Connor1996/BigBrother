@@ -43,8 +43,8 @@ pub struct RunRequest {
 #[derive(Debug, Clone)]
 pub enum RunUpdate {
     TranscriptChunk(String),
-    TerminalSnapshot {
-        screen: String,
+    TerminalChunk {
+        chunk: String,
         last_output_at: DateTime<Utc>,
     },
 }
@@ -289,7 +289,7 @@ async fn run_inner(
         .map_err(|error| RunFailure::with_transcript(error, &transcript_preamble))?;
     drop(pair.master);
 
-    let (status, combined_output, terminal_screen, last_terminal_output_at) =
+    let (status, combined_output, terminal_recording, last_terminal_output_at) =
         collect_process_output(child, reader, request.output_updates.clone())
             .await
             .map_err(|error| RunFailure::with_transcript(error, &transcript_preamble))?;
@@ -329,7 +329,7 @@ async fn run_inner(
     } else {
         base_captured_output
     };
-    let captured_terminal = normalize_output(&terminal_screen);
+    let captured_terminal = normalize_output(&terminal_recording);
 
     Ok((
         exit_code,
@@ -955,14 +955,14 @@ async fn collect_process_output(
         tokio::task::spawn_blocking(move || read_output_stream(reader, output_updates));
 
     let status = wait_task.await.context("agent wait task panicked")??;
-    let (combined_text, terminal_screen, last_terminal_output_at) = reader_task
+    let (combined_text, terminal_recording, last_terminal_output_at) = reader_task
         .await
         .context("agent PTY reader task panicked")??;
 
     Ok((
         status,
         combined_text,
-        terminal_screen,
+        terminal_recording,
         last_terminal_output_at,
     ))
 }
@@ -971,9 +971,9 @@ fn read_output_stream(
     mut reader: Box<dyn Read + Send>,
     output_updates: Option<UnboundedSender<RunUpdate>>,
 ) -> Result<(String, String, Option<DateTime<Utc>>)> {
-    let mut parser = vt100::Parser::new(DEFAULT_PTY_ROWS, DEFAULT_PTY_COLS, 0);
     let mut buffer = [0_u8; 4096];
     let mut combined_text = String::new();
+    let mut terminal_recording = String::new();
     let mut last_terminal_output_at = None;
 
     loop {
@@ -985,9 +985,19 @@ fn read_output_stream(
         }
 
         let chunk = &buffer[..bytes_read];
-        parser.process(chunk);
         let output_at = Utc::now();
         last_terminal_output_at = Some(output_at);
+
+        let terminal_chunk = String::from_utf8_lossy(chunk).into_owned();
+        if !terminal_chunk.is_empty() {
+            terminal_recording.push_str(&terminal_chunk);
+            if let Some(output_updates) = output_updates.as_ref() {
+                let _ = output_updates.send(RunUpdate::TerminalChunk {
+                    chunk: terminal_chunk,
+                    last_output_at: output_at,
+                });
+            }
+        }
 
         let transcript_chunk = normalize_terminal_transcript_chunk(chunk);
         if !transcript_chunk.is_empty() {
@@ -996,21 +1006,9 @@ fn read_output_stream(
                 let _ = output_updates.send(RunUpdate::TranscriptChunk(transcript_chunk));
             }
         }
-
-        let screen = render_terminal_screen(&parser);
-        if let Some(output_updates) = output_updates.as_ref() {
-            let _ = output_updates.send(RunUpdate::TerminalSnapshot {
-                screen,
-                last_output_at: output_at,
-            });
-        }
     }
 
-    Ok((
-        combined_text,
-        render_terminal_screen(&parser),
-        last_terminal_output_at,
-    ))
+    Ok((combined_text, terminal_recording, last_terminal_output_at))
 }
 
 fn normalize_terminal_transcript_chunk(chunk: &[u8]) -> String {
@@ -1034,18 +1032,6 @@ fn normalize_carriage_returns(text: &str) -> String {
     }
 
     normalized
-}
-
-fn render_terminal_screen(parser: &vt100::Parser) -> String {
-    trim_trailing_blank_lines(&parser.screen().contents())
-}
-
-fn trim_trailing_blank_lines(screen: &str) -> String {
-    let mut lines = screen.lines().collect::<Vec<_>>();
-    while matches!(lines.last(), Some(line) if line.trim().is_empty()) {
-        lines.pop();
-    }
-    lines.join("\n")
 }
 
 #[cfg(test)]

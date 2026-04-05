@@ -8,7 +8,10 @@ use std::{
 
 use anyhow::{Context, Result};
 use axum::{
-    extract::{Query, State},
+    extract::{
+        ws::{Message, WebSocket, WebSocketUpgrade},
+        Query, State,
+    },
     http::{header, StatusCode},
     response::{Html, IntoResponse},
     routing::{get, post},
@@ -24,7 +27,7 @@ use crate::{
         NEEDS_DECISION_SUMMARY,
     },
     runner::OUTPUT_TRANSCRIPT_HEADER,
-    service::Supervisor,
+    service::{Supervisor, TerminalSubscription},
 };
 
 const BIGBROTHER_MARK_PATH: &str = "/assets/bigbrother-mark.png";
@@ -1021,6 +1024,9 @@ const PR_DETAIL_HTML: &str = r##"<!doctype html>
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>BigBrother Run View</title>
   <link rel="icon" type="image/png" href="/assets/bigbrother-mark.png">
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/xterm@5.5.0/css/xterm.min.css">
+  <script src="https://cdn.jsdelivr.net/npm/xterm@5.5.0/lib/xterm.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/xterm-addon-fit@0.8.0/lib/xterm-addon-fit.min.js"></script>
   <style>
     :root {
       color-scheme: light;
@@ -1228,20 +1234,47 @@ const PR_DETAIL_HTML: &str = r##"<!doctype html>
       font-size: 0.78rem;
     }
 
+    .terminal-stage {
+      position: relative;
+    }
+
     .terminal-shell {
-      margin: 0;
-      min-height: 220px;
-      max-height: 50vh;
-      overflow: auto;
+      min-height: 320px;
+      max-height: 70vh;
+      overflow: hidden;
       padding: 16px;
       border-radius: 16px;
       border: 1px solid rgba(19, 24, 29, 0.14);
       background:
         radial-gradient(circle at top left, rgba(57, 81, 95, 0.35), transparent 32%),
         linear-gradient(180deg, #182126 0%, #10171b 100%);
-      color: #d6e2e5;
+    }
+
+    .terminal-shell.is-hidden,
+    .output.is-hidden,
+    .terminal-empty-hint.is-hidden {
+      display: none;
+    }
+
+    .terminal-shell .xterm {
+      height: calc(70vh - 32px);
+      min-height: 288px;
+    }
+
+    .terminal-shell .xterm-viewport {
+      border-radius: 10px;
+      scrollbar-color: rgba(214, 226, 229, 0.3) transparent;
+      scrollbar-width: thin;
+    }
+
+    .terminal-empty-hint {
+      position: absolute;
+      top: 16px;
+      left: 16px;
+      right: 16px;
+      color: rgba(214, 226, 229, 0.78);
       font: 0.84rem/1.45 "SFMono-Regular", "SF Mono", ui-monospace, monospace;
-      white-space: pre;
+      pointer-events: none;
     }
 
     .output {
@@ -1311,12 +1344,23 @@ const PR_DETAIL_HTML: &str = r##"<!doctype html>
       <div class="terminal-block">
         <span id="terminal-label" class="section-label">Terminal</span>
         <div id="terminal-meta" class="terminal-meta">Waiting for terminal activity…</div>
-        <pre id="terminal" class="terminal-shell">No terminal output yet. Codex may still be thinking.</pre>
+        <div class="terminal-stage">
+          <div id="terminal-shell" class="terminal-shell is-hidden"></div>
+          <div id="terminal-empty-hint" class="terminal-empty-hint is-hidden">No terminal output yet. Codex may still be thinking.</div>
+          <pre id="terminal-output" class="output is-hidden">No saved run output is available for the last run.</pre>
+        </div>
       </div>
     </section>
   </main>
 
   <script>
+    let terminal = null;
+    let fitAddon = null;
+    let terminalSocket = null;
+    let terminalSocketKey = null;
+    let renderedTerminalKey = null;
+    let renderedTerminalRecording = null;
+
     function fmtTime(value) {
       if (!value) return "-";
       return new Date(value).toLocaleString();
@@ -1351,15 +1395,14 @@ const PR_DETAIL_HTML: &str = r##"<!doctype html>
       link.classList.remove("is-hidden");
     }
 
-    function setTerminalMode(isRunning) {
-      document.getElementById("terminal-label").textContent =
-        isRunning ? "Live Terminal" : "Last Run Output";
-      document.getElementById("terminal").className =
-        isRunning ? "terminal-shell" : "output";
+    function terminalLabel(pr) {
+      if (pr.status === "running") return "Live Terminal";
+      if (pr.terminal_recording) return "Saved Terminal";
+      return "Last Run Output";
     }
 
     function detailOutputStatusText(pr) {
-      if (pr.last_terminal_output_at) {
+      if ((pr.status === "running" || pr.terminal_recording) && pr.last_terminal_output_at) {
         return `Last terminal update: ${fmtTime(pr.last_terminal_output_at)}`;
       }
 
@@ -1372,15 +1415,185 @@ const PR_DETAIL_HTML: &str = r##"<!doctype html>
         : "No saved run output is available for the last run.";
     }
 
+    function ensureTerminal() {
+      if (terminal) {
+        return terminal;
+      }
+
+      if (!window.Terminal) {
+        return null;
+      }
+
+      terminal = new window.Terminal({
+        convertEol: false,
+        disableStdin: true,
+        cursorBlink: false,
+        scrollback: 6000,
+        theme: {
+          background: "#10171b",
+          foreground: "#d6e2e5",
+          selectionBackground: "rgba(214, 226, 229, 0.22)"
+        }
+      });
+
+      if (window.FitAddon && window.FitAddon.FitAddon) {
+        fitAddon = new window.FitAddon.FitAddon();
+        terminal.loadAddon(fitAddon);
+      }
+
+      terminal.open(document.getElementById("terminal-shell"));
+      fitTerminal();
+      window.addEventListener("resize", fitTerminal);
+      return terminal;
+    }
+
+    function fitTerminal() {
+      if (fitAddon) {
+        fitAddon.fit();
+      }
+    }
+
+    function renderTerminalRecording(recording, key) {
+      const activeTerminal = ensureTerminal();
+      if (!activeTerminal) {
+        return;
+      }
+
+      activeTerminal.reset();
+      fitTerminal();
+      if (recording) {
+        activeTerminal.write(recording);
+      }
+      renderedTerminalKey = key || null;
+      renderedTerminalRecording = recording || "";
+    }
+
+    function appendTerminalChunk(chunk) {
+      const activeTerminal = ensureTerminal();
+      if (!activeTerminal || !chunk) {
+        return;
+      }
+
+      activeTerminal.write(chunk);
+      renderedTerminalRecording = (renderedTerminalRecording || "") + chunk;
+    }
+
+    function closeTerminalSocket() {
+      if (!terminalSocket) {
+        return;
+      }
+
+      terminalSocket.close();
+      terminalSocket = null;
+      terminalSocketKey = null;
+    }
+
+    function showTerminalFallback(text) {
+      closeTerminalSocket();
+      renderedTerminalKey = null;
+      renderedTerminalRecording = null;
+      document.getElementById("terminal-shell").classList.add("is-hidden");
+      document.getElementById("terminal-empty-hint").classList.add("is-hidden");
+      const output = document.getElementById("terminal-output");
+      output.classList.remove("is-hidden");
+      output.textContent = text;
+    }
+
+    function showTerminalReplay(pr, shouldReset) {
+      const activeTerminal = ensureTerminal();
+      if (!activeTerminal) {
+        showTerminalFallback(pr.terminal_recording || pr.detail_output || detailOutputStatusText(pr));
+        return false;
+      }
+
+      document.getElementById("terminal-shell").classList.remove("is-hidden");
+      document.getElementById("terminal-output").classList.add("is-hidden");
+      const hint = document.getElementById("terminal-empty-hint");
+      if (pr.status === "running" && !pr.terminal_recording) {
+        hint.classList.remove("is-hidden");
+      } else {
+        hint.classList.add("is-hidden");
+      }
+      if (shouldReset) {
+        renderTerminalRecording(pr.terminal_recording || "", pr.key);
+      }
+      return true;
+    }
+
+    function connectTerminalSocket(pr) {
+      if (pr.status !== "running") {
+        closeTerminalSocket();
+        return;
+      }
+
+      if (terminalSocket && terminalSocketKey === pr.key) {
+        return;
+      }
+
+      closeTerminalSocket();
+      const protocol = window.location.protocol === "https:" ? "wss" : "ws";
+      const socket = new WebSocket(
+        `${protocol}://${window.location.host}/api/pr/terminal/ws?key=${encodeURIComponent(pr.key)}`
+      );
+      terminalSocket = socket;
+      terminalSocketKey = pr.key;
+
+      socket.onmessage = (event) => {
+        const payload = JSON.parse(event.data);
+        if (payload.kind === "reset") {
+          renderTerminalRecording(payload.recording || "", pr.key);
+        } else if (payload.kind === "chunk") {
+          appendTerminalChunk(payload.chunk);
+        }
+
+        if (payload.last_output_at) {
+          document.getElementById("terminal-meta").textContent =
+            `Last terminal update: ${fmtTime(payload.last_output_at)}`;
+        }
+
+        const hint = document.getElementById("terminal-empty-hint");
+        if ((payload.recording && payload.recording.length > 0) || (payload.chunk && payload.chunk.length > 0)) {
+          hint.classList.add("is-hidden");
+        }
+      };
+
+      socket.onclose = () => {
+        if (terminalSocket === socket) {
+          terminalSocket = null;
+          terminalSocketKey = null;
+        }
+      };
+    }
+
+    function renderDetailOutput(pr) {
+      document.getElementById("terminal-label").textContent = terminalLabel(pr);
+      document.getElementById("terminal-meta").textContent = detailOutputStatusText(pr);
+
+      if (pr.status === "running" || pr.terminal_recording) {
+        const shouldReset =
+          pr.status !== "running" ||
+          !terminalSocket ||
+          terminalSocketKey !== pr.key ||
+          renderedTerminalKey !== pr.key ||
+          renderedTerminalRecording === null;
+        if (showTerminalReplay(pr, shouldReset)) {
+          connectTerminalSocket(pr);
+          return;
+        }
+      }
+
+      showTerminalFallback(pr.detail_output || pr.terminal_recording || detailOutputStatusText(pr));
+    }
+
     async function refresh() {
       const key = new URLSearchParams(window.location.search).get("key");
       if (!key) {
         setPrLink(null, null);
         document.getElementById("title").textContent = "Missing PR key";
         document.getElementById("subtitle").textContent = "Open this page from the dashboard so the PR key is included.";
-        setTerminalMode(false);
         document.getElementById("terminal-meta").textContent = "-";
-        document.getElementById("terminal").textContent = "No PR key was provided.";
+        document.getElementById("terminal-label").textContent = "Last Run Output";
+        showTerminalFallback("No PR key was provided.");
         return;
       }
 
@@ -1397,9 +1610,7 @@ const PR_DETAIL_HTML: &str = r##"<!doctype html>
       document.getElementById("subtitle").textContent = `Updated ${fmtTime(pr.updated_at)}`;
       document.getElementById("updated-at").textContent = fmtTime(pr.updated_at);
       document.getElementById("summary-text").textContent = pr.latest_summary || "-";
-      setTerminalMode(pr.status === "running");
-      document.getElementById("terminal-meta").textContent = detailOutputStatusText(pr);
-      document.getElementById("terminal").textContent = pr.detail_output || detailOutputStatusText(pr);
+      renderDetailOutput(pr);
       setPill("status-pill", pr.status);
       setPill("ci-pill", pr.ci_status);
       setPill("review-pill", pr.review_status);
@@ -1409,9 +1620,9 @@ const PR_DETAIL_HTML: &str = r##"<!doctype html>
       setPrLink(null, null);
       document.getElementById("title").textContent = "Failed to load run";
       document.getElementById("subtitle").textContent = error.message;
-      setTerminalMode(false);
+      document.getElementById("terminal-label").textContent = "Last Run Output";
       document.getElementById("terminal-meta").textContent = "-";
-      document.getElementById("terminal").textContent = error.message;
+      showTerminalFallback(error.message);
     });
     setInterval(() => refresh().catch(() => {}), 1500);
   </script>
@@ -1469,6 +1680,7 @@ struct PullRequestSummary {
     attention_reason: Option<String>,
     updated_at: DateTime<Utc>,
     latest_summary: Option<String>,
+    terminal_recording: Option<String>,
     detail_output: Option<String>,
     last_terminal_output_at: Option<DateTime<Utc>>,
     details_label: Option<String>,
@@ -1514,6 +1726,17 @@ struct RetryResponse {
     pr: PullRequestSummary,
 }
 
+#[derive(Debug, Serialize)]
+struct TerminalStreamPayload {
+    kind: &'static str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    recording: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    chunk: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    last_output_at: Option<DateTime<Utc>>,
+}
+
 pub fn default_listen_addr() -> SocketAddr {
     SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 8787)
 }
@@ -1528,6 +1751,7 @@ pub fn router(supervisor: Arc<Supervisor>) -> Router {
         .route("/api/prs", get(list_prs))
         .route("/api/review-requests", get(list_review_requests))
         .route("/api/pr", get(get_pr))
+        .route("/api/pr/terminal/ws", get(pr_terminal_ws))
         .route("/api/prs/pause", post(set_pr_paused))
         .route("/api/prs/retry", post(trigger_failed_retry))
         .route(
@@ -1615,6 +1839,7 @@ async fn list_prs(State(supervisor): State<Arc<Supervisor>>) -> Json<PullRequest
         .tracked_prs
         .values()
         .map(summarize_pr)
+        .map(strip_detail_payload)
         .collect::<Vec<_>>();
 
     prs.sort_by(|left, right| right.updated_at.cmp(&left.updated_at));
@@ -1630,6 +1855,7 @@ async fn list_review_requests(
         .review_requests
         .values()
         .map(summarize_review_request)
+        .map(strip_detail_payload)
         .collect::<Vec<_>>();
 
     prs.sort_by(|left, right| right.updated_at.cmp(&left.updated_at));
@@ -1653,6 +1879,56 @@ async fn get_pr(
     };
 
     Ok(Json(summarize_review_request(review_request)))
+}
+
+async fn pr_terminal_ws(
+    State(supervisor): State<Arc<Supervisor>>,
+    Query(query): Query<PrQuery>,
+    ws: WebSocketUpgrade,
+) -> Result<impl IntoResponse, (StatusCode, String)> {
+    let Some(subscription) = supervisor.subscribe_terminal(&query.key).await else {
+        return Err((
+            StatusCode::CONFLICT,
+            format!("PR is not currently running: {}", query.key),
+        ));
+    };
+
+    Ok(ws.on_upgrade(move |socket| stream_terminal(socket, subscription)))
+}
+
+async fn stream_terminal(mut socket: WebSocket, mut subscription: TerminalSubscription) {
+    let reset = TerminalStreamPayload {
+        kind: "reset",
+        recording: subscription.initial_recording.take(),
+        chunk: None,
+        last_output_at: subscription.last_output_at,
+    };
+    if send_terminal_payload(&mut socket, &reset).await.is_err() {
+        return;
+    }
+
+    while let Ok(chunk) = subscription.receiver.recv().await {
+        let payload = TerminalStreamPayload {
+            kind: "chunk",
+            recording: None,
+            chunk: Some(chunk.chunk),
+            last_output_at: Some(chunk.last_output_at),
+        };
+        if send_terminal_payload(&mut socket, &payload).await.is_err() {
+            break;
+        }
+    }
+}
+
+async fn send_terminal_payload(
+    socket: &mut WebSocket,
+    payload: &TerminalStreamPayload,
+) -> Result<()> {
+    let body = serde_json::to_string(payload).context("failed to serialize terminal payload")?;
+    socket
+        .send(Message::Text(body.into()))
+        .await
+        .context("failed sending terminal websocket message")
 }
 
 async fn set_pr_paused(
@@ -1763,6 +2039,7 @@ fn summarize_pr(tracked: &TrackedPr) -> PullRequestSummary {
             .map(|reason| reason.label().to_owned()),
         updated_at: tracked.pull_request.updated_at,
         latest_summary: latest_operator_summary(tracked),
+        terminal_recording: latest_terminal_recording(tracked),
         detail_output: latest_detail_output(tracked),
         last_terminal_output_at: tracked
             .runner
@@ -1778,6 +2055,13 @@ fn summarize_pr(tracked: &TrackedPr) -> PullRequestSummary {
         details_label,
         details_at,
     }
+}
+
+fn strip_detail_payload(mut summary: PullRequestSummary) -> PullRequestSummary {
+    summary.terminal_recording = None;
+    summary.detail_output = None;
+    summary.last_terminal_output_at = None;
+    summary
 }
 
 fn summarize_review_request(review_request: &ReviewRequestPr) -> PullRequestSummary {
@@ -1797,6 +2081,7 @@ fn summarize_review_request(review_request: &ReviewRequestPr) -> PullRequestSumm
         attention_reason: Some("requested reviewer".to_owned()),
         updated_at: review_request.pull_request.updated_at,
         latest_summary: latest_review_request_summary(review_request),
+        terminal_recording: latest_review_request_terminal_recording(review_request),
         detail_output: latest_review_request_output(review_request),
         last_terminal_output_at: review_request
             .runner
@@ -1821,10 +2106,24 @@ fn latest_detail_output(tracked: &TrackedPr) -> Option<String> {
     tracked
         .runner
         .as_ref()
-        .and_then(|runner| runner.live_terminal.clone())
+        .and_then(|runner| runner.live_output.clone())
         .or_else(|| {
             if tracked.runner.is_none() {
                 persisted_run_output(tracked.persisted.last_run_output.as_deref())
+            } else {
+                None
+            }
+        })
+}
+
+fn latest_terminal_recording(tracked: &TrackedPr) -> Option<String> {
+    tracked
+        .runner
+        .as_ref()
+        .and_then(|runner| runner.live_terminal.clone())
+        .or_else(|| {
+            if tracked.runner.is_none() {
+                tracked.persisted.last_run_terminal.clone()
             } else {
                 None
             }
@@ -1853,7 +2152,7 @@ fn latest_review_request_output(review_request: &ReviewRequestPr) -> Option<Stri
         .runner
         .as_ref()
         .filter(|runner| runner.trigger == AttentionReason::DeepReview)
-        .and_then(|runner| runner.live_terminal.clone())
+        .and_then(|runner| runner.live_output.clone())
         .or_else(|| {
             if review_request.runner.is_none()
                 && review_request.persisted.last_run_trigger == Some(AttentionReason::DeepReview)
@@ -1863,6 +2162,14 @@ fn latest_review_request_output(review_request: &ReviewRequestPr) -> Option<Stri
                 None
             }
         })
+}
+
+fn latest_review_request_terminal_recording(review_request: &ReviewRequestPr) -> Option<String> {
+    review_request
+        .runner
+        .as_ref()
+        .filter(|runner| runner.trigger == AttentionReason::DeepReview)
+        .and_then(|runner| runner.live_terminal.clone())
 }
 
 fn summarize_deep_review_persisted_run(persisted: &PersistentPrState) -> Option<String> {

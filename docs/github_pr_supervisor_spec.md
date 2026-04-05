@@ -708,7 +708,7 @@ The MVP UI can be a single page that shows:
 The MVP UI does not need:
 
 - split panes
-- SSE or WebSocket delivery for live updates
+- bidirectional terminal input or terminal ownership handoff back into the browser
 - advanced filtering
 - broader manual controls beyond track/untrack and the minimum required for testing
 
@@ -745,8 +745,9 @@ Panels:
 - summary
 - recent comments/reviews summary
 - run history
-- read-only embedded terminal screen for the current run, including the latest terminal redraw state and last terminal activity time
-- saved last run output when no run is currently active, sourced from the persisted command/output transcript rather than the last terminal redraw snapshot and rendered with wrapped monospace text so long lines stay readable
+- a browser-rendered `xterm.js` terminal for active runs, fed from the raw PTY stream over WebSocket so Codex CLI redraws, ANSI styling, and live scrollback are preserved in the detail view
+- the same terminal presentation for completed runs whenever a PTY session was captured, replayed from the saved terminal recording rather than a one-screen snapshot so operators can inspect the final terminal context after the run ends
+- saved last run output as a wrapped monospace text fallback only when no PTY terminal recording is available for the last run (for example, failures before the terminal session starts)
 - latest run output summary rendered as a short operator-facing status line rather than raw terminal or transcript text
 - when a run ends in `needs decision`, the saved last run output should show the full operator-facing explanation and requested decision, while the summary stays short
 - workspace path

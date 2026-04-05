@@ -37,7 +37,7 @@ For each open PR authored by you, BigBrother polls GitHub and computes a live st
 - `running`: the local agent command is currently working on the PR
 - `draft`, `closed`, `merged`: terminal or non-actionable states
 
-The UI shows the authored PR list, a `Review Requests` tab for PRs that currently request your review, CI/review state, timestamps, top-right dashboard tabs for switching between the PR view, review inbox, and live daemon activity, a dedicated run-details page that streams live Codex CLI output for active runs and preserves the latest run output after completion, and a visibly subdued row state when a PR is explicitly shown as `untracked`.
+The UI shows the authored PR list, a `Review Requests` tab for PRs that currently request your review, CI/review state, timestamps, top-right dashboard tabs for switching between the PR view, review inbox, and live daemon activity, and a dedicated run-details page that uses a browser-rendered terminal for both active Codex runs and saved completed-run terminal recordings, falling back to wrapped last-run text output only when no PTY terminal capture exists. It also keeps a visibly subdued row state when a PR is explicitly shown as `untracked`.
 
 ## Requirements
 
