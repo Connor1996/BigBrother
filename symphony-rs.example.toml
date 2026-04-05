@@ -1,26 +1,39 @@
 [github]
+# GitHub API token used for PR search and follow-up API calls.
 api_token = "$GITHUB_TOKEN"
-author = "Connor1996"
+# GitHub login used to find authored PRs and review requests.
+author = "$GITHUB_USER"
+# GitHub Search API query for authored PRs. `{author}` will be replaced by the value above.
 query = "is:pr is:open archived:false author:{author}"
-max_prs = 20
+# Maximum number of authored PRs to pull into the tracked working set each poll.
+max_prs = 25
+# Optional GitHub API base URL override for GitHub Enterprise or testing.
+# api_base_url = "https://api.github.com"
 
 [daemon]
+# Poll interval for refreshing GitHub state and scheduling new work.
 poll_interval_secs = 60
+# Maximum number of concurrent agent runs across all tracked PRs.
 max_concurrent_runs = 2
 
 [workspace]
+# Default root used to locate sibling repository checkouts like ../tikv or ../tidb-cse.
 root = ".."
-# Optional explicit overrides when the repo cannot be found as ../<repo-name>.
+# Optional explicit overrides when a repo cannot be found as ../<repo-name>.
 # repo_map = { "tidbcloud/tidb-cse" = "../tidb-cse", "tikv/tikv" = "../tikv" }
+# Git transport used when syncing PR branches and fetching base refs.
 git_transport = "ssh"
 
 [agent]
+# Executable used to run the coding agent.
 command = "codex"
 # When true, Symphony launches `codex` with `--dangerously-bypass-approvals-and-sandbox`.
 # Leave this off unless the host environment is already externally sandboxed and you want
 # Codex to have full local access.
 # dangerously_bypass_approvals_and_sandbox = true
+# Arguments passed to the agent command. The trailing `-` tells Codex to read the prompt from stdin.
 args = ["exec", "--model", "gpt-5.4", "-"]
+# Extra operator guidance appended to every generated prompt.
 additional_instructions = """
 - Prefer using `gh` when you need to inspect the latest PR review comments or CI state.
 - Work only inside the current workspace checkout.
@@ -28,14 +41,24 @@ additional_instructions = """
 - If you are blocked, explain the blocker clearly in the final output.
 """
 
-# Optional one-way Feishu notifications.
-# This first pass only pushes daemon run state and results outward; it does not receive commands.
-#
+# Optional override for the persisted local state file.
+# state_path = "./symphony-rs-state.json"
+
+# Dashboard refresh frequency in the browser UI.
+[ui]
+refresh_hz = 2
+
 # Private DM mode via an enterprise self-built app bot.
 # [notifications.feishu]
+# Feishu app ID for the self-built bot application.
 # app_id = "$FEISHU_APP_ID"
+# Feishu app secret for the same bot application.
 # app_secret = "$FEISHU_APP_SECRET"
+# Target user or chat identifier that receives daemon notifications.
 # receive_id = "$FEISHU_NOTIFY_EMAIL"
+# Type of `receive_id`: one of `email`, `open_id`, `user_id`, `union_id`, or `chat_id`.
 # receive_id_type = "email"
-# label = "connor-mbp"
+# Short instance label included in each DM so multiple daemons are easy to distinguish.
+# label = "mbp"
+# HTTP timeout for Feishu notification delivery.
 # timeout_secs = 10
