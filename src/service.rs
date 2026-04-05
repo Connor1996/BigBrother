@@ -1312,10 +1312,10 @@ fn derive_status(
         TrackingStatus::Closed
     } else if persisted.needs_decision_reason.is_some() {
         TrackingStatus::NeedsDecision
-    } else if has_failed_actionable_status(persisted, attention_reason) {
-        TrackingStatus::Failed
     } else if persisted.paused {
         TrackingStatus::Paused
+    } else if has_failed_actionable_status(persisted, attention_reason) {
+        TrackingStatus::Failed
     } else if pr.is_draft {
         TrackingStatus::Draft
     } else if let Some(reason) = attention_reason {
@@ -2223,7 +2223,7 @@ mod tests {
     }
 
     #[test]
-    fn failed_status_overrides_paused_display_when_signal_is_still_actionable() {
+    fn paused_status_overrides_failed_when_signal_is_still_actionable() {
         let mut pr = sample_pr();
         pr.ci_status = CiStatus::Failure;
         pr.ci_updated_at = Some(Utc.with_ymd_and_hms(2026, 3, 30, 18, 5, 0).unwrap());
@@ -2239,7 +2239,7 @@ mod tests {
 
         assert_eq!(
             derive_status(&pr, &persisted, Some(AttentionReason::CiFailed), false),
-            TrackingStatus::Failed
+            TrackingStatus::Paused
         );
     }
 

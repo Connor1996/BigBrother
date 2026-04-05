@@ -691,6 +691,7 @@ The MVP UI can be a single page that shows:
 - the review-request inbox should stay lightweight: it should list matching PRs without hydrating CI, reviews, review comments, or issue comments until the operator opens a detail view or starts a deep review
 - each PR’s status, CI state, review state, and latest action summary, with no separate attention column and no secondary status-note annotation underneath the status pill
 - paused rows should show the paused status without any extra note underneath
+- if an operator explicitly paused a PR earlier, that visible `paused` state should take precedence over a stale `failed` display until the operator resumes it
 - PRs in `needs decision` should still keep their underlying auto-paused execution freeze, but the visible status pill should read `needs decision` rather than `paused`
 - the non-description columns centered for easier scanning, with red `Pause`, green `Resume`, and yellow `Retry` / `Addressed` controls in the action column using white labels plus simple icons
 - a row-level link into a dedicated PR detail page for run output, showing an embedded read-only terminal while a run is active and the saved last run output after the run completes
