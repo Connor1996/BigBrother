@@ -399,9 +399,9 @@ impl Supervisor {
                 EventLevel::Info,
                 Some(pr_key.to_owned()),
                 if paused {
-                    format!("paused review tracking for {pr_key}")
+                    format!("untracked {pr_key}")
                 } else {
-                    format!("resumed review tracking for {pr_key}")
+                    format!("tracked {pr_key}")
                 },
             );
         }
@@ -610,7 +610,7 @@ impl Supervisor {
             supervisor.push_event(
                 EventLevel::Info,
                 Some(pr_key.clone()),
-                format!("triggering immediate check for {pr_key} after resume"),
+                format!("triggering immediate check for {pr_key} after tracking"),
             );
 
             if let Err(error) = supervisor.poll_once_for_pr(&pr_key).await {
@@ -1313,7 +1313,7 @@ fn derive_status(
     } else if persisted.needs_decision_reason.is_some() {
         TrackingStatus::NeedsDecision
     } else if persisted.paused {
-        TrackingStatus::Paused
+        TrackingStatus::Untracked
     } else if has_failed_actionable_status(persisted, attention_reason) {
         TrackingStatus::Failed
     } else if pr.is_draft {
@@ -2031,12 +2031,12 @@ mod tests {
                 false,
             )
             .is_none(),
-            "paused PR should never be scheduled automatically",
+            "untracked PR should never be scheduled automatically",
         );
     }
 
     #[test]
-    fn paused_prs_report_paused_status() {
+    fn paused_prs_report_untracked_status() {
         let pr = sample_pr();
         let persisted = PersistentPrState {
             paused: true,
@@ -2045,7 +2045,7 @@ mod tests {
 
         assert_eq!(
             derive_status(&pr, &persisted, None, false),
-            TrackingStatus::Paused
+            TrackingStatus::Untracked
         );
         assert_eq!(
             derive_status(&pr, &persisted, Some(AttentionReason::CiFailed), true),
@@ -2082,7 +2082,7 @@ mod tests {
             pr.key.clone(),
             TrackedPr {
                 pull_request: pr.clone(),
-                status: TrackingStatus::Paused,
+                status: TrackingStatus::Untracked,
                 attention_reason: None,
                 persisted,
                 runner: None,
@@ -2092,10 +2092,10 @@ mod tests {
         let tracked = build_tracked_prs(&[], &persisted_state, &HashMap::new(), &previous_tracked);
         let frozen = tracked
             .get(&pr.key)
-            .expect("paused PR should be preserved from the previous snapshot");
+            .expect("untracked PR should be preserved from the previous snapshot");
 
         assert_eq!(frozen.pull_request.title, pr.title);
-        assert_eq!(frozen.status, TrackingStatus::Paused);
+        assert_eq!(frozen.status, TrackingStatus::Untracked);
     }
 
     #[test]
@@ -2239,7 +2239,7 @@ mod tests {
 
         assert_eq!(
             derive_status(&pr, &persisted, Some(AttentionReason::CiFailed), false),
-            TrackingStatus::Paused
+            TrackingStatus::Untracked
         );
     }
 

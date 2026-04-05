@@ -515,12 +515,12 @@ async fn pause_api_toggles_review_wait_state_for_a_tracked_pr() {
     )
     .await;
     assert_eq!(paused["ok"], json!(true));
-    assert_eq!(paused["pr"]["status"], json!("paused"));
+    assert_eq!(paused["pr"]["status"], json!("untracked"));
     assert_eq!(paused["pr"]["is_paused"], json!(true));
 
     let prs_payload = get_json(supervisor.clone(), "/api/prs").await;
     let prs = prs_payload["prs"].as_array().expect("prs array");
-    assert_eq!(status_for(prs, "openai/symphony#1"), Some("paused"));
+    assert_eq!(status_for(prs, "openai/symphony#1"), Some("untracked"));
     assert_eq!(is_paused_for(prs, "openai/symphony#1"), Some(true));
     let paused_health = get_json(supervisor.clone(), "/api/health").await;
     assert_eq!(paused_health["tracked_prs"], 1);
@@ -873,7 +873,7 @@ async fn scheduled_poll_keeps_paused_pr_snapshot_frozen() {
         .get("openai/symphony#1")
         .expect("paused PR should remain tracked");
     assert_eq!(tracked.pull_request.title, "Keep polling healthy");
-    assert_eq!(tracked.status, TrackingStatus::Paused);
+    assert_eq!(tracked.status, TrackingStatus::Untracked);
     assert_eq!(
         provider.last_frozen_len.load(Ordering::SeqCst),
         1,
@@ -1711,7 +1711,7 @@ async fn paused_pr_does_not_auto_run_until_resumed() {
         .await
         .expect("pause operation should succeed")
         .expect("tracked PR should exist");
-    assert_eq!(paused.status, TrackingStatus::Paused);
+    assert_eq!(paused.status, TrackingStatus::Untracked);
     assert!(paused.persisted.paused);
 
     supervisor
@@ -1928,7 +1928,7 @@ async fn paused_state_survives_supervisor_restart() {
 
     let prs_payload = get_json(restarted, "/api/prs").await;
     let prs = prs_payload["prs"].as_array().expect("prs array");
-    assert_eq!(status_for(prs, "openai/symphony#1"), Some("paused"));
+    assert_eq!(status_for(prs, "openai/symphony#1"), Some("untracked"));
     assert_eq!(is_paused_for(prs, "openai/symphony#1"), Some(true));
 }
 

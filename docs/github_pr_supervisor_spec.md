@@ -177,9 +177,9 @@ Scheduled GitHub polling should minimize rate-limit pressure by using two stages
 - then fetch reviews, comments, and GitHub check runs only for candidate PRs whose lightweight
   state has
   changed since the previous dashboard snapshot or whose prior CI status is still unsettled
-- PRs that are paused, including automatically paused `needs_decision` entries, should be treated as frozen dashboard snapshots during scheduled
+- PRs that are explicitly untracked, including automatically frozen `needs_decision` entries, should be treated as frozen dashboard snapshots during scheduled
   polls: keep their last known PR state in the UI, do not refresh their review or CI-derived
-  status, and avoid redundant GitHub detail hydration for them until they are resumed
+  status, and avoid redundant GitHub detail hydration for them until the operator tracks them again
 
 ### 6.3 Human Escalation
 
@@ -242,7 +242,7 @@ The MVP does not need:
 - automatic reruns based on explicit policy
 - workspace sync per PR
 - agent execution
-- per-PR pause/resume watching controls
+- per-PR track/untrack watching controls
 - local persistence
 - local browser-based GUI
 - notification plugin interface
@@ -317,7 +317,7 @@ Each tracked PR should normalize to a durable local record with:
 Canonical statuses:
 
 - `draft`
-- `paused`
+- `untracked`
 - `needs_decision`
 - `conflict`
 - `waiting_ci`
@@ -361,17 +361,17 @@ Processed markers are signal-specific:
 In addition to attention triggers, the review panel needs a clear passive-state derivation:
 
 - `waiting_ci`
-  The PR is open, not draft, not paused, not merged, not currently actionable, and its latest CI
+  The PR is open, not draft, not explicitly untracked, not merged, not currently actionable, and its latest CI
   signal is still pending. This state should be preferred over `waiting_review` so operators can
   immediately see that the next blocker is unfinished CI rather than missing review activity.
 - `waiting_review`
-  The PR is open, not draft, not paused, not merged, not currently actionable, and does not yet
+  The PR is open, not draft, not explicitly untracked, not merged, not currently actionable, and does not yet
   satisfy merge-ready policy.
 - `conflict`
   The PR is open and has a detected merge conflict against the current base branch snapshot. This
   state should override passive wait states and surface clearly in the review panel.
 - `waiting_merge`
-  The PR is open, not draft, not paused, not merged, has at least one non-author approval, and
+  The PR is open, not draft, not explicitly untracked, not merged, has at least one non-author approval, and
   satisfies merge-ready policy for the current implementation tier.
 
 For the first implementation tier, merge-ready policy should at least require:
@@ -396,22 +396,22 @@ Default v0 policy:
 - auto-act on new `changes requested`
 - optionally auto-act on ordinary review comments
 - do not auto-act on draft PRs
-- do not auto-act on paused PRs
+- do not auto-act on untracked PRs
 - do not auto-act on merged or closed PRs
 - do not launch more than the configured global concurrency
 - do not launch a second run for a PR that already has an active run
 - leave a failed automatic run in `failed` until the operator explicitly clicks `Retry`
 - a manual `Retry` should run an immediate targeted check for that PR even though scheduled polls skip failed entries
-- if the agent explicitly reports that the required change is material or otherwise non-trivial, mark the PR as `needs_decision`, persist the operator-facing reason, and auto-pause future automatic runs for that PR until resumed
-- resuming a paused PR resets retry bookkeeping and triggers an immediate targeted re-check for that PR instead of waiting for the next daemon poll
-- resuming a `needs_decision` PR should also clear the persisted decision reason before triggering that immediate targeted re-check
-- if that `needs_decision` state came from `ReviewFeedback`, resuming it should also mark the
+- if the agent explicitly reports that the required change is material or otherwise non-trivial, mark the PR as `needs_decision`, persist the operator-facing reason, and auto-freeze future automatic runs for that PR until the operator marks it addressed or tracks it again
+- tracking an untracked PR resets retry bookkeeping and triggers an immediate targeted re-check for that PR instead of waiting for the next daemon poll
+- clicking `Addressed` on a `needs_decision` PR should also clear the persisted decision reason before triggering that immediate targeted re-check
+- if that `needs_decision` state came from `ReviewFeedback`, clicking `Addressed` should also mark the
   currently displayed review signal as handled manually so the immediate re-check does not rerun on
   the same unchanged review activity
-- the immediate resume re-check should prefer the resumed PR over unrelated actionable PRs, while still respecting the configured global concurrency
-- the immediate resume re-check should fetch only the resumed PR from GitHub rather than refreshing the entire authored PR set
+- the immediate targeted re-check after the operator re-tracks a PR should prefer that PR over unrelated actionable PRs, while still respecting the configured global concurrency
+- the immediate targeted re-check after the operator re-tracks a PR should fetch only that PR from GitHub rather than refreshing the entire authored PR set
 - the failed-state `Retry` action should use the same targeted-fetch pattern rather than falling back to a full authored-PR refresh
-- while a PR remains paused, scheduled polls should preserve its last visible state instead of
+- while a PR remains untracked, scheduled polls should preserve its last visible state instead of
   updating it underneath the operator
 
 ## 13. Workspace Model
@@ -616,7 +616,7 @@ Minimum API surface for MVP:
 - `GET /api/activity`
 - `GET /api/prs`
 - `GET /api/review-requests`
-- `POST /api/prs/pause` with a JSON body containing the PR key and desired paused state
+- `POST /api/prs/pause` with a JSON body containing the PR key and desired tracked-state toggle
 - `POST /api/review-requests/deep-review` with a JSON body containing the PR key
 - an equivalent local test hook for manual triggering if needed
 
@@ -658,8 +658,8 @@ SSE is preferred for v0 because the UI is mostly dashboard-style and low-frequen
 Current prototype-compatible action API:
 
 - `POST /api/prs/pause` with `{ "key": "<repo>#<number>", "paused": true|false }`
-  When `paused` is `false`, the backend should queue an immediate background re-check for that PR.
-  When `paused` is `true`, scheduled polls should freeze that PR's visible state until resume.
+  When `paused` is `false`, the backend should treat the PR as tracked again and queue an immediate background re-check for it.
+  When `paused` is `true`, scheduled polls should freeze that PR's visible state and the dashboard should render it as `untracked`.
 - `POST /api/review-requests/deep-review` with `{ "key": "<repo>#<number>" }`
   This starts a manual read-only deep review run for a PR that currently requests the operator's review,
   uses the `$deep-review` skill to write a final markdown review artifact, persists that final report,
@@ -669,8 +669,8 @@ Potential richer follow-up actions:
 
 - `POST /api/prs/:repo/:number/recheck`
 - `POST /api/prs/:repo/:number/run-now`
-- `POST /api/prs/:repo/:number/pause`
-- `POST /api/prs/:repo/:number/resume`
+- `POST /api/prs/:repo/:number/untrack`
+- `POST /api/prs/:repo/:number/track`
 
 These actions are local operator actions only.
 
@@ -684,21 +684,21 @@ The MVP UI can be a single page that shows:
 
 - daemon health
 - last poll time
-- a `Tracked PRs` hero stat rendered as `tracked/all`, where `tracked` excludes rows the operator has explicitly untracked/paused (including auto-paused `needs decision` entries) and `all` comes from the latest authored-PR search total and never drops below the number of rows currently shown
+- a `Tracked PRs` hero stat rendered as `tracked/all`, where `tracked` excludes rows the operator has explicitly untracked and also excludes auto-frozen `needs decision` entries, and `all` comes from the latest authored-PR search total and never drops below the number of rows currently shown
 - a right-aligned dashboard tab switch for `PRs`, `Review Requests`, and `Activity`
 - current tracked PR rows
 - current review-request inbox rows for PRs that currently request the operator's review
 - the review-request inbox should stay lightweight: it should list matching PRs without hydrating CI, reviews, review comments, or issue comments until the operator opens a detail view or starts a deep review
 - each PR’s status, CI state, review state, and latest action summary, with no separate attention column and no secondary status-note annotation underneath the status pill
-- paused rows should show the paused status without any extra note underneath
-- if an operator explicitly untracked a PR earlier, that visible `paused` state should take precedence over a stale `failed` display until the operator tracks it again
-- PRs in `needs decision` should still keep their underlying auto-paused execution freeze, but the visible status pill should read `needs decision` rather than `paused`
+- untracked rows should show the `untracked` status without any extra note underneath
+- if an operator explicitly untracked a PR earlier, that visible `untracked` state should take precedence over a stale `failed` display until the operator tracks it again
+- PRs in `needs decision` should still keep their underlying auto-freeze, but the visible status pill should read `needs decision` rather than `untracked`
 - the non-description columns centered for easier scanning, with red `Untrack`, green `Track`, and yellow `Retry` / `Addressed` controls in the action column using white labels plus simple icons
 - a row-level link into a dedicated PR detail page for run output, showing an embedded read-only terminal while a run is active and the saved last run output after the run completes
 - a row-level `Track` / `Untrack` control for each tracked PR
 - a row-level manual `Retry` action for `failed` PRs and a row-level `Addressed` action for `needs decision` PRs
 - a row-level `Deep Review` action for review-request inbox rows that runs a manual deep review and comments the result back onto the PR
-- a visually subdued treatment for paused rows so they read as intentionally muted rather than inactive by accident
+- a visually subdued treatment for untracked rows so they read as intentionally muted rather than inactive by accident
 - a wider description column so repo, title, and timestamp remain comfortably readable
 
 The MVP UI does not need:
@@ -788,7 +788,7 @@ Current state in this repository is a prototype spike that already contains:
 - the standalone repository split from the parent `symphony` repo
 - GitHub polling logic
 - local state handling
-- persisted per-PR pause/resume state
+- persisted per-PR track/untrack state
 - retry bookkeeping for failed runs and targeted manual retries from the dashboard
 - existing-checkout resolution via `workspace.root` plus explicit `workspace.repo_map` overrides
 - agent runner skeleton

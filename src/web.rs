@@ -235,7 +235,7 @@ const INDEX_HTML: &str = r#"<!doctype html>
       transition: background 160ms ease, color 160ms ease;
     }
 
-    .pr-row.paused-row td {
+    .pr-row.untracked-row td {
       background: rgba(30, 34, 40, 0.09);
       color: rgba(30, 34, 40, 0.76);
     }
@@ -653,7 +653,7 @@ const INDEX_HTML: &str = r#"<!doctype html>
       if (label === "requested review") return "pill warn";
       if (label === "reviewed") return "pill good";
       if (label.includes("fail") || label.includes("block") || label.includes("conflict")) return "pill bad";
-      if (label.includes("pause")) return "pill warn";
+      if (label.includes("untrack") || label.includes("pause")) return "pill warn";
       if (label.includes("need") || label.includes("pending") || label.includes("comment") || label.includes("retry")) return "pill warn";
       return "pill good";
     }
@@ -662,13 +662,13 @@ const INDEX_HTML: &str = r#"<!doctype html>
       return optimisticPausedStates.has(pr.key) ? optimisticPausedStates.get(pr.key) : pr.is_paused;
     }
 
-    function displayPaused(pr) {
-      return effectivePaused(pr) && pr.status === "paused";
+    function displayUntracked(pr) {
+      return effectivePaused(pr) && pr.status === "untracked";
     }
 
     function rowClass(pr) {
       const classes = ["pr-row"];
-      if (displayPaused(pr)) classes.push("paused-row");
+      if (displayUntracked(pr)) classes.push("untracked-row");
       if (pr.status === "running") classes.push("running-row");
       return classes.join(" ");
     }
@@ -700,7 +700,7 @@ const INDEX_HTML: &str = r#"<!doctype html>
             onclick="triggerRetry('${encodeURIComponent(pr.key)}')"
           >
             <span class="button-icon" aria-hidden="true">&#8635;</span>
-            <span>${pending ? "Retrying..." : "Retry"}</span>
+            <span>Retry</span>
           </button>
         `);
       }

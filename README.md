@@ -33,10 +33,11 @@ For each open PR authored by you, BigBrother polls GitHub and computes a live st
 - `needs attention`: new reviewer feedback or a newly failing CI signal
 - `needs decision`: the agent determined the required change is non-trivial and needs operator approval before editing
 - `failed`: the latest automatic agent run failed and the same PR signal is still unresolved; the daemon leaves it idle until you click `Retry`
+- `untracked`: the operator intentionally froze this PR so scheduled polls keep its last snapshot but no automatic run will start
 - `running`: the local agent command is currently working on the PR
 - `draft`, `closed`, `merged`: terminal or non-actionable states
 
-The UI shows the authored PR list, a `Review Requests` tab for PRs that currently request your review, CI/review state, timestamps, top-right dashboard tabs for switching between the PR view, review inbox, and live daemon activity, a dedicated run-details page that streams live Codex CLI output for active runs and preserves the latest run output after completion, and a visibly subdued row state when a PR is explicitly shown as `paused`.
+The UI shows the authored PR list, a `Review Requests` tab for PRs that currently request your review, CI/review state, timestamps, top-right dashboard tabs for switching between the PR view, review inbox, and live daemon activity, a dedicated run-details page that streams live Codex CLI output for active runs and preserves the latest run output after completion, and a visibly subdued row state when a PR is explicitly shown as `untracked`.
 
 ## Requirements
 
@@ -156,7 +157,7 @@ When the configured agent command is `codex`, BigBrother treats reasoning effort
 agent setting. The `[agent] model_reasoning_effort` config defaults to `xhigh`, and the runner
 always passes it explicitly to `codex exec` via `-c model_reasoning_effort="..."`.
 
-The default prompt templates ask the agent to inspect GitHub feedback and CI, merge the latest base branch itself when needed, resolve conflicts before declaring success, fix code in-place, run targeted validation, and push back to the PR branch if it can. They also tell the agent to stop and ask for operator direction before making material or high-risk changes instead of changing code unilaterally. When the agent decides a change is non-trivial, it emits a machine-readable `BIGBROTHER_NEEDS_DECISION:` marker; BigBrother then sets the PR to `needs decision`, auto-pauses future automatic runs for that PR under the hood, and stores the full operator-facing explanation in the PR details output until you explicitly clear it from the dashboard.
+The default prompt templates ask the agent to inspect GitHub feedback and CI, merge the latest base branch itself when needed, resolve conflicts before declaring success, fix code in-place, run targeted validation, and push back to the PR branch if it can. They also tell the agent to stop and ask for operator direction before making material or high-risk changes instead of changing code unilaterally. When the agent decides a change is non-trivial, it emits a machine-readable `BIGBROTHER_NEEDS_DECISION:` marker; BigBrother then sets the PR to `needs decision`, auto-freezes future automatic runs for that PR under the hood, and stores the full operator-facing explanation in the PR details output until you explicitly clear it from the dashboard.
 
 If a `needs decision` run came from review feedback and you address that feedback manually, clicking
 `Addressed` marks the currently displayed review signal as handled before the immediate targeted

@@ -93,7 +93,7 @@ impl AttentionReason {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum TrackingStatus {
     Draft,
-    Paused,
+    Untracked,
     NeedsDecision,
     Failed,
     Conflict,
@@ -110,7 +110,7 @@ impl TrackingStatus {
     pub fn label(self) -> &'static str {
         match self {
             Self::Draft => "draft",
-            Self::Paused => "paused",
+            Self::Untracked => "untracked",
             Self::NeedsDecision => "needs decision",
             Self::Failed => "failed",
             Self::Conflict => "conflict",
