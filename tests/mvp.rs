@@ -963,8 +963,8 @@ async fn dashboard_html_exposes_top_right_pr_review_request_and_activity_tabs() 
         "dashboard should expose stacked track and untrack action controls, got: {html}",
     );
     assert!(
-        html.contains("background: #c76a6a;") && html.contains("background: #4b907a;"),
-        "dashboard should use the lighter untrack and track button fills, got: {html}",
+        html.contains("background: #a6927a;") && html.contains("background: #557da9;"),
+        "dashboard should use the updated untrack and track button fills, got: {html}",
     );
     assert!(
         html.contains("retry-button")

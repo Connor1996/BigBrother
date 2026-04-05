@@ -365,21 +365,21 @@ const INDEX_HTML: &str = r#"<!doctype html>
     }
 
     .action-button.untrack-button {
-      background: #c76a6a;
+      background: #a6927a;
       color: #fff;
     }
 
     .action-button.untrack-button:hover:not(:disabled) {
-      background: #b75b5b;
+      background: #958069;
     }
 
     .action-button.track-button {
-      background: #4b907a;
+      background: #557da9;
       color: #fff;
     }
 
     .action-button.track-button:hover:not(:disabled) {
-      background: #3f7f6b;
+      background: #476f99;
     }
 
     .action-button.deep-review-button {
