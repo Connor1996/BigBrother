@@ -1264,9 +1264,12 @@ const PR_DETAIL_HTML: &str = r##"<!doctype html>
     }
 
     .terminal-shell .xterm {
-      width: calc(100% - var(--terminal-inner-gutter) - var(--terminal-scrollbar-gutter));
+      width: 100%;
       height: calc(70vh - 32px);
       min-height: 288px;
+      padding-right: calc(
+        var(--terminal-inner-gutter) + var(--terminal-scrollbar-gutter)
+      );
     }
 
     .terminal-shell .xterm-viewport {
@@ -1274,7 +1277,7 @@ const PR_DETAIL_HTML: &str = r##"<!doctype html>
       scrollbar-color: rgba(255, 255, 255, 0.26) transparent;
       scrollbar-width: thin;
       scrollbar-gutter: stable both-edges;
-      right: calc(-1 * var(--terminal-scrollbar-gutter));
+      right: 0;
       overflow-x: hidden;
     }
 
