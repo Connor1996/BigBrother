@@ -1262,14 +1262,18 @@ const PR_DETAIL_HTML: &str = r##"<!doctype html>
     }
 
     .terminal-shell .xterm {
+      width: 100%;
       height: calc(70vh - 32px);
       min-height: 288px;
+      padding-right: 14px;
     }
 
     .terminal-shell .xterm-viewport {
       border-radius: 10px;
       scrollbar-color: rgba(255, 255, 255, 0.26) transparent;
       scrollbar-width: thin;
+      scrollbar-gutter: stable both-edges;
+      padding-right: 10px;
     }
 
     .terminal-empty-hint {
@@ -1482,17 +1486,54 @@ const PR_DETAIL_HTML: &str = r##"<!doctype html>
       }
     }
 
+    function terminalViewport() {
+      return document.querySelector("#terminal-shell .xterm-viewport");
+    }
+
+    function isViewportNearBottom(viewport) {
+      if (!viewport) {
+        return true;
+      }
+
+      return viewport.scrollHeight - viewport.scrollTop - viewport.clientHeight < 24;
+    }
+
+    function preserveTerminalViewport(applyUpdate) {
+      const viewport = terminalViewport();
+      const previousScrollTop = viewport ? viewport.scrollTop : 0;
+      const shouldFollow = isViewportNearBottom(viewport);
+
+      applyUpdate(() => {
+        window.requestAnimationFrame(() => {
+          const nextViewport = terminalViewport();
+          if (!nextViewport) {
+            return;
+          }
+
+          if (shouldFollow) {
+            nextViewport.scrollTop = nextViewport.scrollHeight;
+          } else {
+            nextViewport.scrollTop = previousScrollTop;
+          }
+        });
+      });
+    }
+
     function renderTerminalRecording(recording, key) {
       const activeTerminal = ensureTerminal();
       if (!activeTerminal) {
         return;
       }
 
-      activeTerminal.reset();
-      fitTerminal();
-      if (recording) {
-        activeTerminal.write(recording);
-      }
+      preserveTerminalViewport((done) => {
+        activeTerminal.reset();
+        fitTerminal();
+        if (recording) {
+          activeTerminal.write(recording, done);
+        } else {
+          done();
+        }
+      });
       renderedTerminalKey = key || null;
       renderedTerminalRecording = recording || "";
     }
@@ -1503,7 +1544,9 @@ const PR_DETAIL_HTML: &str = r##"<!doctype html>
         return;
       }
 
-      activeTerminal.write(chunk);
+      preserveTerminalViewport((done) => {
+        activeTerminal.write(chunk, done);
+      });
       renderedTerminalRecording = (renderedTerminalRecording || "") + chunk;
     }
 
@@ -1599,12 +1642,18 @@ const PR_DETAIL_HTML: &str = r##"<!doctype html>
       document.getElementById("terminal-meta").textContent = detailOutputStatusText(pr);
 
       if (pr.status === "running" || pr.terminal_recording) {
+        const recording = pr.terminal_recording || "";
         const shouldReset =
-          pr.status !== "running" ||
-          !terminalSocket ||
-          terminalSocketKey !== pr.key ||
           renderedTerminalKey !== pr.key ||
-          renderedTerminalRecording === null;
+          (
+            pr.status !== "running" &&
+            renderedTerminalRecording !== recording
+          ) ||
+          (
+            pr.status === "running" &&
+            !terminalSocket &&
+            renderedTerminalRecording !== recording
+          );
         if (showTerminalReplay(pr, shouldReset)) {
           connectTerminalSocket(pr);
           return;
