@@ -28,6 +28,56 @@ BigBrother 现在主要做这些事情：
 - 少在 trivial fix 和重要决策之间频繁切换心智
 - 把真正需要人工介入的点明确抬出来
 
+## 建议贴图位置
+
+### 贴图 1：主页 dashboard
+
+建议放一张首页截图，最好同时带上：
+
+- authored PR 列表
+- `Review Requests` 和 `Activity` tab
+- 几个不同状态的 PR，比如 `waiting review`、`failed`、`needs decision`
+
+这里最适合说明的点是：BigBrother 把“我现在到底该看哪个 PR”这件事变成一个可以一眼扫过的问题。
+
+> Screenshot placeholder: Home dashboard with PR list, Review Requests, Activity tabs, and mixed PR states.
+
+### 贴图 2：PR details 里的 terminal 输出
+
+建议放一张 details 页面截图，重点展示：
+
+- terminal 输出
+- 最近一次 run 的结果
+- 这是一个可以直接看到 agent 做了什么、跑到哪里、为什么停下来的页面
+
+这张图最适合承接 “不是只看状态，还能往下看执行细节”。
+
+> Screenshot placeholder: PR details page with saved or live terminal output.
+
+### 贴图 3：agent 自己判断后去 `/retest`
+
+建议放一张能同时说明“它不是无脑改代码”的截图。理想情况是：
+
+- CI fail 了
+- agent 看完之后判断这是 flaky 或不值得直接改代码
+- 最终自动发出 `/retest` comment
+
+这张图适合说明 BigBrother 不是所有问题都直接改代码，它会先判断什么动作最合理。
+
+> Screenshot placeholder: PR timeline or comment thread showing automatic `/retest` after agent inspection.
+
+### 贴图 4：Deep Review 和自动回复 comment
+
+建议放一张 review-request PR 的截图，展示：
+
+- `Deep Review` 是怎么触发的
+- 它最后会把整理好的 review 结果贴回 PR comment
+- comment 不是原始 terminal 噪音，而是整理过的 review 结果
+
+这张图最适合说明 BigBrother 不只是盯 authored PR，也能帮助你处理 review-request PR。
+
+> Screenshot placeholder: Deep Review flow with resulting PR comment posted automatically.
+
 ## 怎么开始
 
 最省事的方式，不是手动从头填配置，而是先让 agent 帮你做 setup。
@@ -106,6 +156,56 @@ The real value is not that it writes more code. The value is that it removes a l
 - less re-checking review threads and CI for small changes
 - less context switching between trivial follow-up work and important human decisions
 - more explicit visibility into the exact places where a human actually needs to step in
+
+## Suggested screenshot slots
+
+### Screenshot 1: home dashboard
+
+This is the best place for a homepage screenshot that includes:
+
+- the authored PR list
+- the `Review Requests` and `Activity` tabs
+- a few PRs in different states, such as `waiting review`, `failed`, and `needs decision`
+
+This screenshot should support the core idea that BigBrother turns “which PR actually needs me right now?” into something you can scan at a glance.
+
+> Screenshot placeholder: Home dashboard with PR list, Review Requests, Activity tabs, and mixed PR states.
+
+### Screenshot 2: PR details with terminal output
+
+This is the place for a detail-page screenshot that shows:
+
+- terminal output
+- the latest run result
+- a concrete view of what the agent actually did, where it stopped, and why
+
+This screenshot supports the idea that BigBrother is not only a status board; it also lets you inspect execution details when you need them.
+
+> Screenshot placeholder: PR details page with saved or live terminal output.
+
+### Screenshot 3: agent deciding to `/retest`
+
+This is the best place for a screenshot that shows BigBrother is not blindly editing code. Ideally it captures:
+
+- a failed CI run
+- the agent deciding that the failure looks flaky or not worth changing code for directly
+- an automatic `/retest` comment posted back to the PR
+
+This screenshot supports the idea that BigBrother first chooses the right action, instead of assuming every problem should become a code change.
+
+> Screenshot placeholder: PR timeline or comment thread showing automatic `/retest` after agent inspection.
+
+### Screenshot 4: Deep Review and automatic comment reply
+
+This is the best place for a review-request PR screenshot that shows:
+
+- how `Deep Review` is triggered
+- that the final review result is posted back as a PR comment
+- that the comment is a cleaned-up review artifact rather than raw terminal noise
+
+This screenshot supports the idea that BigBrother is useful not only for authored PRs, but also for PRs where you are the reviewer.
+
+> Screenshot placeholder: Deep Review flow with resulting PR comment posted automatically.
 
 ## How to get started
 
