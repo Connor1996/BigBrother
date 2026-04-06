@@ -1245,6 +1245,7 @@ const PR_DETAIL_HTML: &str = r##"<!doctype html>
     }
 
     .terminal-shell {
+      --terminal-scrollbar-gutter: 18px;
       min-height: 320px;
       max-height: 70vh;
       overflow: hidden;
@@ -1262,10 +1263,9 @@ const PR_DETAIL_HTML: &str = r##"<!doctype html>
     }
 
     .terminal-shell .xterm {
-      width: 100%;
+      width: calc(100% - var(--terminal-scrollbar-gutter));
       height: calc(70vh - 32px);
       min-height: 288px;
-      padding-right: 14px;
     }
 
     .terminal-shell .xterm-viewport {
@@ -1273,7 +1273,8 @@ const PR_DETAIL_HTML: &str = r##"<!doctype html>
       scrollbar-color: rgba(255, 255, 255, 0.26) transparent;
       scrollbar-width: thin;
       scrollbar-gutter: stable both-edges;
-      padding-right: 10px;
+      right: calc(-1 * var(--terminal-scrollbar-gutter));
+      overflow-x: hidden;
     }
 
     .terminal-empty-hint {
