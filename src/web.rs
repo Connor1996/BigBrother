@@ -1246,7 +1246,7 @@ const PR_DETAIL_HTML: &str = r##"<!doctype html>
 
     .terminal-shell {
       --terminal-inner-gutter: 8px;
-      --terminal-scrollbar-gutter: 18px;
+      --terminal-scrollbar-gutter: 0px;
       min-height: 320px;
       max-height: 70vh;
       overflow: hidden;

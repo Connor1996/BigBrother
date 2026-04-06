@@ -1040,7 +1040,7 @@ async fn pr_detail_page_uses_bigbrother_branding() {
             && html.contains(r#"/api/pr/terminal/ws?key=${encodeURIComponent(pr.key)}"#)
             && html.contains("scrollbar-gutter: stable both-edges;")
             && html.contains("--terminal-inner-gutter: 8px;")
-            && html.contains("--terminal-scrollbar-gutter: 18px;")
+            && html.contains("--terminal-scrollbar-gutter: 0px;")
             && html.contains("width: 100%;")
             && html.contains("box-sizing: border-box;")
             && html.contains("padding: 16px 0 16px 16px;")
