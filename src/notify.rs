@@ -4,9 +4,10 @@ use anyhow::{anyhow, Context, Result};
 use futures::future::BoxFuture;
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
+use tokio::{process::Command, time::timeout};
 
 use crate::{
-    config::{FeishuReceiveIdType, ResolvedConfig},
+    config::{FeishuReceiveIdType, FeishuTransport, ResolvedConfig},
     model::EventLevel,
 };
 
@@ -33,14 +34,29 @@ pub trait NotificationSink: Send + Sync {
 
 pub fn build_notification_sink(config: &ResolvedConfig) -> Result<Box<dyn NotificationSink>> {
     if let Some(feishu) = &config.notifications.feishu {
-        return Ok(Box::new(FeishuAppBotSink::new(
-            feishu.app_id.clone(),
-            feishu.app_secret.clone(),
-            feishu.receive_id.clone(),
-            feishu.receive_id_type,
-            feishu.label.clone(),
-            feishu.timeout_secs,
-        )?));
+        return match feishu.transport {
+            FeishuTransport::AppBot => Ok(Box::new(FeishuAppBotSink::new(
+                feishu
+                    .app_id
+                    .clone()
+                    .ok_or_else(|| anyhow!("resolved Feishu app_id is missing"))?,
+                feishu
+                    .app_secret
+                    .clone()
+                    .ok_or_else(|| anyhow!("resolved Feishu app_secret is missing"))?,
+                feishu.receive_id.clone(),
+                feishu.receive_id_type,
+                feishu.label.clone(),
+                feishu.timeout_secs,
+            )?)),
+            FeishuTransport::LarkCliBot => Ok(Box::new(LarkCliBotSink::new(
+                feishu.lark_cli_command.clone(),
+                feishu.receive_id.clone(),
+                feishu.receive_id_type,
+                feishu.label.clone(),
+                feishu.timeout_secs,
+            )?)),
+        };
     }
 
     Ok(Box::new(NoopNotificationSink))
@@ -61,6 +77,14 @@ pub struct FeishuAppBotSink {
     receive_id: String,
     receive_id_type: FeishuReceiveIdType,
     label: String,
+}
+
+pub struct LarkCliBotSink {
+    command: String,
+    receive_id: String,
+    receive_id_type: FeishuReceiveIdType,
+    label: String,
+    timeout_secs: u64,
 }
 
 impl FeishuAppBotSink {
@@ -96,6 +120,59 @@ impl FeishuAppBotSink {
             content: serde_json::to_string(&FeishuTextContent { text })
                 .context("failed to encode Feishu text message content")?,
         })
+    }
+}
+
+impl LarkCliBotSink {
+    pub fn new(
+        command: String,
+        receive_id: String,
+        receive_id_type: FeishuReceiveIdType,
+        label: String,
+        timeout_secs: u64,
+    ) -> Result<Self> {
+        let command = command.trim().to_owned();
+        if command.is_empty() {
+            return Err(anyhow!("lark-cli command cannot be empty"));
+        }
+
+        Ok(Self {
+            command,
+            receive_id,
+            receive_id_type,
+            label,
+            timeout_secs: timeout_secs.max(1),
+        })
+    }
+
+    fn format_text(&self, notification: &Notification) -> String {
+        format_feishu_text(&self.label, notification)
+    }
+
+    fn command_args(&self, text: String) -> Result<Vec<String>> {
+        let params = serde_json::to_string(&LarkCliParams {
+            receive_id_type: self.receive_id_type.as_api_str(),
+        })
+        .context("failed to encode lark-cli message params")?;
+        let data = serde_json::to_string(&FeishuAppBotMessageRequest {
+            receive_id: self.receive_id.clone(),
+            msg_type: "text",
+            content: serde_json::to_string(&FeishuTextContent { text })
+                .context("failed to encode Lark CLI text message content")?,
+        })
+        .context("failed to encode lark-cli message data")?;
+
+        Ok(vec![
+            "api".to_owned(),
+            "POST".to_owned(),
+            "/open-apis/im/v1/messages".to_owned(),
+            "--as".to_owned(),
+            "bot".to_owned(),
+            "--params".to_owned(),
+            params,
+            "--data".to_owned(),
+            data,
+        ])
     }
 }
 
@@ -186,6 +263,59 @@ impl NotificationSink for FeishuAppBotSink {
     }
 }
 
+impl NotificationSink for LarkCliBotSink {
+    fn send(&self, notification: Notification) -> BoxFuture<'static, Result<()>> {
+        let command = self.command.clone();
+        let timeout_secs = self.timeout_secs;
+        let args = self.command_args(self.format_text(&notification));
+
+        Box::pin(async move {
+            let args = args?;
+            let output = timeout(Duration::from_secs(timeout_secs), async {
+                let mut process = Command::new(&command);
+                process.args(args.iter().map(String::as_str));
+                process.output().await
+            })
+            .await
+            .map_err(|_| {
+                anyhow!(
+                    "lark-cli bot notification command timed out after {} seconds",
+                    timeout_secs
+                )
+            })?
+            .with_context(|| format!("failed to run {command} for Lark CLI bot notification"))?;
+
+            if !output.status.success() {
+                return Err(anyhow!(
+                    "lark-cli bot notification command exited with status {}: stdout={} stderr={}",
+                    output.status,
+                    String::from_utf8_lossy(&output.stdout).trim(),
+                    String::from_utf8_lossy(&output.stderr).trim(),
+                ));
+            }
+
+            let stdout = String::from_utf8_lossy(&output.stdout);
+            let response: LarkCliApiResponse =
+                serde_json::from_str(&stdout).with_context(|| {
+                    format!(
+                        "failed to parse lark-cli bot notification response: {}",
+                        stdout.trim()
+                    )
+                })?;
+            if response.code != 0 {
+                return Err(anyhow!(
+                    "lark-cli bot notification request failed: {}",
+                    response
+                        .msg
+                        .unwrap_or_else(|| "unknown send error".to_owned())
+                ));
+            }
+
+            Ok(())
+        })
+    }
+}
+
 fn build_feishu_client(timeout_secs: u64) -> Result<Client> {
     Client::builder()
         .timeout(Duration::from_secs(timeout_secs.max(1)))
@@ -242,6 +372,18 @@ struct FeishuAppBotMessageResponse {
     msg: Option<String>,
 }
 
+#[derive(Debug, Serialize)]
+struct LarkCliParams<'a> {
+    receive_id_type: &'a str,
+}
+
+#[derive(Debug, Deserialize)]
+struct LarkCliApiResponse {
+    code: i64,
+    #[serde(default)]
+    msg: Option<String>,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -287,5 +429,36 @@ mod tests {
         assert_eq!(request.receive_id, "you@example.com");
         assert_eq!(request.msg_type, "text");
         assert_eq!(request.content, r#"{"text":"hello"}"#);
+    }
+
+    #[test]
+    fn lark_cli_bot_command_args_use_generic_api_shape() {
+        let sink = LarkCliBotSink::new(
+            "lark-cli".to_owned(),
+            "you@example.com".to_owned(),
+            FeishuReceiveIdType::Email,
+            "connor-mbp".to_owned(),
+            5,
+        )
+        .expect("sink should build");
+
+        let args = sink
+            .command_args("hello from test".to_owned())
+            .expect("command args should build");
+
+        assert_eq!(
+            args,
+            vec![
+                "api".to_owned(),
+                "POST".to_owned(),
+                "/open-apis/im/v1/messages".to_owned(),
+                "--as".to_owned(),
+                "bot".to_owned(),
+                "--params".to_owned(),
+                "{\"receive_id_type\":\"email\"}".to_owned(),
+                "--data".to_owned(),
+                "{\"receive_id\":\"you@example.com\",\"msg_type\":\"text\",\"content\":\"{\\\"text\\\":\\\"hello from test\\\"}\"}".to_owned(),
+            ]
+        );
     }
 }

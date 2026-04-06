@@ -120,8 +120,23 @@ The current Feishu integration is a one-way notification sink for daemon activit
 automatic-run and manual deep-review updates outward, but it does not yet accept Feishu commands
 or replies.
 
+For teams that already have `lark-cli` configured with a working bot identity, BigBrother can send
+through that local CLI instead of holding the app secret itself:
+
 ```toml
 [notifications.feishu]
+transport = "lark_cli_bot"
+receive_id = "$FEISHU_NOTIFY_EMAIL"
+receive_id_type = "email"
+label = "connor-mbp"
+timeout_secs = 10
+```
+
+The legacy direct OpenAPI app-bot transport remains available:
+
+```toml
+[notifications.feishu]
+transport = "app_bot"
 app_id = "$FEISHU_APP_ID"
 app_secret = "$FEISHU_APP_SECRET"
 receive_id = "$FEISHU_NOTIFY_EMAIL"
@@ -140,7 +155,9 @@ Current Feishu notifications cover:
 `label` is included in each message so multiple daemon instances can identify themselves clearly in
 private DMs. `receive_id_type` supports Feishu message targets such as `email`,
 `open_id`, `user_id`, `union_id`, and `chat_id`; for a first private-DM setup, `email` is usually
-the easiest option.
+the easiest option. `transport = "lark_cli_bot"` uses the locally configured `lark-cli` bot via
+`lark-cli api POST /open-apis/im/v1/messages --as bot`, while `transport = "app_bot"` preserves
+the earlier direct OpenAPI flow.
 
 ## Prompt Templates
 

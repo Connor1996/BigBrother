@@ -110,10 +110,22 @@ pub struct NotificationsConfig {
     pub feishu: Option<FeishuNotificationsConfig>,
 }
 
+#[derive(Debug, Clone, Copy, Default, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum FeishuTransport {
+    #[default]
+    AppBot,
+    LarkCliBot,
+}
+
 #[derive(Debug, Clone, Deserialize)]
 pub struct FeishuNotificationsConfig {
-    pub app_id: String,
-    pub app_secret: String,
+    #[serde(default)]
+    pub transport: FeishuTransport,
+    #[serde(default)]
+    pub app_id: Option<String>,
+    #[serde(default)]
+    pub app_secret: Option<String>,
     pub receive_id: String,
     #[serde(default)]
     pub receive_id_type: FeishuReceiveIdType,
@@ -121,6 +133,8 @@ pub struct FeishuNotificationsConfig {
     pub label: Option<String>,
     #[serde(default = "default_notification_timeout_secs")]
     pub timeout_secs: u64,
+    #[serde(default = "default_lark_cli_command")]
+    pub lark_cli_command: String,
 }
 
 #[derive(Debug, Clone, Copy, Default, Deserialize, PartialEq, Eq)]
@@ -168,12 +182,14 @@ pub struct ResolvedNotificationsConfig {
 
 #[derive(Debug, Clone)]
 pub struct ResolvedFeishuNotificationsConfig {
-    pub app_id: String,
-    pub app_secret: String,
+    pub transport: FeishuTransport,
+    pub app_id: Option<String>,
+    pub app_secret: Option<String>,
     pub receive_id: String,
     pub receive_id_type: FeishuReceiveIdType,
     pub label: String,
     pub timeout_secs: u64,
+    pub lark_cli_command: String,
 }
 
 impl AppConfig {
@@ -444,6 +460,10 @@ fn default_notification_timeout_secs() -> u64 {
     10
 }
 
+fn default_lark_cli_command() -> String {
+    "lark-cli".to_owned()
+}
+
 fn default_feishu_notification_label() -> String {
     "bigbrother".to_owned()
 }
@@ -502,31 +522,47 @@ fn resolve_notifications(
                 .filter(|value| !value.is_empty())
                 .unwrap_or_else(default_feishu_notification_label);
             let timeout_secs = raw.timeout_secs.max(1);
-            let app_id = resolve_literal(raw.app_id, None);
-            if app_id.is_empty() {
-                return Err(anyhow!("notifications.feishu.app_id cannot be empty"));
-            }
-
-            let app_secret =
-                resolve_required_secret(Some(raw.app_secret), "notifications.feishu.app_secret")?
-                    .trim()
-                    .to_owned();
-            if app_secret.is_empty() {
-                return Err(anyhow!("notifications.feishu.app_secret cannot be empty"));
-            }
-
             let receive_id = resolve_literal(raw.receive_id, None);
             if receive_id.is_empty() {
                 return Err(anyhow!("notifications.feishu.receive_id cannot be empty"));
             }
 
+            let lark_cli_command = resolve_literal(raw.lark_cli_command, None);
+            if lark_cli_command.is_empty() {
+                return Err(anyhow!(
+                    "notifications.feishu.lark_cli_command cannot be empty"
+                ));
+            }
+
+            let (app_id, app_secret) = match raw.transport {
+                FeishuTransport::AppBot => {
+                    let app_id = resolve_literal(raw.app_id.unwrap_or_default(), None);
+                    if app_id.is_empty() {
+                        return Err(anyhow!("notifications.feishu.app_id cannot be empty"));
+                    }
+
+                    let app_secret =
+                        resolve_required_secret(raw.app_secret, "notifications.feishu.app_secret")?
+                            .trim()
+                            .to_owned();
+                    if app_secret.is_empty() {
+                        return Err(anyhow!("notifications.feishu.app_secret cannot be empty"));
+                    }
+
+                    (Some(app_id), Some(app_secret))
+                }
+                FeishuTransport::LarkCliBot => (None, None),
+            };
+
             Some(ResolvedFeishuNotificationsConfig {
+                transport: raw.transport,
                 app_id,
                 app_secret,
                 receive_id,
                 receive_id_type: raw.receive_id_type,
                 label,
                 timeout_secs,
+                lark_cli_command,
             })
         }
         None => None,
@@ -744,6 +780,7 @@ model_reasoning_effort = "high"
 api_token = "token"
 
 [notifications.feishu]
+transport = "app_bot"
 app_id = "cli_test"
 app_secret = "secret"
 receive_id = "you@example.com"
@@ -760,11 +797,54 @@ timeout_secs = 9
             .feishu
             .expect("feishu notifications should resolve");
 
-        assert_eq!(feishu.app_id, "cli_test");
-        assert_eq!(feishu.app_secret, "secret");
+        assert_eq!(feishu.transport, FeishuTransport::AppBot);
+        assert_eq!(feishu.app_id.as_deref(), Some("cli_test"));
+        assert_eq!(feishu.app_secret.as_deref(), Some("secret"));
         assert_eq!(feishu.receive_id, "you@example.com");
         assert_eq!(feishu.receive_id_type, FeishuReceiveIdType::Email);
         assert_eq!(feishu.label, "connor-mbp");
         assert_eq!(feishu.timeout_secs, 9);
+        assert_eq!(feishu.lark_cli_command, "lark-cli");
+    }
+
+    #[test]
+    fn load_resolves_lark_cli_feishu_notifications_without_app_secret() {
+        let unique = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("time")
+            .as_nanos();
+        let dir = std::env::temp_dir().join(format!("bigbrother-config-{unique}"));
+        std::fs::create_dir_all(&dir).expect("temp config dir should create");
+        let config_path = dir.join("bigbrother.toml");
+        std::fs::write(
+            &config_path,
+            r#"
+[github]
+api_token = "token"
+
+[notifications.feishu]
+transport = "lark_cli_bot"
+receive_id = "you@example.com"
+receive_id_type = "email"
+label = "connor-mbp"
+timeout_secs = 9
+"#,
+        )
+        .expect("config fixture should write");
+
+        let resolved = AppConfig::load(&config_path).expect("config should load");
+        let feishu = resolved
+            .notifications
+            .feishu
+            .expect("feishu notifications should resolve");
+
+        assert_eq!(feishu.transport, FeishuTransport::LarkCliBot);
+        assert_eq!(feishu.app_id, None);
+        assert_eq!(feishu.app_secret, None);
+        assert_eq!(feishu.receive_id, "you@example.com");
+        assert_eq!(feishu.receive_id_type, FeishuReceiveIdType::Email);
+        assert_eq!(feishu.label, "connor-mbp");
+        assert_eq!(feishu.timeout_secs, 9);
+        assert_eq!(feishu.lark_cli_command, "lark-cli");
     }
 }

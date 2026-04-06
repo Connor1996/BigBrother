@@ -526,10 +526,14 @@ Notification sinks should be pluggable. Initial sinks:
 
 - local desktop notification
 - Feishu app-bot direct-message sink
+- Feishu CLI-backed bot sink
 
 Current first-pass remote sink behavior:
 
 - support a Feishu app-bot direct-message sink
+- support a Feishu CLI-backed bot sink that shells out to a locally configured `lark-cli`
+- allow operators to choose the Feishu transport per instance so the daemon can either hold the
+  app secret itself or delegate bot delivery to `lark-cli`
 - keep the first Feishu integration outbound-only; no command handling or chat-driven control flow
 - include a configurable instance label in each outbound Feishu message so multiple daemons can
   identify the sender in private DMs
@@ -544,7 +548,6 @@ Lifecycle transition notifications should also be supported for:
 
 Potential later sinks:
 
-- Feishu CLI-backed sink
 - Feishu bidirectional bot or app gateway for inbound commands
 - Slack
 - email
