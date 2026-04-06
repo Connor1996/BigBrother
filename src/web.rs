@@ -1283,7 +1283,7 @@ const PR_DETAIL_HTML: &str = r##"<!doctype html>
       left: 16px;
       right: 16px;
       color: rgba(204, 204, 204, 0.8);
-      font: 0.84rem/1.45 "SFMono-Regular", "SF Mono", ui-monospace, monospace;
+      font: 0.82rem/1.45 Menlo, Monaco, "SF Mono", ui-monospace, monospace;
       pointer-events: none;
     }
 
@@ -1297,7 +1297,7 @@ const PR_DETAIL_HTML: &str = r##"<!doctype html>
       border: 1px solid rgba(30, 34, 40, 0.08);
       background: rgba(30, 34, 40, 0.06);
       color: #23303a;
-      font: 0.84rem/1.5 "SFMono-Regular", "SF Mono", ui-monospace, monospace;
+      font: 0.82rem/1.5 Menlo, Monaco, "SF Mono", ui-monospace, monospace;
       white-space: pre-wrap;
       word-break: break-word;
     }
@@ -1440,6 +1440,9 @@ const PR_DETAIL_HTML: &str = r##"<!doctype html>
           disableStdin: true,
           cursorBlink: false,
           scrollback: 6000,
+          fontFamily: 'Menlo, Monaco, "SF Mono", ui-monospace, monospace',
+          fontSize: 13,
+          lineHeight: 1.24,
           theme: {
             background: "#1e1e1e",
             foreground: "#cccccc",
