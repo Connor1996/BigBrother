@@ -3,9 +3,9 @@
 
 ## 中文
 
-现在在 web coding 这类场景里，从需求、实现、测试到部署，端到端自动化已经越来越可行了。但在真正生产级别的软件开发里，我们的工作流通常还很难完全自动化。在实际个人实践里也能明显感觉到，很多事情不是一轮就能做对的，我们往往还是需要和 agent 多轮来回讨论设计、反复修改实现，才能把东西打磨到足够好。
+现在在所谓的 vibe coding 阶段里，从需求、实现、测试到部署，端到端自动化已经越来越可行了。而且在实现阶段，大家已经有很多和 agent 协作的方式可选：可以直接用 Codex、Claude Code 这样的 coding agent，可以拉起 subagents 去并行做研究、评审和实现，也可以用 slock.ai 这类 agent teams 形态去组织多人类、多 agent 的协作。
 
-也正因为这样，实现阶段今天本来就会有很多不同做法。有人会用 Slack AI，有人会用 agent team，有人会用 Codex 配 cloud subagents，也有人会用自己更顺手的别的组合。BigBrother 并不是想把这一段开放式、探索式的工作流统一收口。
+但在真正生产级别的软件开发里，我们的工作流通常还是很难完全自动化。在实际个人实践里也能明显感觉到，很多事情不是一轮就能做对的，我们往往还是需要和 agent 多轮来回讨论设计、反复修改实现，才能把东西打磨到足够好。也正因为这样，BigBrother 并不是想把实现阶段这段开放式、探索式的工作流统一收口。
 
 BigBrother 想解决的是另一段问题：PR 一旦提出来之后，那条很长、但流程其实相对确定的尾巴。真正拖时间的，往往不是“改代码”本身，而是围着代码变化不断确认上下文。
 
@@ -166,9 +166,9 @@ target/release/bigbrother --config bigbrother.toml
 
 ## English
 
-In some web-coding workflows today, it is already becoming realistic to automate the whole path from requirement to implementation to testing to deployment. But in real production-grade software work, our workflow is usually much harder to automate end to end. In practice, many tasks still need repeated back-and-forth with an agent, multiple design discussions, and several implementation passes before the result is actually good enough.
+In what people now call vibe coding, it is already becoming realistic to automate the whole path from requirement to implementation to testing to deployment. And during implementation, developers already have many ways to work with agents: coding agents such as Codex and Claude Code, subagent patterns for parallel research, review, and implementation, and agent-team setups such as slock.ai.
 
-That is also why the implementation phase is still naturally diverse. Some people use Slack AI, some use agent teams, some use Codex with cloud subagents, and others use whatever combination fits their habits best. BigBrother is not trying to standardize that open-ended, exploratory part of the workflow.
+But in real production-grade software work, that workflow is still much harder to automate end to end. In practice, many tasks still need repeated back-and-forth with an agent, multiple design discussions, and several implementation passes before the result is actually good enough. That is exactly why BigBrother is not trying to standardize the open-ended, exploratory implementation phase.
 
 It is built for a different part of the problem: the long tail that starts after a PR is already open. At that point, the expensive part is often not the code change itself. It is the repeated checking that surrounds the code change.
 
