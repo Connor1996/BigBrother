@@ -31,6 +31,13 @@ const PR_REMOTE_NAME: &str = "bigbrother-pr";
 const MANAGED_PR_HEAD_REF: &str = "refs/bigbrother/pr-head";
 const MANAGED_BASE_REF: &str = "refs/bigbrother/base";
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum AgentRuntime {
+    Codex,
+    Claude,
+    Other,
+}
+
 #[derive(Debug, Clone)]
 pub struct RunRequest {
     pub pull_request: PullRequest,
@@ -886,11 +893,14 @@ fn build_pty_command(
 }
 
 fn build_agent_command_argv(agent: &AgentConfig, prompt: Option<&str>) -> Vec<String> {
+    let runtime = detect_agent_runtime(agent);
     let mut argv = vec![agent.command.clone()];
-    if agent.dangerously_bypass_approvals_and_sandbox {
-        argv.push("--dangerously-bypass-approvals-and-sandbox".to_owned());
+    if let Some(flag) = dangerous_permission_flag(runtime) {
+        if agent.dangerously_bypass_approvals_and_sandbox {
+            argv.push(flag.to_owned());
+        }
     }
-    if should_inject_codex_reasoning_effort(agent) {
+    if should_inject_codex_reasoning_effort(runtime) {
         argv.push("-c".to_owned());
         argv.push(format!(
             "model_reasoning_effort={:?}",
@@ -898,7 +908,7 @@ fn build_agent_command_argv(agent: &AgentConfig, prompt: Option<&str>) -> Vec<St
         ));
     }
     let mut agent_args = agent.args.clone();
-    if should_inject_codex_color(agent, &agent_args) {
+    if should_inject_codex_color(runtime, &agent_args) {
         let insert_at = agent_args
             .iter()
             .position(|value| value == "exec")
@@ -908,7 +918,7 @@ fn build_agent_command_argv(agent: &AgentConfig, prompt: Option<&str>) -> Vec<St
         agent_args.insert(insert_at + 1, "always".to_owned());
     }
     if let Some(prompt) = prompt {
-        if should_append_prompt_argument(agent, &agent_args) {
+        if should_append_prompt_argument(runtime, &agent_args) {
             if matches!(agent_args.last(), Some(last) if last == "-") {
                 agent_args.pop();
             }
@@ -919,27 +929,48 @@ fn build_agent_command_argv(agent: &AgentConfig, prompt: Option<&str>) -> Vec<St
     argv
 }
 
-fn should_inject_codex_reasoning_effort(agent: &AgentConfig) -> bool {
+fn detect_agent_runtime(agent: &AgentConfig) -> AgentRuntime {
     Path::new(&agent.command)
         .file_name()
         .and_then(|value| value.to_str())
-        .is_some_and(|value| value == "codex")
+        .map(|value| match value {
+            "codex" => AgentRuntime::Codex,
+            "claude" => AgentRuntime::Claude,
+            _ => AgentRuntime::Other,
+        })
+        .unwrap_or(AgentRuntime::Other)
 }
 
-fn should_inject_codex_color(agent: &AgentConfig, args: &[String]) -> bool {
-    should_inject_codex_reasoning_effort(agent)
+fn dangerous_permission_flag(runtime: AgentRuntime) -> Option<&'static str> {
+    match runtime {
+        AgentRuntime::Codex => Some("--dangerously-bypass-approvals-and-sandbox"),
+        AgentRuntime::Claude => Some("--dangerously-skip-permissions"),
+        AgentRuntime::Other => None,
+    }
+}
+
+fn should_inject_codex_reasoning_effort(runtime: AgentRuntime) -> bool {
+    runtime == AgentRuntime::Codex
+}
+
+fn should_inject_codex_color(runtime: AgentRuntime, args: &[String]) -> bool {
+    should_inject_codex_reasoning_effort(runtime)
         && !args.windows(2).any(|window| {
             window[0] == "--color" || window[0] == "-c" && window[1].starts_with("color=")
         })
         && !args.iter().any(|value| value == "--color")
 }
 
-fn should_append_prompt_argument(agent: &AgentConfig, args: &[String]) -> bool {
-    should_inject_codex_reasoning_effort(agent) && args.iter().any(|value| value == "exec")
+fn should_append_prompt_argument(runtime: AgentRuntime, args: &[String]) -> bool {
+    match runtime {
+        AgentRuntime::Codex => args.iter().any(|value| value == "exec"),
+        AgentRuntime::Claude => args.iter().any(|value| value == "-p" || value == "--print"),
+        AgentRuntime::Other => false,
+    }
 }
 
 fn should_pass_prompt_as_argument(agent: &AgentConfig) -> bool {
-    should_inject_codex_reasoning_effort(agent)
+    should_append_prompt_argument(detect_agent_runtime(agent), &agent.args)
 }
 
 fn normalize_output(output: &str) -> Option<String> {
@@ -1429,6 +1460,57 @@ mod tests {
             build_agent_command_argv(&agent, None),
             vec!["other-agent".to_owned(), "run".to_owned()]
         );
+    }
+
+    #[test]
+    fn build_agent_command_argv_uses_claude_print_mode_prompt_and_permission_flag() {
+        let agent = AgentConfig {
+            command: "claude".to_owned(),
+            args: vec![
+                "-p".to_owned(),
+                "--output-format".to_owned(),
+                "text".to_owned(),
+            ],
+            model_reasoning_effort: "xhigh".to_owned(),
+            dangerously_bypass_approvals_and_sandbox: true,
+            additional_instructions: None,
+            prompts: AgentPromptTemplates::default(),
+        };
+
+        assert_eq!(
+            build_agent_command_argv(&agent, Some("Inspect workspace")),
+            vec![
+                "claude".to_owned(),
+                "--dangerously-skip-permissions".to_owned(),
+                "-p".to_owned(),
+                "--output-format".to_owned(),
+                "text".to_owned(),
+                "Inspect workspace".to_owned(),
+            ]
+        );
+    }
+
+    #[test]
+    fn should_pass_prompt_as_argument_for_claude_only_in_print_mode() {
+        let print_agent = AgentConfig {
+            command: "claude".to_owned(),
+            args: vec!["-p".to_owned()],
+            model_reasoning_effort: "xhigh".to_owned(),
+            dangerously_bypass_approvals_and_sandbox: false,
+            additional_instructions: None,
+            prompts: AgentPromptTemplates::default(),
+        };
+        let interactive_agent = AgentConfig {
+            command: "claude".to_owned(),
+            args: vec!["--model".to_owned(), "sonnet".to_owned()],
+            model_reasoning_effort: "xhigh".to_owned(),
+            dangerously_bypass_approvals_and_sandbox: false,
+            additional_instructions: None,
+            prompts: AgentPromptTemplates::default(),
+        };
+
+        assert!(should_pass_prompt_as_argument(&print_agent));
+        assert!(!should_pass_prompt_as_argument(&interactive_agent));
     }
 
     #[test]

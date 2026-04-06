@@ -54,11 +54,16 @@ The UI shows the authored PR list, a `Review Requests` tab for PRs that currentl
 - `git`
 - a GitHub token in `GITHUB_TOKEN` or `GH_TOKEN`
 - an agent command available on your machine
-  - the example config assumes `codex`
-  - BigBrother defaults Codex runs to `model_reasoning_effort = "xhigh"` and passes that
+  - the example config assumes `codex`, but BigBrother also supports `claude` in print mode
+  - for Codex, BigBrother defaults `model_reasoning_effort = "xhigh"` and passes that
     explicitly via `codex -c model_reasoning_effort=... exec ...`
-  - if you want Codex to run with unsandboxed full local access, set
+  - for Claude Code, configure print mode such as
+    `command = "claude"` plus `args = ["-p", "--output-format", "text"]`
+  - if you want the agent to run with unsandboxed full local access, set
     `agent.dangerously_bypass_approvals_and_sandbox = true`
+    - BigBrother maps that to the backend-specific flag:
+      `codex --dangerously-bypass-approvals-and-sandbox` or
+      `claude --dangerously-skip-permissions`
 - existing local checkouts for the repositories you want BigBrother to operate on
   - by default it looks under `workspace.root` for a directory named after the repo, such as `../tikv` for `tikv/tikv`
   - if auto-discovery is not enough, you can provide `workspace.repo_map` entries in the config
@@ -99,7 +104,8 @@ It also means BigBrother will place its centralized managed worktrees under
 `../bigbrother-worktrees`, with one reusable detached-HEAD worktree per repository such as
 `../bigbrother-worktrees/tikv-bigbrother`.
 If you enable `agent.dangerously_bypass_approvals_and_sandbox`, BigBrother will invoke Codex with
-full unsandboxed access, so only use that on a machine you already trust.
+full unsandboxed access, or invoke Claude Code with `--dangerously-skip-permissions`, so only use
+that on a machine you already trust.
 By default, BigBrother also injects `-c model_reasoning_effort="xhigh"` and `--color always` into
 `codex exec` so the daemon does not depend on whatever ambient global Codex config happens to be
 present on the host and can preserve ANSI-colored terminal output in the browser terminal.
@@ -186,7 +192,7 @@ When BigBrother detects a PR that needs attention, it:
 4. if the same PR later retries with the same unresolved merge state, it resumes from that managed worktree; if a different PR for the same repo needs the worktree first, BigBrother can rebuild it and take over
 5. asks the agent to merge the latest base branch, resolve conflicts if needed, and then continue with the CI or review fix
 6. builds an execution prompt from the PR context and trigger reason
-7. for `codex exec`, passes that prompt as the initial prompt argument instead of stdin so the PTY session can preserve richer terminal-style output; other agent commands still read prompt text from stdin
+7. for `codex exec` and `claude -p`, passes that prompt as the initial prompt argument instead of stdin so the PTY session can preserve richer terminal-style output; other agent commands still read prompt text from stdin
 8. updates the UI and persisted state with the result
 
 When the configured agent command is `codex`, BigBrother treats reasoning effort as a first-class
@@ -194,6 +200,13 @@ agent setting. The `[agent] model_reasoning_effort` config defaults to `xhigh`, 
 always passes it explicitly to `codex exec` via `-c model_reasoning_effort="..."`. It also forces
 `--color always` and passes the prompt as the initial `codex exec` prompt argument so the PTY
 session looks closer to a native terminal run.
+
+When the configured agent command is `claude`, BigBrother treats Claude Code print mode as the
+supported non-interactive path. If your args include `-p` or `--print`, the runner appends the
+assembled prompt as that print-mode argument instead of piping it through stdin. The structured
+`dangerously_bypass_approvals_and_sandbox` config still works, but BigBrother maps it to Claude
+Code's `--dangerously-skip-permissions` flag instead of the Codex flag. The Codex-only
+`model_reasoning_effort` override is ignored for Claude.
 
 The default prompt templates ask the agent to inspect GitHub feedback and CI, merge the latest base branch itself when needed, resolve conflicts before declaring success, fix code in-place, run targeted validation, and push back to the PR branch if it can. Because the managed worktree uses detached HEAD, the prompt also tells the agent not to create or rely on a local branch and to publish explicitly with `git push "$BIGBROTHER_PR_PUSH_REMOTE" HEAD:"$BIGBROTHER_PR_HEAD_REF"`. They also tell the agent to stop and ask for operator direction before making material or high-risk changes instead of changing code unilaterally. When the agent decides a change is non-trivial, it emits a machine-readable `BIGBROTHER_NEEDS_DECISION:` marker; BigBrother then sets the PR to `needs decision`, auto-freezes future automatic runs for that PR under the hood, and stores the full operator-facing explanation in the PR details output until you explicitly clear it from the dashboard.
 

@@ -461,7 +461,8 @@ Each run includes:
 - workspace sync result
 - agent command
 - timeout
-- the exact prompt text sent to the agent, even if the runtime passes it as a direct `codex exec` prompt argument rather than stdin
+- the exact prompt text sent to the agent, even if the runtime passes it as a direct `codex exec`
+  or `claude -p` prompt argument rather than stdin
 - stdout and stderr capture
 - exit code
 - compact final summary intended for operator scanning, such as `merge conflict handling completed`,
@@ -476,6 +477,16 @@ Agent runtime defaults:
 - the default BigBrother reasoning effort for `codex exec` is `xhigh`
 - operators may override that reasoning effort through the structured `[agent]` config rather than
   burying it in free-form `args`
+- when `agent.command` resolves to `claude`, the supported non-interactive path is Claude Code
+  print mode (`-p` / `--print`)
+- for `claude -p`, the daemon should pass the assembled prompt as the print-mode argument instead
+  of piping it through stdin
+- the structured `dangerously_bypass_approvals_and_sandbox` setting should map to the
+  backend-specific full-access flag: Codex uses
+  `--dangerously-bypass-approvals-and-sandbox`, while Claude Code uses
+  `--dangerously-skip-permissions`
+- the structured `model_reasoning_effort` setting is currently Codex-specific; the daemon should
+  ignore it rather than inventing an unsupported Claude Code mapping
 
 The agent prompt must include:
 
