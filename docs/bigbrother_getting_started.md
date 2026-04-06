@@ -17,6 +17,7 @@ BigBrother 现在主要做这些事情：
 - 跟踪当前 request 你 review 的 PR
 - 展示 `waiting review`、`waiting merge`、`conflict`、`failed`、`needs decision`、`running` 等状态
 - 在 review feedback、CI failure 和 merge conflict 出现时判断是否要自动处理
+- 通过自己的 managed worktree 执行 agent 修改，而不是直接改你日常使用的工作区
 - 对 review-request PR 发起只读的 `Deep Review`
 - 在配置好时通过飞书把 run 和 escalation 通知发出来
 
@@ -26,35 +27,6 @@ BigBrother 现在主要做这些事情：
 - 少来回刷新 review 和 CI
 - 少在 trivial fix 和重要决策之间频繁切换心智
 - 把真正需要人工介入的点明确抬出来
-
-## 它实际怎么工作
-
-BigBrother 不是直接替你接管实现流程，而是接在 PR 已经存在之后的运营环节上。
-
-它大致这样工作：
-
-1. 先持续跟踪你 authored 的 PR 和 request 你 review 的 PR。
-2. 如果 review feedback、CI 或 merge 状态发生变化，它会判断这是不是一个值得处理的新信号。
-3. 如果这个问题看起来可以安全自动处理，它会进入自己的 managed worktree，而不是直接改你平时开发用的工作区。
-4. 然后它调用配置好的 agent 去处理问题，必要时合并最新 base、修冲突、做验证、再把结果推回 PR。
-5. 如果 agent 判断这不是 trivial follow-up，而是 non-trivial change，就不会继续硬改，而是把 PR 升成 `needs decision`，等你拍板。
-6. 对于 request 你 review 的 PR，它还可以跑只读的 `Deep Review`，帮助你快速形成 review 意见。
-
-这里最值得强调的一点是：BigBrother 会发现你的本地仓库，但不会直接在你日常使用的工作区里改代码；它只在自己的专用 managed worktree 里工作。
-
-## 整体流程大概是什么样
-
-从日常使用者的角度看，这个流程通常会长这样：
-
-1. 你照常写代码、开 PR，真正的设计和实现打磨还是在你熟悉的 agent workflow 里完成。
-2. PR 打开之后，BigBrother 开始接管那条长尾运营流程。
-3. 大多数时候你只需要开着 dashboard，看哪些 PR 在 `waiting review`，哪些已经 `waiting merge`，哪些因为 comment、CI 或冲突变成了新的 action item。
-4. 如果自动处理失败，PR 会进入 `failed`，你可以决定是否 `Retry`。
-5. 如果 agent 判断改动不应该自动做，PR 会进入 `needs decision`，等你来拍板。
-6. 如果你暂时不想让它继续处理某个 PR，可以 `Untrack`。
-7. 如果你自己已经处理掉当前阻塞，可以用 `Addressed` 把状态往前推进。
-
-这也是为什么 BigBrother 更像一个 PR operations console，而不是一个聊天产品。它的重点不是“再开一轮对话”，而是把一组持续变化的 PR 状态稳定地摆在你面前。
 
 ## 怎么开始
 
@@ -124,6 +96,7 @@ Today, BigBrother mainly does a few things:
 - it tracks PRs that currently request your review
 - it shows states such as `waiting review`, `waiting merge`, `conflict`, `failed`, `needs decision`, and `running`
 - it decides whether new review feedback, CI failures, or merge conflicts should trigger automatic handling
+- it performs agent changes inside its own managed worktree instead of editing your everyday working tree directly
 - it can run a read-only `Deep Review` on review-request PRs
 - it can send Feishu notifications for runs and escalations when configured
 
@@ -133,35 +106,6 @@ The real value is not that it writes more code. The value is that it removes a l
 - less re-checking review threads and CI for small changes
 - less context switching between trivial follow-up work and important human decisions
 - more explicit visibility into the exact places where a human actually needs to step in
-
-## How it behaves in practice
-
-BigBrother does not try to take over the implementation phase. It picks up once the PR already exists and the long-tail operational loop begins.
-
-In practice, it works roughly like this:
-
-1. It continuously tracks the PRs you authored and the PRs that currently request your review.
-2. When review feedback, CI, or merge state changes, it decides whether this is a new actionable signal.
-3. If the issue looks safe to handle automatically, it enters its own managed worktree instead of editing your everyday working tree.
-4. It then invokes the configured agent, merging the latest base, resolving conflicts if needed, validating the result, and pushing the outcome back to the PR when appropriate.
-5. If the agent decides the change is not a trivial follow-up, it does not force the change through. It escalates the PR to `needs decision` and waits for a human call.
-6. For PRs that request your review, it can also run a read-only `Deep Review` to help you form review feedback faster.
-
-The most important sentence in the whole model is this one: BigBrother will find your local repositories, but it will not change code in the working tree you use every day; it only works inside its own managed worktree.
-
-## What the overall flow looks like
-
-From the operator's point of view, the lifecycle usually looks like this:
-
-1. You still do the real design and implementation work in whatever agent workflow fits you best.
-2. Once the PR is open, BigBrother takes over the long-tail operational loop around that PR.
-3. Most of the time, you simply leave the dashboard open and see which PRs are in `waiting review`, which ones are already `waiting merge`, and which ones turned into new action items because of comments, CI, or conflicts.
-4. If an automatic attempt fails, the PR lands in `failed`, and you decide whether to `Retry`.
-5. If the agent decides the change should not be automated, the PR lands in `needs decision`, and you decide what happens next.
-6. If you do not want BigBrother to keep working on a PR for now, you can `Untrack` it.
-7. If you handled the blocker yourself, you can use `Addressed` to move the state forward again.
-
-That is also why BigBrother feels more like a PR operations console than a chat product. Its job is not to start another conversation. Its job is to keep a changing set of PR states visible and operable.
 
 ## How to get started
 
