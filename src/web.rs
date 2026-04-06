@@ -1246,10 +1246,11 @@ const PR_DETAIL_HTML: &str = r##"<!doctype html>
 
     .terminal-shell {
       --terminal-inner-gutter: 14px;
+      --terminal-scrollbar-gutter: 18px;
       min-height: 320px;
       max-height: 70vh;
       overflow: hidden;
-      padding: 16px;
+      padding: 16px 0 16px 16px;
       border-radius: 16px;
       border: 1px solid rgba(0, 0, 0, 0.32);
       background: #1e1e1e;
@@ -1267,14 +1268,16 @@ const PR_DETAIL_HTML: &str = r##"<!doctype html>
       box-sizing: border-box;
       height: calc(70vh - 32px);
       min-height: 288px;
-      padding-right: var(--terminal-inner-gutter);
+      padding-right: calc(
+        var(--terminal-inner-gutter) + var(--terminal-scrollbar-gutter)
+      );
     }
 
     .terminal-shell .xterm-viewport {
       border-radius: 10px;
       scrollbar-color: rgba(255, 255, 255, 0.26) transparent;
       scrollbar-width: thin;
-      scrollbar-gutter: stable;
+      scrollbar-gutter: stable both-edges;
       right: 0;
       overflow-x: hidden;
     }
@@ -1283,7 +1286,9 @@ const PR_DETAIL_HTML: &str = r##"<!doctype html>
       position: absolute;
       top: 16px;
       left: 16px;
-      right: calc(16px + var(--terminal-inner-gutter));
+      right: calc(
+        var(--terminal-inner-gutter) + var(--terminal-scrollbar-gutter)
+      );
       color: rgba(204, 204, 204, 0.8);
       font: 0.82rem/1.45 Menlo, Monaco, "SF Mono", ui-monospace, monospace;
       pointer-events: none;
