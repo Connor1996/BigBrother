@@ -546,11 +546,6 @@ impl Supervisor {
             Some(pr_key.to_owned()),
             format!("starting manual deep review for {pr_key}"),
         );
-        self.send_notification(
-            Some(&pr_key),
-            manual_deep_review_started_notification(&pull_request),
-        )
-        .await;
 
         let supervisor = Arc::clone(self);
         let workspace = self.config.workspace.clone();
@@ -907,16 +902,13 @@ impl Supervisor {
                     ),
                 );
 
-                Some((
-                    RunRequest {
-                        pull_request: pr.clone(),
-                        trigger,
-                        workspace: self.config.workspace.clone(),
-                        agent: self.config.agent.clone(),
-                        output_updates: None,
-                    },
-                    automatic_run_started_notification(pr, trigger),
-                ))
+                Some(RunRequest {
+                    pull_request: pr.clone(),
+                    trigger,
+                    workspace: self.config.workspace.clone(),
+                    agent: self.config.agent.clone(),
+                    output_updates: None,
+                })
             } else {
                 if let Some(pr_key) = preferred_pr_key {
                     self.push_event(
@@ -953,10 +945,8 @@ impl Supervisor {
             }
         };
 
-        if let Some((request, start_notification)) = selected_request {
+        if let Some(request) = selected_request {
             let pr_key = request.pull_request.key.clone();
-            self.send_notification(Some(&pr_key), start_notification)
-                .await;
             let (output_tx, mut output_rx) = mpsc::unbounded_channel::<RunUpdate>();
             let mut runner_request = request.clone();
             runner_request.output_updates = Some(output_tx);
@@ -1711,14 +1701,6 @@ fn poll_failed_notification(preferred_pr_key: Option<&str>, error: &anyhow::Erro
     Notification::new(EventLevel::Error, title, format!("Error: {error:#}"))
 }
 
-fn manual_deep_review_started_notification(pr: &PullRequest) -> Notification {
-    Notification::new(
-        EventLevel::Info,
-        format!("starting manual deep review for {}", pr.key),
-        pr_notification_body(pr, &[format!("Result URL: {}", pr.url)]),
-    )
-}
-
 fn manual_deep_review_finished_notification(
     pr: &PullRequest,
     outcome: &RunOutcome,
@@ -1738,21 +1720,6 @@ fn manual_deep_review_finished_notification(
             pr,
             &[
                 format!("Summary: {}", outcome.summary),
-                format!("Result URL: {}", pr.url),
-            ],
-        ),
-    )
-}
-
-fn automatic_run_started_notification(pr: &PullRequest, trigger: AttentionReason) -> Notification {
-    Notification::new(
-        EventLevel::Info,
-        format!("starting agent run for {}", pr.key),
-        pr_notification_body(
-            pr,
-            &[
-                format!("Reason: {}", trigger.label()),
-                format!("Status: {}", TrackingStatus::Running.label()),
                 format!("Result URL: {}", pr.url),
             ],
         ),
@@ -2557,7 +2524,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn successful_agent_run_emits_start_and_completion_notifications() {
+    async fn successful_agent_run_emits_only_completion_notification() {
         let mut pr = sample_pr();
         pr.ci_status = CiStatus::Failure;
         pr.ci_updated_at = Some(Utc.with_ymd_and_hms(2026, 3, 30, 18, 5, 0).unwrap());
@@ -2588,11 +2555,9 @@ mod tests {
         supervisor.poll_once().await.expect("poll should succeed");
 
         let notifications = sink.snapshot();
-        assert_eq!(notifications.len(), 2);
+        assert_eq!(notifications.len(), 1);
         assert_eq!(notifications[0].level, EventLevel::Info);
-        assert!(notifications[0].title.contains("starting agent run"));
-        assert_eq!(notifications[1].level, EventLevel::Info);
-        assert!(notifications[1].title.contains("agent run completed"));
+        assert!(notifications[0].title.contains("agent run completed"));
     }
 
     #[tokio::test]
@@ -2631,10 +2596,10 @@ mod tests {
         supervisor.poll_once().await.expect("poll should succeed");
 
         let notifications = sink.snapshot();
-        assert_eq!(notifications.len(), 2);
-        assert_eq!(notifications[1].level, EventLevel::Info);
-        assert!(notifications[1].title.contains("needs operator decision"));
-        assert!(notifications[1]
+        assert_eq!(notifications.len(), 1);
+        assert_eq!(notifications[0].level, EventLevel::Info);
+        assert!(notifications[0].title.contains("needs operator decision"));
+        assert!(notifications[0]
             .body
             .contains("requires product decision on API shape"));
 

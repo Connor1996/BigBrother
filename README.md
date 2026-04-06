@@ -132,10 +132,9 @@ timeout_secs = 10
 
 Current Feishu notifications cover:
 
-- automatic agent run start
 - automatic agent run completion or failure
 - `needs decision` escalation
-- manual deep review start and completion
+- manual deep review completion
 - daemon poll failures
 
 `label` is included in each message so multiple daemon instances can identify themselves clearly in

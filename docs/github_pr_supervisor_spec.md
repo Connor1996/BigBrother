@@ -533,8 +533,8 @@ Current first-pass remote sink behavior:
 - keep the first Feishu integration outbound-only; no command handling or chat-driven control flow
 - include a configurable instance label in each outbound Feishu message so multiple daemons can
   identify the sender in private DMs
-- emit Feishu notifications for automatic run start, automatic run completion or failure,
-  `needs_decision` escalation, manual deep review start and completion, and daemon poll
+- emit Feishu notifications for automatic run completion or failure,
+  `needs_decision` escalation, manual deep review completion, and daemon poll
   failures
 
 Lifecycle transition notifications should also be supported for:
