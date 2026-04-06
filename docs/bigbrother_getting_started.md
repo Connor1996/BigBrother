@@ -3,11 +3,11 @@
 
 ## 中文
 
-现在在所谓的 vibe coding 阶段里，从需求到实现、测试、部署，端到端自动化已经越来越可行了。而且在实现阶段，大家已经有很多和 agent 协作的方式可选：可以直接用 Codex、Claude Code 这样的 coding agent，可以拉起 subagents 去并行做研究、评审和实现，也可以用 slock.ai 这类 agent teams 形态去组织多人类、多 agent 的协作。
+现在的 vibe coding 已经越来越接近这样一种体验：从需求到实现、测试、部署，很多事情都可以一路自动往前推。但 BigBrother 不是想替代这段实现流程；它默认你在需求、设计、实现这些环节里，还是会继续和 Codex、Claude Code、subagents、slock.ai 这类 agent 反复来回，把方案和代码一点点打磨出来。
 
-但在真正生产级别的软件开发里，这段工作流通常还很难完全自动化。实际做下来也很容易发现，很多事情不是一轮就能做对的，我们还是需要和 agent 多轮来回讨论设计、反复修改实现，才能把东西打磨到足够好。也正因为这样，BigBrother 并不是想把实现阶段这段开放式、探索式的工作流统一收口。
+在真正的生产开发里，这段实现工作流通常还是很难完全自动化。很多事情不是一轮就能做对的，往往要经过多轮讨论设计、修改实现、再看结果，才能落到一个足够稳的版本。也正因为这样，BigBrother 并不打算把这段开放式、探索式协作硬收口。
 
-BigBrother 想解决的是另一段问题：PR 一旦提出来之后，那条很长、但流程其实相对确定的尾巴。真正拖时间的，往往不是“改代码”本身，而是反复确认 review、CI、mergeability、comment、failed run 和接下来该轮到哪个 PR。这个问题更适合一个持续可见的操作界面，而不是单纯的 chat 线程，所以它也不是 OpenClaw 那种界面形态最擅长承接的部分。
+它想接住的是 PR 提出来之后那条更确定、也更容易耗人的长尾流程：反复确认 review、CI、mergeability、comment、failed run，以及“下一个到底该处理哪个 PR”。这类问题更适合一个持续可见的操作界面，而不是单纯的 chat 线程，所以它也不是 OpenClaw 那种界面形态最擅长承接的部分。
 
 ## 它能做什么
 
@@ -132,11 +132,11 @@ target/release/bigbrother --config bigbrother.toml
 
 ## English
 
-In what people now call vibe coding, it is already becoming realistic to automate the whole path from requirement to implementation to testing to deployment. And during implementation, developers already have many ways to work with agents: coding agents such as Codex and Claude Code, subagent patterns for parallel research, review, and implementation, and agent-team setups such as slock.ai.
+Vibe coding is getting closer and closer to an experience where a lot of the path from requirement to implementation to testing to deployment can move forward automatically. BigBrother is not trying to replace that implementation loop. It assumes that during requirements, design, and implementation, people will still keep iterating with tools such as Codex, Claude Code, subagents, or agent-team setups like slock.ai until the design and code are actually good enough.
 
-But in real production-grade software work, that workflow is still much harder to automate end to end. In practice, many tasks still need repeated back-and-forth with an agent, multiple design discussions, and several implementation passes before the result is actually good enough. That is exactly why BigBrother is not trying to standardize the open-ended, exploratory implementation phase.
+In real production software work, that implementation loop is still hard to automate cleanly from end to end. Many tasks are not solved in one pass; they need multiple design discussions, several implementation revisions, and repeated back-and-forth with an agent before the result is solid. That is why BigBrother is not trying to force the open-ended, exploratory phase into one standardized workflow.
 
-It is built for a different part of the problem: the long tail that starts after a PR is already open. At that point, the expensive part is often not the code change itself. It is the repeated checking around review state, CI, mergeability, comments, failed runs, and which PR actually needs attention next. That problem is better served by a persistent operational surface than by a chat thread, which is also why it is not really the part of the workflow that an OpenClaw-style interface handles best.
+It is built for the more predictable long tail that starts after a PR is already open: checking review state, CI, mergeability, comments, failed runs, and simply knowing which PR needs attention next. That problem is better served by a persistent operational surface than by a chat thread, which is also why it is not really the part of the workflow that an OpenClaw-style interface handles best.
 
 ## What it does
 
