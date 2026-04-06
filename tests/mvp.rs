@@ -1039,7 +1039,7 @@ async fn pr_detail_page_uses_bigbrother_branding() {
             && html.contains(r#"<script src="/assets/xterm-addon-fit.min.js"></script>"#)
             && html.contains(r#"/api/pr/terminal/ws?key=${encodeURIComponent(pr.key)}"#)
             && html.contains("scrollbar-gutter: stable both-edges;")
-            && html.contains("--terminal-inner-gutter: 14px;")
+            && html.contains("--terminal-inner-gutter: 8px;")
             && html.contains("--terminal-scrollbar-gutter: 18px;")
             && html.contains("width: 100%;")
             && html.contains("box-sizing: border-box;")
