@@ -22,6 +22,10 @@ The current MVP combines:
 - a configurable agent runner that can try to fix CI or reviewer feedback automatically
 - a local web dashboard served from the same Rust process
 
+The daemon keeps both GitHub API requests and the GitHub-fetch stage of each poll on bounded
+timeouts so a single stuck network call cannot leave the dashboard showing an indefinitely stale
+`Last poll` timestamp.
+
 The planned product direction is:
 
 - Rust daemon/backend

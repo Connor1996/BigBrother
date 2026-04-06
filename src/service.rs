@@ -7,6 +7,7 @@ use anyhow::Result;
 use chrono::{DateTime, Utc};
 use futures::future::BoxFuture;
 use tokio::sync::{broadcast, mpsc, Mutex as AsyncMutex};
+use tokio::time::{timeout, Duration};
 
 use crate::{
     config::ResolvedConfig,
@@ -109,6 +110,11 @@ pub struct PollQueryState {
 }
 
 const MAX_LIVE_OUTPUT_CHARS: usize = 16_000;
+#[cfg(not(test))]
+const POLL_FETCH_TIMEOUT: Duration = Duration::from_secs(120);
+#[cfg(test)]
+const POLL_FETCH_TIMEOUT: Duration = Duration::from_millis(50);
+
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct GitHubRequestStats {
     pub total_matching_prs: Option<usize>,
@@ -822,9 +828,23 @@ impl Supervisor {
             },
         );
 
-        let poll_result = self
-            .fetch_prs_for_poll(preferred_pr_key, allow_fallback)
-            .await?;
+        let poll_result = match timeout(
+            POLL_FETCH_TIMEOUT,
+            self.fetch_prs_for_poll(preferred_pr_key, allow_fallback),
+        )
+        .await
+        {
+            Ok(result) => result?,
+            Err(_) => {
+                return Err(anyhow::anyhow!(
+                    "{} GitHub fetch timed out after {} seconds",
+                    preferred_pr_key
+                        .map(|pr_key| format!("targeted daemon check for {pr_key}"))
+                        .unwrap_or_else(|| "scheduled daemon poll".to_owned()),
+                    POLL_FETCH_TIMEOUT.as_secs_f32()
+                ));
+            }
+        };
         let prs = &poll_result.tracked_prs;
         let review_requests = &poll_result.review_requests;
         let fetch_stats = &poll_result.fetch_stats;
@@ -2669,5 +2689,58 @@ mod tests {
         assert!(notifications[0]
             .title
             .contains("scheduled daemon poll failed"));
+    }
+
+    #[tokio::test]
+    async fn timed_out_poll_fetches_record_failure_and_finish_timestamp() {
+        #[derive(Clone)]
+        struct HangingProvider;
+
+        impl GitHubProvider for HangingProvider {
+            fn fetch_pull_requests(&self) -> BoxFuture<'_, Result<Vec<PullRequest>>> {
+                Box::pin(async move {
+                    tokio::time::sleep(Duration::from_millis(250)).await;
+                    Ok(Vec::new())
+                })
+            }
+        }
+
+        #[derive(Clone)]
+        struct UnusedRunner;
+
+        impl AgentRunner for UnusedRunner {
+            fn run(&self, _request: RunRequest) -> BoxFuture<'static, RunOutcome> {
+                Box::pin(async move { panic!("runner should not be called") })
+            }
+        }
+
+        let sink = RecordingNotificationSink::default();
+        let supervisor = Supervisor::new_with_notifier(
+            sample_config(),
+            Arc::new(HangingProvider),
+            Arc::new(UnusedRunner),
+            Box::new(sink.clone()),
+        )
+        .expect("supervisor should construct");
+
+        let error = supervisor
+            .poll_once()
+            .await
+            .expect_err("poll fetch should time out");
+        assert!(error.to_string().contains("timed out"));
+
+        let snapshot = supervisor.snapshot();
+        assert!(snapshot.last_poll_started_at.is_some());
+        assert!(snapshot.last_poll_finished_at.is_some());
+        assert!(snapshot
+            .last_poll_error
+            .as_deref()
+            .unwrap_or_default()
+            .contains("timed out"));
+
+        let notifications = sink.snapshot();
+        assert_eq!(notifications.len(), 1);
+        assert_eq!(notifications[0].level, EventLevel::Error);
+        assert!(notifications[0].body.contains("timed out"));
     }
 }

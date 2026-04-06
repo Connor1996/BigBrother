@@ -180,6 +180,8 @@ Scheduled GitHub polling should minimize rate-limit pressure by using two stages
 - PRs that are explicitly untracked, including automatically frozen `needs_decision` entries, should be treated as frozen dashboard snapshots during scheduled
   polls: keep their last known PR state in the UI, do not refresh their review or CI-derived
   status, and avoid redundant GitHub detail hydration for them until the operator tracks them again
+- both individual GitHub API requests and the GitHub-fetch phase of each poll should have bounded
+  timeouts so a stuck upstream call records a poll failure and allows the next scheduled cycle to proceed
 
 ### 6.3 Human Escalation
 

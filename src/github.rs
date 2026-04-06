@@ -23,6 +23,8 @@ use crate::{
 };
 
 const SIGNAL_REFRESH_GRACE_PERIOD_SECS: i64 = 30 * 60;
+const GITHUB_CONNECT_TIMEOUT_SECS: u64 = 10;
+const GITHUB_REQUEST_TIMEOUT_SECS: u64 = 30;
 
 pub struct GitHubClient {
     http: Client,
@@ -47,6 +49,8 @@ impl GitHubClient {
 
         let http = Client::builder()
             .default_headers(headers)
+            .connect_timeout(std::time::Duration::from_secs(GITHUB_CONNECT_TIMEOUT_SECS))
+            .timeout(std::time::Duration::from_secs(GITHUB_REQUEST_TIMEOUT_SECS))
             .build()
             .context("failed to build GitHub HTTP client")?;
 
