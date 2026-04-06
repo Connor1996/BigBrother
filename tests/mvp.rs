@@ -1038,13 +1038,11 @@ async fn pr_detail_page_uses_bigbrother_branding() {
             && html.contains(r#"<script src="/assets/xterm.min.js"></script>"#)
             && html.contains(r#"<script src="/assets/xterm-addon-fit.min.js"></script>"#)
             && html.contains(r#"/api/pr/terminal/ws?key=${encodeURIComponent(pr.key)}"#)
-            && html.contains("scrollbar-gutter: stable both-edges;")
+            && html.contains("scrollbar-gutter: stable;")
             && html.contains("--terminal-inner-gutter: 14px;")
-            && html.contains("--terminal-scrollbar-gutter: 18px;")
             && html.contains("width: 100%;")
-            && html.contains(
-                "padding-right: calc(\n        var(--terminal-inner-gutter) + var(--terminal-scrollbar-gutter)\n      );"
-            )
+            && html.contains("box-sizing: border-box;")
+            && html.contains("padding-right: var(--terminal-inner-gutter);")
             && html.contains("right: 0;")
             && html.contains(r#"fontFamily: 'Menlo, Monaco, "SF Mono", ui-monospace, monospace'"#)
             && html.contains("fontSize: 13")
