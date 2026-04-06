@@ -1245,6 +1245,7 @@ const PR_DETAIL_HTML: &str = r##"<!doctype html>
     }
 
     .terminal-shell {
+      --terminal-inner-gutter: 14px;
       --terminal-scrollbar-gutter: 18px;
       min-height: 320px;
       max-height: 70vh;
@@ -1263,7 +1264,7 @@ const PR_DETAIL_HTML: &str = r##"<!doctype html>
     }
 
     .terminal-shell .xterm {
-      width: calc(100% - var(--terminal-scrollbar-gutter));
+      width: calc(100% - var(--terminal-inner-gutter) - var(--terminal-scrollbar-gutter));
       height: calc(70vh - 32px);
       min-height: 288px;
     }
@@ -1281,7 +1282,9 @@ const PR_DETAIL_HTML: &str = r##"<!doctype html>
       position: absolute;
       top: 16px;
       left: 16px;
-      right: 16px;
+      right: calc(
+        16px + var(--terminal-inner-gutter) + var(--terminal-scrollbar-gutter)
+      );
       color: rgba(204, 204, 204, 0.8);
       font: 0.82rem/1.45 Menlo, Monaco, "SF Mono", ui-monospace, monospace;
       pointer-events: none;

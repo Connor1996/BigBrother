@@ -754,7 +754,7 @@ Panels:
 - saved last run output as a wrapped monospace text fallback only when no PTY terminal recording is available for the last run (for example, failures before the terminal session starts), and that fallback should omit internal transcript wrapper headers such as `Prompt Sent To Codex CLI` / `Codex CLI Output`
 - if the terminal renderer itself fails to initialize, the UI should show a short renderer-error message instead of dumping raw PTY control bytes into a plain text block
 - periodic detail-page refreshes should not keep resetting an unchanged terminal replay; the UI should preserve the operator's current scroll position unless the viewport was already following the live bottom edge
-- the embedded terminal should reserve visible outer gutter space for its vertical scrollbar so the handle sits beside the content area instead of on top of the rightmost text columns
+- the embedded terminal should reserve a separate inner content gutter and outer scrollbar gutter on the right, so the text keeps breathing room while the scrollbar handle sits beside the content area instead of on top of the rightmost columns
 - latest run output summary rendered as a short operator-facing status line rather than raw terminal or transcript text
 - when a run ends in `needs decision`, the saved last run output should show the full operator-facing explanation and requested decision, while the summary stays short
 - workspace path
