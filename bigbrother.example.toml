@@ -34,16 +34,8 @@ args = ["--dangerously-bypass-approvals-and-sandbox", "-c", "model_reasoning_eff
 # For Claude Code print mode instead, switch to:
 # command = "claude"
 # args = ["--dangerously-skip-permissions", "-p", "--output-format", "text"]
-# Extra operator guidance appended to every generated prompt.
-additional_instructions = """
-- Prefer using `gh` when you need to inspect the latest PR review comments or CI state.
-- Work only inside the current workspace checkout.
-- Push fixes directly to the PR head branch when validation passes.
-- If you are blocked, explain the blocker clearly in the final output.
-"""
-
-# Optional override for the persisted local state file.
-# state_path = "./bigbrother-state.json"
+# Optional local operator guidance appended to every generated prompt. Leave empty by default.
+additional_instructions = ""
 
 # Private DM mode via an enterprise self-built app bot.
 [notifications.feishu]

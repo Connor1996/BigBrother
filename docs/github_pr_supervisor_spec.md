@@ -518,6 +518,9 @@ Prompt template management:
   can edit prompt wording without changing Rust code or TOML wiring
 - prompt assembly may still inject runtime PR metadata and daemon-generated operator notes into
   those templates before sending the final prompt to the agent
+- common workflow guidance should live in those repository prompt templates by default; the
+  optional `agent.additional_instructions` config is only a local overlay and should be empty
+  unless a specific machine or operator needs extra constraints
 
 ## 15. Notification Model
 

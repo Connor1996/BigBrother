@@ -66,6 +66,8 @@ The UI shows the authored PR list, a `Review Requests` tab for PRs that currentl
     `--dangerously-skip-permissions` for Claude Code
   - you can still point `command` at a wrapper script or another executable; BigBrother only uses
     the basename to infer Codex vs Claude-specific behavior
+  - keep `[agent].additional_instructions` empty by default; repo-wide working rules belong in the
+    versioned prompt templates, while `additional_instructions` is only for machine-local overlays
 - existing local checkouts for the repositories you want BigBrother to operate on
   - by default it looks under `workspace.root` for a directory named after the repo, such as `../tikv` for `tikv/tikv`
   - if auto-discovery is not enough, you can provide `workspace.repo_map` entries in the config

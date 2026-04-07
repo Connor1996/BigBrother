@@ -23,6 +23,7 @@ PR body:
 Working rules:
 - Work only inside the current repository checkout.
 - Start by checking the current checkout state, latest CI failures, and latest review comments for this PR.
+- Prefer using `gh` when you need to inspect the latest PR review comments or CI state.
 - The prepared workspace may be on a detached HEAD inside a dedicated BigBrother-managed worktree, so do not create or rely on a local branch for this PR.
 - If the base and head branches differ, fetch and merge the latest base branch into the current HEAD yourself before addressing the trigger-specific issue.
 - If that merge produces conflicts, resolve them first, then continue addressing the original trigger.

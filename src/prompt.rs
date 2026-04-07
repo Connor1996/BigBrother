@@ -195,6 +195,7 @@ mod tests {
 
         assert!(prompt.contains("Trigger: CI failed"));
         assert!(prompt.contains("dedicated BigBrother-managed worktree"));
+        assert!(prompt.contains("Prefer using `gh` when you need to inspect"));
         assert!(prompt.contains("merge the latest base branch into the current HEAD yourself"));
         assert!(prompt.contains("If that merge produces conflicts, resolve them first"));
         assert!(prompt.contains("If the required change is material or high-risk"));
@@ -227,7 +228,9 @@ mod tests {
 
         assert!(prompt.contains("You are performing a deep code review"));
         assert!(prompt.contains("do not edit files, commit, push, or leave GitHub comments"));
+        assert!(prompt.contains("Prefer using `gh` when you need to inspect"));
         assert!(prompt.contains("Use the `$deep-review` skill workflow"));
+        assert!(prompt.contains("If you are blocked by missing auth"));
         assert!(prompt.contains("If you find no actionable issues, say `No findings.`"));
         assert!(!prompt.contains("merge the latest base branch into the PR branch yourself"));
     }
