@@ -80,26 +80,35 @@ BigBrother 以一个本地 daemon + web dashboard 的形态常驻运行。它会
 
 ## 怎么开始
 
-最省事的方式，不是手动从头填配置，而是先让 agent 帮你做 setup。
+第一次上手之前，先确认这些前置要求已经满足：
 
-仓库里已经有一份可以直接复制使用的 prompt：
+- 机器上已经有可用的 Rust toolchain 和 `git`
+- 已经准备好 `GITHUB_TOKEN` 或 `GH_TOKEN`
+- 本机能直接调用 `codex` 命令
+- Git 凭据可以 push 回你自己的 PR branch
+- 你想让 BigBrother 管理的仓库已经在本地，默认放在 `workspace.root` 下能被发现
+- 如果你想接飞书通知，再额外准备好对应凭据
+
+推荐路径还是先让 agent 帮你做第一轮 setup：
+
+1. 打开这份 prompt：
 
 [`docs/bigbrother_agent_setup_prompt.md`](/Users/Connor/Coding/bigbrother/docs/bigbrother_agent_setup_prompt.md)
 
-把它交给 Codex 之后，它会去检查本机环境、修 `bigbrother.toml`、避免保留没展开的占位符、在有凭据时接上飞书、启动 daemon，并确认 dashboard 能否正常响应。
+2. 把它交给 Codex。
+3. Codex 会去检查本机环境、修 `bigbrother.toml`、避免保留没展开的占位符、在有凭据时接上飞书、启动 daemon，并确认 dashboard 能否正常响应。
 
-这就是当前版本最接近 “agent-assisted setup” 的方式。现在还没有真正内建的 `doctor`、`init` 或 `setup --agent` 命令，所以最顺的上手方式就是先让 agent 帮你把第一轮 setup 走完。
+这就是当前版本最接近 “agent-assisted setup” 的方式。现在还没有真正内建的 `doctor`、`init` 或 `setup --agent` 命令，所以最顺的首次上手方式就是先让 agent 帮你把第一轮 setup 走完。
 
-如果你还是想手动来，流程也不复杂：
+如果你还是想手动来，可以按下面的步骤做：
 
-1. 先准备好 Rust、`git`、`GITHUB_TOKEN` 或 `GH_TOKEN`、可用的 `codex` 命令，以及能正常 push 回自己 PR branch 的 Git 凭据。
-2. 复制配置模板。
+1. 复制配置模板。
 
 ```bash
 cp bigbrother.example.toml bigbrother.toml
 ```
 
-3. 准备 GitHub 凭据。
+2. 导出 GitHub 凭据。
 
 ```bash
 export GITHUB_TOKEN=...
@@ -108,23 +117,23 @@ export GITHUB_USER=...
 
 如果你保留了 `author = "$GITHUB_USER"`，那 `GITHUB_USER` 需要是你的 GitHub login。要是不想额外带这个环境变量，也可以直接把 `author` 改成真实用户名，或者删掉，让 BigBrother 在运行时自己去 GitHub 查当前 viewer。
 
-4. 打开 `bigbrother.toml`，确认这些关键项：
+3. 打开 `bigbrother.toml`，确认这些关键项：
 
 - `workspace.root` 对不对
 - 只有在 `<workspace.root>/<repo-name>` 找不到仓库时，才加 `workspace.repo_map`
 - 除非你的机器明确用的是别的 agent，否则保留 `command = "codex"`
 - 除非你明确要让 Codex 在本机无沙箱全权限运行，否则先不要打开 `dangerously_bypass_approvals_and_sandbox`
 
-5. 如果你需要飞书通知，再补 `notifications.feishu`。
+4. 如果你需要飞书通知，再补 `notifications.feishu`。
 
-6. 编译并启动 daemon。
+5. 编译并启动 daemon。
 
 ```bash
 cargo build --release
 target/release/bigbrother --config bigbrother.toml
 ```
 
-7. 打开 [http://127.0.0.1:8787/](http://127.0.0.1:8787/)。
+6. 打开 [http://127.0.0.1:8787/](http://127.0.0.1:8787/)。
 
 如果你的 repo 都放在 `~/Coding` 下面，把 `bigbrother` 放在这些 repo 旁边通常会最顺手，因为默认的 `workspace.root = ".."` 就能自动发现很多 sibling repo。要是目录布局不一样，就把 `workspace.root` 改成绝对路径，比如 `/Users/alice/Coding`。当前配置解析不会自动展开 `~` 或 `$HOME/Coding`。
 
@@ -206,26 +215,35 @@ This screenshot supports the idea that BigBrother is useful not only for authore
 
 ## How to get started
 
-The easiest way to start is not to hand-edit everything yourself. It is to let an agent do the first setup pass.
+Before the first run, make sure these prerequisites are already in place:
 
-The repository already includes a copy-paste setup prompt here:
+- a working Rust toolchain and `git`
+- a GitHub token in `GITHUB_TOKEN` or `GH_TOKEN`
+- a working `codex` command on the machine
+- Git credentials that can push back to your PR branches
+- local checkouts of the repositories you want BigBrother to manage, discoverable from `workspace.root`
+- optional Feishu credentials if you want notifications
+
+The recommended path is still to let an agent do the first setup pass:
+
+1. Open this prompt:
 
 [`docs/bigbrother_agent_setup_prompt.md`](/Users/Connor/Coding/bigbrother/docs/bigbrother_agent_setup_prompt.md)
 
-If you hand that prompt to Codex, it will inspect the machine, patch `bigbrother.toml`, avoid unresolved placeholders, wire Feishu when credentials are available, launch the daemon, and verify that the dashboard responds.
+2. Hand it to Codex.
+3. Codex will inspect the machine, patch `bigbrother.toml`, avoid unresolved placeholders, wire Feishu when credentials are available, launch the daemon, and verify that the dashboard responds.
 
 That is the current best approximation of agent-assisted setup. There is not yet a built-in `doctor`, `init`, or `setup --agent` command, so the smoothest first-run path today is to let the agent help you bootstrap the environment.
 
-If you still want to set it up manually, the flow is straightforward:
+If you still want to set it up manually, follow these steps:
 
-1. Make sure the machine already has Rust, `git`, a GitHub token in `GITHUB_TOKEN` or `GH_TOKEN`, a working `codex` command, and Git credentials that can push back to your PR branches.
-2. Copy the config template.
+1. Copy the config template.
 
 ```bash
 cp bigbrother.example.toml bigbrother.toml
 ```
 
-3. Export the GitHub credentials BigBrother should use.
+2. Export the GitHub credentials BigBrother should use.
 
 ```bash
 export GITHUB_TOKEN=...
@@ -234,22 +252,22 @@ export GITHUB_USER=...
 
 If you keep `author = "$GITHUB_USER"` in the config, `GITHUB_USER` needs to be set to your GitHub login. If you do not want that extra environment variable, replace the `author` field with your real login or remove it entirely and let BigBrother resolve the viewer login at runtime.
 
-4. Open `bigbrother.toml` and confirm the important settings:
+3. Open `bigbrother.toml` and confirm the important settings:
 
 - confirm `workspace.root`
 - add `workspace.repo_map` only for repositories that are not located at `<workspace.root>/<repo-name>`
 - keep `command = "codex"` unless your machine clearly uses another agent command
 - leave `dangerously_bypass_approvals_and_sandbox` off unless you explicitly want unsandboxed local access on this host
 
-5. If you want Feishu notifications, fill in `notifications.feishu`.
+4. If you want Feishu notifications, fill in `notifications.feishu`.
 
-6. Build and start the daemon.
+5. Build and start the daemon.
 
 ```bash
 cargo build --release
 target/release/bigbrother --config bigbrother.toml
 ```
 
-7. Open [http://127.0.0.1:8787/](http://127.0.0.1:8787/).
+6. Open [http://127.0.0.1:8787/](http://127.0.0.1:8787/).
 
 If your repositories already live under `~/Coding`, putting `bigbrother` next to them is usually the smoothest layout, because the default `workspace.root = ".."` can then discover many sibling repositories automatically. If your layout is different, set `workspace.root` to an absolute path such as `/Users/alice/Coding`. The current config loader does not expand `~` or `$HOME/Coding`.
