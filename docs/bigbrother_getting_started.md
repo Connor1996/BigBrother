@@ -83,11 +83,11 @@ BigBrother 以一个本地 daemon + web dashboard 的形态常驻运行。它会
 第一次上手之前，先确认这些前置要求已经满足：
 
 - 机器上已经有可用的 Rust toolchain 和 `git`
-- 已经准备好 `GITHUB_TOKEN` 或 `GH_TOKEN`
+- 已经安装并登录 `gh`
 - 本机能直接调用 `codex` 命令
 - Git 凭据可以 push 回你自己的 PR branch
 - 你想让 BigBrother 管理的仓库已经在本地，默认放在 `workspace.root` 下能被发现
-- 如果你想接飞书通知，再额外准备好对应凭据
+- 如果你想接飞书通知，可选安装并登录 `lark-cli`
 
 推荐路径还是先让 agent 帮你做第一轮 setup：
 
@@ -96,7 +96,7 @@ BigBrother 以一个本地 daemon + web dashboard 的形态常驻运行。它会
 [`docs/bigbrother_agent_setup_prompt.md`](/Users/Connor/Coding/bigbrother/docs/bigbrother_agent_setup_prompt.md)
 
 2. 把它交给 Codex。
-3. Codex 会去检查本机环境、修 `bigbrother.toml`、避免保留没展开的占位符、在有凭据时接上飞书、启动 daemon，并确认 dashboard 能否正常响应。
+3. Codex 会去检查本机环境、确认 `gh` 和 `codex` 是否可用、修 `bigbrother.toml`、避免保留没展开的占位符、在你选择启用并且本机已登录 `lark-cli` 时接上飞书、启动 daemon，并确认 dashboard 能否正常响应。
 
 这就是当前版本最接近 “agent-assisted setup” 的方式。现在还没有真正内建的 `doctor`、`init` 或 `setup --agent` 命令，所以最顺的首次上手方式就是先让 agent 帮你把第一轮 setup 走完。
 
@@ -108,14 +108,14 @@ BigBrother 以一个本地 daemon + web dashboard 的形态常驻运行。它会
 cp bigbrother.example.toml bigbrother.toml
 ```
 
-2. 导出 GitHub 凭据。
+2. 通过 `gh` 导出 GitHub 凭据。
 
 ```bash
-export GITHUB_TOKEN=...
-export GITHUB_USER=...
+export GITHUB_TOKEN="$(gh auth token)"
+export GITHUB_USER="$(gh api user -q .login)"
 ```
 
-如果你保留了 `author = "$GITHUB_USER"`，那 `GITHUB_USER` 需要是你的 GitHub login。要是不想额外带这个环境变量，也可以直接把 `author` 改成真实用户名，或者删掉，让 BigBrother 在运行时自己去 GitHub 查当前 viewer。
+如果你已经自己管理好了 `GITHUB_TOKEN` 或 `GH_TOKEN`，也可以继续沿用现有环境变量；这里只是把 `gh` 作为第一次 setup 最顺手的默认路径。如果你保留了 `author = "$GITHUB_USER"`，那 `GITHUB_USER` 需要是你的 GitHub login。要是不想额外带这个环境变量，也可以直接把 `author` 改成真实用户名，或者删掉，让 BigBrother 在运行时自己去 GitHub 查当前 viewer。
 
 3. 打开 `bigbrother.toml`，确认这些关键项：
 
@@ -124,7 +124,7 @@ export GITHUB_USER=...
 - 除非你的机器明确用的是别的 agent，否则保留 `command = "codex"`
 - 除非你明确要让 Codex 在本机无沙箱全权限运行，否则先不要打开 `dangerously_bypass_approvals_and_sandbox`
 
-4. 如果你需要飞书通知，再补 `notifications.feishu`。
+4. 如果你需要飞书通知，可选安装并登录 `lark-cli`，再补 `notifications.feishu`。
 
 5. 编译并启动 daemon。
 
@@ -218,11 +218,11 @@ This screenshot supports the idea that BigBrother is useful not only for authore
 Before the first run, make sure these prerequisites are already in place:
 
 - a working Rust toolchain and `git`
-- a GitHub token in `GITHUB_TOKEN` or `GH_TOKEN`
+- `gh` is installed and already authenticated
 - a working `codex` command on the machine
 - Git credentials that can push back to your PR branches
 - local checkouts of the repositories you want BigBrother to manage, discoverable from `workspace.root`
-- optional Feishu credentials if you want notifications
+- optional `lark-cli` installation and login if you want Feishu notifications
 
 The recommended path is still to let an agent do the first setup pass:
 
@@ -231,7 +231,7 @@ The recommended path is still to let an agent do the first setup pass:
 [`docs/bigbrother_agent_setup_prompt.md`](/Users/Connor/Coding/bigbrother/docs/bigbrother_agent_setup_prompt.md)
 
 2. Hand it to Codex.
-3. Codex will inspect the machine, patch `bigbrother.toml`, avoid unresolved placeholders, wire Feishu when credentials are available, launch the daemon, and verify that the dashboard responds.
+3. Codex will inspect the machine, confirm that `gh` and `codex` are available, patch `bigbrother.toml`, avoid unresolved placeholders, wire Feishu only if you want it and `lark-cli` is already logged in, launch the daemon, and verify that the dashboard responds.
 
 That is the current best approximation of agent-assisted setup. There is not yet a built-in `doctor`, `init`, or `setup --agent` command, so the smoothest first-run path today is to let the agent help you bootstrap the environment.
 
@@ -243,14 +243,14 @@ If you still want to set it up manually, follow these steps:
 cp bigbrother.example.toml bigbrother.toml
 ```
 
-2. Export the GitHub credentials BigBrother should use.
+2. Export the GitHub credentials through `gh`.
 
 ```bash
-export GITHUB_TOKEN=...
-export GITHUB_USER=...
+export GITHUB_TOKEN="$(gh auth token)"
+export GITHUB_USER="$(gh api user -q .login)"
 ```
 
-If you keep `author = "$GITHUB_USER"` in the config, `GITHUB_USER` needs to be set to your GitHub login. If you do not want that extra environment variable, replace the `author` field with your real login or remove it entirely and let BigBrother resolve the viewer login at runtime.
+If you already manage `GITHUB_TOKEN` or `GH_TOKEN` yourself, you can keep using that existing environment variable setup; `gh` is just the easiest default path for first-time setup. If you keep `author = "$GITHUB_USER"` in the config, `GITHUB_USER` needs to be set to your GitHub login. If you do not want that extra environment variable, replace the `author` field with your real login or remove it entirely and let BigBrother resolve the viewer login at runtime.
 
 3. Open `bigbrother.toml` and confirm the important settings:
 
@@ -259,7 +259,7 @@ If you keep `author = "$GITHUB_USER"` in the config, `GITHUB_USER` needs to be s
 - keep `command = "codex"` unless your machine clearly uses another agent command
 - leave `dangerously_bypass_approvals_and_sandbox` off unless you explicitly want unsandboxed local access on this host
 
-4. If you want Feishu notifications, fill in `notifications.feishu`.
+4. If you want Feishu notifications, optionally install and log into `lark-cli`, then fill in `notifications.feishu`.
 
 5. Build and start the daemon.
 
