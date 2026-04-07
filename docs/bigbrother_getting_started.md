@@ -49,7 +49,20 @@ cp bigbrother.example.toml bigbrother.toml
 - `workspace.root` 你想让 BigBrother 管理的仓库已经在本地，默认放在 `workspace.root` 下能被发现
 - `<workspace.root>/<repo-name>` 找不到仓库时，才加 `workspace.repo_map`
 
-3. 如果你需要飞书通知，安装并登录 `lark-cli`，再补 `notifications.feishu`；将 `receive_id` 设为你的飞书绑定邮箱。如果沿用模板里的 `"$FEISHU_NOTIFY_EMAIL"`，就把环境变量 `FEISHU_NOTIFY_EMAIL` 设成对应邮箱。
+3. 如果你需要飞书通知，先把本地 `lark-cli` 配好：
+
+```bash
+npm install -g @larksuite/cli
+lark-cli config init
+lark-cli auth login --recommend
+lark-cli auth status
+```
+
+BigBrother 的 `lark_cli_bot` 通道会通过本地 `lark-cli` 发消息，其中 `config init` 是必需的。然后把 `notifications.feishu.receive_id` 设为你的飞书绑定邮箱；如果沿用模板里的 `"$FEISHU_NOTIFY_EMAIL"`，就设置：
+
+```bash
+export FEISHU_NOTIFY_EMAIL="you@example.com"
+```
 
 4. 启动：
 
