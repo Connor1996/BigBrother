@@ -913,7 +913,14 @@ fn build_agent_command_argv(agent: &AgentConfig, prompt: Option<&str>) -> Vec<St
 }
 
 fn detect_agent_runtime(agent: &AgentConfig) -> AgentRuntime {
-    agent.runtime
+    let file_name = Path::new(&agent.command)
+        .file_name()
+        .and_then(|value| value.to_str());
+    match file_name {
+        Some("codex") => AgentRuntime::Codex,
+        Some("claude") => AgentRuntime::Claude,
+        _ => AgentRuntime::Custom,
+    }
 }
 
 fn should_inject_codex_color(runtime: AgentRuntime, args: &[String]) -> bool {
@@ -1379,7 +1386,6 @@ mod tests {
     #[test]
     fn build_agent_command_argv_uses_explicit_codex_args() {
         let agent = AgentConfig {
-            runtime: AgentRuntime::Codex,
             command: "codex".to_owned(),
             args: vec![
                 "--dangerously-bypass-approvals-and-sandbox".to_owned(),
@@ -1413,7 +1419,6 @@ mod tests {
     #[test]
     fn build_agent_command_argv_skips_codex_only_reasoning_override_for_other_agents() {
         let agent = AgentConfig {
-            runtime: AgentRuntime::Custom,
             command: "other-agent".to_owned(),
             args: vec!["run".to_owned()],
             additional_instructions: None,
@@ -1429,7 +1434,6 @@ mod tests {
     #[test]
     fn build_agent_command_argv_uses_claude_print_mode_prompt_and_permission_flag() {
         let agent = AgentConfig {
-            runtime: AgentRuntime::Claude,
             command: "claude".to_owned(),
             args: vec![
                 "--dangerously-skip-permissions".to_owned(),
@@ -1457,14 +1461,12 @@ mod tests {
     #[test]
     fn should_pass_prompt_as_argument_for_claude_only_in_print_mode() {
         let print_agent = AgentConfig {
-            runtime: AgentRuntime::Claude,
             command: "claude".to_owned(),
             args: vec!["-p".to_owned()],
             additional_instructions: None,
             prompts: AgentPromptTemplates::default(),
         };
         let interactive_agent = AgentConfig {
-            runtime: AgentRuntime::Claude,
             command: "claude".to_owned(),
             args: vec!["--model".to_owned(), "sonnet".to_owned()],
             additional_instructions: None,
@@ -1478,7 +1480,6 @@ mod tests {
     #[test]
     fn build_agent_command_argv_preserves_existing_codex_color_flag() {
         let agent = AgentConfig {
-            runtime: AgentRuntime::Codex,
             command: "codex".to_owned(),
             args: vec![
                 "-c".to_owned(),

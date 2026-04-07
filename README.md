@@ -54,19 +54,18 @@ The UI shows the authored PR list, a `Review Requests` tab for PRs that currentl
 - `git`
 - a GitHub token in `GITHUB_TOKEN` or `GH_TOKEN`
 - an agent command available on your machine
-  - choose the built-in backend with `[agent] runtime = "codex"` or `runtime = "claude"`
-  - the default runtime is `codex`
+  - set `[agent] command = "codex"` or `command = "claude"`
+  - the default command is `codex`
   - put backend-specific flags directly in `[agent].args`
   - the shipped example config defaults Codex to
     `--dangerously-bypass-approvals-and-sandbox -c model_reasoning_effort="xhigh" ...`
   - for Claude Code, configure print mode such as
-    `runtime = "claude"` plus `args = ["-p", "--output-format", "text"]`
+    `command = "claude"` plus `args = ["-p", "--output-format", "text"]`
   - if you want full local access, add the backend's own flag directly to `args`, such as
     `--dangerously-bypass-approvals-and-sandbox` for Codex or
     `--dangerously-skip-permissions` for Claude Code
-  - you can still override `command` and `args` manually when you need a wrapper script or a
-    custom backend; if `runtime` is omitted, BigBrother infers it from `command` and otherwise
-    falls back to `codex`
+  - you can still point `command` at a wrapper script or another executable; BigBrother only uses
+    the basename to infer Codex vs Claude-specific behavior
 - existing local checkouts for the repositories you want BigBrother to operate on
   - by default it looks under `workspace.root` for a directory named after the repo, such as `../tikv` for `tikv/tikv`
   - if auto-discovery is not enough, you can provide `workspace.repo_map` entries in the config
@@ -197,14 +196,14 @@ When BigBrother detects a PR that needs attention, it:
 7. for `codex exec` and `claude -p`, passes that prompt as the initial prompt argument instead of stdin so the PTY session can preserve richer terminal-style output; other agent commands still read prompt text from stdin
 8. updates the UI and persisted state with the result
 
-When `[agent].runtime = "codex"` (or when BigBrother infers a Codex-style command), Codex-specific
+When `[agent].command` resolves to `codex`, Codex-specific
 flags should live directly in `args`, including any explicit reasoning-effort override such as
 `-c model_reasoning_effort="xhigh"`. The runner still forces `--color always` when you have not
 already specified a color override, and it passes the prompt as the initial `codex exec` prompt
 argument so the PTY session looks closer to a native terminal run.
 
-When `[agent].runtime = "claude"` (or when BigBrother infers Claude Code from the configured
-command), BigBrother treats Claude Code print mode as the supported non-interactive path. If your
+When `[agent].command` resolves to `claude`, BigBrother treats Claude Code print mode as the
+supported non-interactive path. If your
 args include `-p` or `--print`, the runner appends the assembled prompt as that print-mode
 argument instead of piping it through stdin. Any full-access or other Claude-specific behavior
 should be expressed directly in `args`, for example `--dangerously-skip-permissions`.

@@ -25,15 +25,14 @@ root = ".."
 git_transport = "ssh"
 
 [agent]
-# Agent backend. Supported built-ins are `codex` and `claude`. Defaults to `codex`.
-runtime = "codex"
-# Executable used to run the coding agent. Omit this to use the runtime default.
-# command = "codex"
+# Executable used to run the coding agent. BigBrother infers Codex vs Claude behavior from this
+# command name. The default is `codex`.
+command = "codex"
 # Arguments passed to the agent command. Put backend-specific flags directly here.
 # This example defaults Codex to full local access on a trusted development machine.
 args = ["--dangerously-bypass-approvals-and-sandbox", "-c", "model_reasoning_effort=\"xhigh\"", "exec", "--model", "gpt-5.4", "-"]
 # For Claude Code print mode instead, switch to:
-# runtime = "claude"
+# command = "claude"
 # args = ["--dangerously-skip-permissions", "-p", "--output-format", "text"]
 # Extra operator guidance appended to every generated prompt.
 additional_instructions = """

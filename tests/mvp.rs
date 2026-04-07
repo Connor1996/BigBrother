@@ -2247,7 +2247,6 @@ fn sample_config(state_path: PathBuf, workspace_root: PathBuf) -> ResolvedConfig
             git_transport: bigbrother::config::GitTransport::Https,
         },
         agent: AgentConfig {
-            runtime: bigbrother::config::AgentRuntime::Custom,
             command: "fake-agent".to_owned(),
             args: vec![],
             additional_instructions: None,

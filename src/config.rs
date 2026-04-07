@@ -67,7 +67,7 @@ pub enum GitTransport {
 #[derive(Debug, Clone, Deserialize)]
 pub struct RawAgentConfig {
     #[serde(default)]
-    pub runtime: Option<AgentRuntime>,
+    pub runtime: Option<String>,
     #[serde(default)]
     pub command: Option<String>,
     #[serde(default)]
@@ -78,16 +78,14 @@ pub struct RawAgentConfig {
 
 #[derive(Debug, Clone)]
 pub struct AgentConfig {
-    pub runtime: AgentRuntime,
     pub command: String,
     pub args: Vec<String>,
     pub additional_instructions: Option<String>,
     pub prompts: AgentPromptTemplates,
 }
 
-#[derive(Debug, Clone, Copy, Default, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "snake_case")]
-pub enum AgentRuntime {
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub(crate) enum AgentRuntime {
     #[default]
     Codex,
     Claude,
@@ -287,7 +285,6 @@ impl Default for RawAgentConfig {
 impl Default for AgentConfig {
     fn default() -> Self {
         Self {
-            runtime: AgentRuntime::default(),
             command: default_agent_command(AgentRuntime::default()),
             args: default_agent_args(AgentRuntime::default()),
             additional_instructions: None,
@@ -483,20 +480,17 @@ fn default_feishu_notification_label() -> String {
 }
 
 fn resolve_agent_config(raw: RawAgentConfig) -> Result<AgentConfig> {
-    let raw_command = raw.command;
-    let runtime = raw
-        .runtime
-        .or_else(|| infer_agent_runtime(raw_command.as_deref()))
-        .unwrap_or(AgentRuntime::Codex);
-    if matches!(runtime, AgentRuntime::Custom) && raw_command.is_none() {
+    if raw.runtime.is_some() {
         return Err(anyhow!(
-            "agent.runtime = \"custom\" requires an explicit agent.command"
+            "agent.runtime is no longer supported; use agent.command instead"
         ));
     }
+    let raw_command = raw.command;
     let command = resolve_literal(
         raw_command.unwrap_or_default(),
-        Some(default_agent_command(runtime)),
+        Some(default_agent_command(AgentRuntime::Codex)),
     );
+    let runtime = infer_agent_runtime(Some(command.as_str())).unwrap_or(AgentRuntime::Codex);
     let args = raw
         .args
         .unwrap_or_else(|| default_agent_args(runtime))
@@ -505,7 +499,6 @@ fn resolve_agent_config(raw: RawAgentConfig) -> Result<AgentConfig> {
         .collect();
 
     Ok(AgentConfig {
-        runtime,
         command,
         args,
         additional_instructions: raw
@@ -707,41 +700,6 @@ dangerously_bypass_approvals_and_sandbox = true
 
         let resolved = AppConfig::load(&config_path).expect("config should load");
 
-        assert_eq!(resolved.agent.runtime, AgentRuntime::Codex);
-        assert_eq!(
-            resolved.agent.args,
-            vec![
-                "-c".to_owned(),
-                "model_reasoning_effort=\"xhigh\"".to_owned(),
-                "exec".to_owned(),
-                "--model".to_owned(),
-                "gpt-5.3-codex".to_owned(),
-                "-".to_owned(),
-            ]
-        );
-    }
-
-    #[test]
-    fn load_defaults_agent_runtime_to_codex() {
-        let unique = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .expect("time")
-            .as_nanos();
-        let dir = std::env::temp_dir().join(format!("bigbrother-config-{unique}"));
-        std::fs::create_dir_all(&dir).expect("temp config dir should create");
-        let config_path = dir.join("bigbrother.toml");
-        std::fs::write(
-            &config_path,
-            r#"
-[github]
-api_token = "token"
-"#,
-        )
-        .expect("config fixture should write");
-
-        let resolved = AppConfig::load(&config_path).expect("config should load");
-
-        assert_eq!(resolved.agent.runtime, AgentRuntime::Codex);
         assert_eq!(resolved.agent.command, "codex");
         assert_eq!(
             resolved.agent.args,
@@ -757,7 +715,7 @@ api_token = "token"
     }
 
     #[test]
-    fn load_uses_claude_runtime_defaults_when_requested() {
+    fn load_defaults_agent_command_to_codex() {
         let unique = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .expect("time")
@@ -770,29 +728,28 @@ api_token = "token"
             r#"
 [github]
 api_token = "token"
-
-[agent]
-runtime = "claude"
 "#,
         )
         .expect("config fixture should write");
 
         let resolved = AppConfig::load(&config_path).expect("config should load");
 
-        assert_eq!(resolved.agent.runtime, AgentRuntime::Claude);
-        assert_eq!(resolved.agent.command, "claude");
+        assert_eq!(resolved.agent.command, "codex");
         assert_eq!(
             resolved.agent.args,
             vec![
-                "-p".to_owned(),
-                "--output-format".to_owned(),
-                "text".to_owned()
+                "-c".to_owned(),
+                "model_reasoning_effort=\"xhigh\"".to_owned(),
+                "exec".to_owned(),
+                "--model".to_owned(),
+                "gpt-5.3-codex".to_owned(),
+                "-".to_owned(),
             ]
         );
     }
 
     #[test]
-    fn load_infers_runtime_from_legacy_command_override() {
+    fn load_uses_claude_defaults_when_command_requests_it() {
         let unique = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .expect("time")
@@ -814,7 +771,6 @@ command = "claude"
 
         let resolved = AppConfig::load(&config_path).expect("config should load");
 
-        assert_eq!(resolved.agent.runtime, AgentRuntime::Claude);
         assert_eq!(resolved.agent.command, "claude");
         assert_eq!(
             resolved.agent.args,
@@ -827,7 +783,41 @@ command = "claude"
     }
 
     #[test]
-    fn load_rejects_custom_runtime_without_command() {
+    fn load_uses_claude_defaults_when_command_uses_absolute_path() {
+        let unique = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("time")
+            .as_nanos();
+        let dir = std::env::temp_dir().join(format!("bigbrother-config-{unique}"));
+        std::fs::create_dir_all(&dir).expect("temp config dir should create");
+        let config_path = dir.join("bigbrother.toml");
+        std::fs::write(
+            &config_path,
+            r#"
+[github]
+api_token = "token"
+
+[agent]
+command = "/usr/local/bin/claude"
+"#,
+        )
+        .expect("config fixture should write");
+
+        let resolved = AppConfig::load(&config_path).expect("config should load");
+
+        assert_eq!(resolved.agent.command, "/usr/local/bin/claude");
+        assert_eq!(
+            resolved.agent.args,
+            vec![
+                "-p".to_owned(),
+                "--output-format".to_owned(),
+                "text".to_owned()
+            ]
+        );
+    }
+
+    #[test]
+    fn load_rejects_legacy_runtime_field() {
         let unique = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .expect("time")
@@ -851,7 +841,7 @@ runtime = "custom"
 
         assert!(error
             .to_string()
-            .contains("agent.runtime = \"custom\" requires an explicit agent.command"));
+            .contains("agent.runtime is no longer supported; use agent.command instead"));
     }
 
     #[test]
