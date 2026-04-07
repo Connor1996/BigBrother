@@ -442,7 +442,7 @@ Rules:
 - if a later run sees the same PR head SHA, the same base SHA in `MERGE_HEAD`, and unresolved
   paths already present in the working tree, it should resume from that conflict workspace instead
   of rejecting it as a generic dirty checkout
-- a different PR for the same repository may preempt that single managed worktree and rebuild it from the source repository when needed
+- a different PR for the same repository may preempt that single managed worktree only after the current run for that repository has finished; the daemon must not run two same-repository tasks concurrently against one shared managed worktree
 - the daemon must not create a brand-new clone per PR as part of the normal execution path; it should derive managed worktrees from the discovered source repository instead
 - the daemon may rebuild or hard-reset its managed worktree, but it must not rewrite the discovered source repository checkout
 

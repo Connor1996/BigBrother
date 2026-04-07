@@ -192,7 +192,7 @@ When BigBrother detects a PR that needs attention, it:
 1. resolves an existing local source repository for the PR via `workspace.repo_map` or `<workspace.root>/<repo-name>`
 2. creates or reuses a centralized BigBrother-managed worktree for that repo under `<workspace.root>/bigbrother-worktrees/<repo-name>-bigbrother`
 3. syncs the PR head and latest base refs into that managed worktree and checks out the PR head in detached-HEAD mode
-4. if the same PR later retries with the same unresolved merge state, it resumes from that managed worktree; if a different PR for the same repo needs the worktree first, BigBrother can rebuild it and take over
+4. if the same PR later retries with the same unresolved merge state, it resumes from that managed worktree; a different PR from the same repo must wait until the active run finishes before BigBrother rebuilds that worktree and takes it over
 5. asks the agent to merge the latest base branch, resolve conflicts if needed, and then continue with the CI or review fix
 6. builds an execution prompt from the PR context and trigger reason
 7. for `codex exec` and `claude -p`, passes that prompt as the initial prompt argument instead of stdin so the PTY session can preserve richer terminal-style output; other agent commands still read prompt text from stdin

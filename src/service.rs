@@ -239,6 +239,7 @@ fn push_metric_part(parts: &mut Vec<String>, label: &str, count: usize) {
 struct ActiveRun {
     started_at: DateTime<Utc>,
     trigger: AttentionReason,
+    repo_full_name: String,
 }
 
 #[derive(Debug, Clone)]
@@ -493,6 +494,16 @@ impl Supervisor {
             if inner.active_runs.contains_key(pr_key) {
                 return Err(anyhow::anyhow!("a run is already active for {pr_key}"));
             }
+            if let Some(active_pr_key) = active_run_key_for_repo(
+                &inner.active_runs,
+                &pull_request.repo_full_name,
+                Some(pr_key),
+            ) {
+                return Err(anyhow::anyhow!(
+                    "repo {} already has an active run for {active_pr_key}",
+                    pull_request.repo_full_name
+                ));
+            }
             if inner.active_runs.len() >= self.config.daemon.max_concurrent_runs {
                 return Err(anyhow::anyhow!(
                     "no runner slots are available for deep review ({}/{})",
@@ -506,6 +517,7 @@ impl Supervisor {
                 ActiveRun {
                     started_at,
                     trigger: AttentionReason::DeepReview,
+                    repo_full_name: pull_request.repo_full_name.clone(),
                 },
             );
 
@@ -881,6 +893,7 @@ impl Supervisor {
                     ActiveRun {
                         started_at,
                         trigger,
+                        repo_full_name: pr.repo_full_name.clone(),
                     },
                 );
                 refresh_dashboard(
@@ -1131,6 +1144,9 @@ fn selectable_run_request<'a>(
     if active_runs.contains_key(&pr.key) {
         return None;
     }
+    if active_run_key_for_repo(active_runs, &pr.repo_full_name, Some(&pr.key)).is_some() {
+        return None;
+    }
 
     let persisted = persisted_state
         .prs
@@ -1147,6 +1163,20 @@ fn selectable_run_request<'a>(
     }
 
     attention_reason.map(|reason| (pr, reason))
+}
+
+fn active_run_key_for_repo<'a>(
+    active_runs: &'a HashMap<String, ActiveRun>,
+    repo_full_name: &str,
+    exclude_pr_key: Option<&str>,
+) -> Option<&'a str> {
+    active_runs.iter().find_map(|(pr_key, run)| {
+        if run.repo_full_name == repo_full_name && exclude_pr_key != Some(pr_key.as_str()) {
+            Some(pr_key.as_str())
+        } else {
+            None
+        }
+    })
 }
 
 fn refresh_dashboard(
@@ -2281,6 +2311,44 @@ mod tests {
     }
 
     #[test]
+    fn prs_with_an_active_run_in_the_same_repo_are_not_selected() {
+        let mut first = sample_pr();
+        first.key = "openai/bigbrother#1".to_owned();
+        first.number = 1;
+        first.ci_status = CiStatus::Failure;
+        first.ci_updated_at = Some(Utc.with_ymd_and_hms(2026, 3, 30, 18, 5, 0).unwrap());
+
+        let mut second = sample_pr();
+        second.key = "openai/bigbrother#2".to_owned();
+        second.number = 2;
+        second.ci_status = CiStatus::Failure;
+        second.ci_updated_at = Some(Utc.with_ymd_and_hms(2026, 3, 30, 18, 6, 0).unwrap());
+
+        let active_runs = HashMap::from([(
+            first.key.clone(),
+            ActiveRun {
+                started_at: Utc.with_ymd_and_hms(2026, 3, 30, 18, 7, 0).unwrap(),
+                trigger: AttentionReason::CiFailed,
+                repo_full_name: first.repo_full_name.clone(),
+            },
+        )]);
+
+        assert!(
+            select_run_request(
+                &sample_config(),
+                &[first, second],
+                &PersistentStateFile::default(),
+                &active_runs,
+                None,
+                true,
+                false,
+            )
+            .is_none(),
+            "a repo-level managed worktree should block other PRs from the same repo while a run is active",
+        );
+    }
+
+    #[test]
     fn failed_prs_are_not_selected_for_scheduled_retries() {
         let mut pr = sample_pr();
         pr.ci_status = CiStatus::Failure;
@@ -2612,6 +2680,79 @@ mod tests {
             tracked.persisted.needs_decision_reason.as_deref(),
             Some("requires product decision on API shape")
         );
+    }
+
+    #[tokio::test]
+    async fn manual_deep_review_is_rejected_when_the_repo_already_has_an_active_run() {
+        let mut config = sample_config();
+        config.daemon.max_concurrent_runs = 2;
+
+        let mut pr = sample_pr();
+        pr.key = "openai/bigbrother#42".to_owned();
+        pr.number = 42;
+
+        let supervisor = Arc::new(
+            Supervisor::new_with_notifier(
+                config,
+                Arc::new(StaticGitHubProvider {
+                    prs: vec![pr.clone()],
+                }),
+                Arc::new(StaticRunner {
+                    outcome: RunOutcome {
+                        started_at: Utc::now(),
+                        finished_at: Utc::now(),
+                        success: true,
+                        exit_code: Some(0),
+                        summary: "unused".to_owned(),
+                        needs_decision_reason: None,
+                        captured_output: None,
+                        captured_terminal: None,
+                        last_terminal_output_at: None,
+                        processed_comment_at: None,
+                        processed_ci_at: None,
+                        processed_head_sha: pr.head_sha.clone(),
+                    },
+                }),
+                Box::new(RecordingNotificationSink::default()),
+            )
+            .expect("supervisor should construct"),
+        );
+
+        {
+            let mut state = supervisor
+                .shared_state
+                .lock()
+                .expect("dashboard state mutex should not be poisoned");
+            state.review_requests.insert(
+                pr.key.clone(),
+                ReviewRequestPr {
+                    pull_request: pr.clone(),
+                    persisted: PersistentPrState::default(),
+                    runner: None,
+                },
+            );
+        }
+
+        {
+            let mut inner = supervisor.inner.lock().await;
+            inner.active_runs.insert(
+                "openai/bigbrother#7".to_owned(),
+                ActiveRun {
+                    started_at: Utc::now(),
+                    trigger: AttentionReason::CiFailed,
+                    repo_full_name: pr.repo_full_name.clone(),
+                },
+            );
+        }
+
+        let error = supervisor
+            .trigger_deep_review(&pr.key)
+            .await
+            .expect_err("deep review should not start while the repo worktree is already in use");
+
+        assert!(error
+            .to_string()
+            .contains("repo openai/bigbrother already has an active run"));
     }
 
     #[tokio::test]
