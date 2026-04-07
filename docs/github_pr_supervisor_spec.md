@@ -471,23 +471,17 @@ Each run includes:
 Agent runtime defaults:
 
 - when `[agent].runtime = "codex"` or the configured command is inferred to be Codex-like, the
-  daemon must explicitly pass a
-  `-c model_reasoning_effort="..."` override instead of relying on ambient host config
+  default Codex args should already contain any desired
+  `-c model_reasoning_effort="..."` override instead of relying on a separate structured config
 - `codex exec` runs should force `--color always` and preserve PTY-style output so the detail view can replay ANSI-colored terminal recordings
 - for `codex exec`, the daemon should pass the assembled prompt as the initial prompt argument instead of piping it through stdin whenever possible, so the PTY session remains closer to a native terminal run
-- the default BigBrother reasoning effort for `codex exec` is `xhigh`
-- operators may override that reasoning effort through the structured `[agent]` config rather than
-  burying it in free-form `args`
+- the default BigBrother Codex args should include an explicit `xhigh` reasoning override
 - when `[agent].runtime = "claude"` or the configured command is inferred to be Claude Code, the
   supported non-interactive path is Claude Code print mode (`-p` / `--print`)
 - for `claude -p`, the daemon should pass the assembled prompt as the print-mode argument instead
   of piping it through stdin
-- the structured `dangerously_bypass_approvals_and_sandbox` setting should map to the
-  backend-specific full-access flag: Codex uses
-  `--dangerously-bypass-approvals-and-sandbox`, while Claude Code uses
-  `--dangerously-skip-permissions`
-- the structured `model_reasoning_effort` setting is currently Codex-specific; the daemon should
-  ignore it rather than inventing an unsupported Claude Code mapping
+- backend-specific flags such as Codex full-access or Claude full-access should be configured
+  directly in `[agent].args` rather than separate structured config fields
 
 The agent prompt must include:
 

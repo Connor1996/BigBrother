@@ -890,18 +890,6 @@ fn build_pty_command(
 fn build_agent_command_argv(agent: &AgentConfig, prompt: Option<&str>) -> Vec<String> {
     let runtime = detect_agent_runtime(agent);
     let mut argv = vec![agent.command.clone()];
-    if let Some(flag) = dangerous_permission_flag(runtime) {
-        if agent.dangerously_bypass_approvals_and_sandbox {
-            argv.push(flag.to_owned());
-        }
-    }
-    if should_inject_codex_reasoning_effort(runtime) {
-        argv.push("-c".to_owned());
-        argv.push(format!(
-            "model_reasoning_effort={:?}",
-            agent.model_reasoning_effort
-        ));
-    }
     let mut agent_args = agent.args.clone();
     if should_inject_codex_color(runtime, &agent_args) {
         let insert_at = agent_args
@@ -928,20 +916,8 @@ fn detect_agent_runtime(agent: &AgentConfig) -> AgentRuntime {
     agent.runtime
 }
 
-fn dangerous_permission_flag(runtime: AgentRuntime) -> Option<&'static str> {
-    match runtime {
-        AgentRuntime::Codex => Some("--dangerously-bypass-approvals-and-sandbox"),
-        AgentRuntime::Claude => Some("--dangerously-skip-permissions"),
-        AgentRuntime::Custom => None,
-    }
-}
-
-fn should_inject_codex_reasoning_effort(runtime: AgentRuntime) -> bool {
-    runtime == AgentRuntime::Codex
-}
-
 fn should_inject_codex_color(runtime: AgentRuntime, args: &[String]) -> bool {
-    should_inject_codex_reasoning_effort(runtime)
+    runtime == AgentRuntime::Codex
         && !args.windows(2).any(|window| {
             window[0] == "--color" || window[0] == "-c" && window[1].starts_with("color=")
         })
@@ -1401,17 +1377,18 @@ mod tests {
     }
 
     #[test]
-    fn build_agent_command_argv_injects_xhigh_reasoning_for_codex_exec() {
+    fn build_agent_command_argv_uses_explicit_codex_args() {
         let agent = AgentConfig {
             runtime: AgentRuntime::Codex,
             command: "codex".to_owned(),
             args: vec![
+                "--dangerously-bypass-approvals-and-sandbox".to_owned(),
+                "-c".to_owned(),
+                "model_reasoning_effort=\"xhigh\"".to_owned(),
                 "exec".to_owned(),
                 "--model".to_owned(),
                 "gpt-5.4".to_owned(),
             ],
-            model_reasoning_effort: "xhigh".to_owned(),
-            dangerously_bypass_approvals_and_sandbox: true,
             additional_instructions: None,
             prompts: AgentPromptTemplates::default(),
         };
@@ -1439,8 +1416,6 @@ mod tests {
             runtime: AgentRuntime::Custom,
             command: "other-agent".to_owned(),
             args: vec!["run".to_owned()],
-            model_reasoning_effort: "xhigh".to_owned(),
-            dangerously_bypass_approvals_and_sandbox: false,
             additional_instructions: None,
             prompts: AgentPromptTemplates::default(),
         };
@@ -1457,12 +1432,11 @@ mod tests {
             runtime: AgentRuntime::Claude,
             command: "claude".to_owned(),
             args: vec![
+                "--dangerously-skip-permissions".to_owned(),
                 "-p".to_owned(),
                 "--output-format".to_owned(),
                 "text".to_owned(),
             ],
-            model_reasoning_effort: "xhigh".to_owned(),
-            dangerously_bypass_approvals_and_sandbox: true,
             additional_instructions: None,
             prompts: AgentPromptTemplates::default(),
         };
@@ -1486,8 +1460,6 @@ mod tests {
             runtime: AgentRuntime::Claude,
             command: "claude".to_owned(),
             args: vec!["-p".to_owned()],
-            model_reasoning_effort: "xhigh".to_owned(),
-            dangerously_bypass_approvals_and_sandbox: false,
             additional_instructions: None,
             prompts: AgentPromptTemplates::default(),
         };
@@ -1495,8 +1467,6 @@ mod tests {
             runtime: AgentRuntime::Claude,
             command: "claude".to_owned(),
             args: vec!["--model".to_owned(), "sonnet".to_owned()],
-            model_reasoning_effort: "xhigh".to_owned(),
-            dangerously_bypass_approvals_and_sandbox: false,
             additional_instructions: None,
             prompts: AgentPromptTemplates::default(),
         };
@@ -1511,13 +1481,13 @@ mod tests {
             runtime: AgentRuntime::Codex,
             command: "codex".to_owned(),
             args: vec![
+                "-c".to_owned(),
+                "model_reasoning_effort=\"xhigh\"".to_owned(),
                 "exec".to_owned(),
                 "--color".to_owned(),
                 "always".to_owned(),
                 "-".to_owned(),
             ],
-            model_reasoning_effort: "xhigh".to_owned(),
-            dangerously_bypass_approvals_and_sandbox: false,
             additional_instructions: None,
             prompts: AgentPromptTemplates::default(),
         };

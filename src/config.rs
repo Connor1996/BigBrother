@@ -72,10 +72,6 @@ pub struct RawAgentConfig {
     pub command: Option<String>,
     #[serde(default)]
     pub args: Option<Vec<String>>,
-    #[serde(default = "default_agent_model_reasoning_effort")]
-    pub model_reasoning_effort: String,
-    #[serde(default)]
-    pub dangerously_bypass_approvals_and_sandbox: bool,
     #[serde(default)]
     pub additional_instructions: Option<String>,
 }
@@ -85,8 +81,6 @@ pub struct AgentConfig {
     pub runtime: AgentRuntime,
     pub command: String,
     pub args: Vec<String>,
-    pub model_reasoning_effort: String,
-    pub dangerously_bypass_approvals_and_sandbox: bool,
     pub additional_instructions: Option<String>,
     pub prompts: AgentPromptTemplates,
 }
@@ -285,8 +279,6 @@ impl Default for RawAgentConfig {
             runtime: None,
             command: None,
             args: None,
-            model_reasoning_effort: default_agent_model_reasoning_effort(),
-            dangerously_bypass_approvals_and_sandbox: false,
             additional_instructions: None,
         }
     }
@@ -298,8 +290,6 @@ impl Default for AgentConfig {
             runtime: AgentRuntime::default(),
             command: default_agent_command(AgentRuntime::default()),
             args: default_agent_args(AgentRuntime::default()),
-            model_reasoning_effort: default_agent_model_reasoning_effort(),
-            dangerously_bypass_approvals_and_sandbox: false,
             additional_instructions: None,
             prompts: AgentPromptTemplates::default(),
         }
@@ -445,6 +435,8 @@ fn default_agent_command(runtime: AgentRuntime) -> String {
 fn default_agent_args(runtime: AgentRuntime) -> Vec<String> {
     match runtime {
         AgentRuntime::Codex => vec![
+            "-c".to_owned(),
+            "model_reasoning_effort=\"xhigh\"".to_owned(),
             "exec".to_owned(),
             "--model".to_owned(),
             "gpt-5.3-codex".to_owned(),
@@ -457,10 +449,6 @@ fn default_agent_args(runtime: AgentRuntime) -> Vec<String> {
         ],
         AgentRuntime::Custom => Vec::new(),
     }
-}
-
-fn default_agent_model_reasoning_effort() -> String {
-    "xhigh".to_owned()
 }
 
 const DEFAULT_ACTIONABLE_PROMPT_TEMPLATE: &str = include_str!("../prompts/actionable.md");
@@ -520,8 +508,6 @@ fn resolve_agent_config(raw: RawAgentConfig) -> Result<AgentConfig> {
         runtime,
         command,
         args,
-        model_reasoning_effort: resolve_literal(raw.model_reasoning_effort, None),
-        dangerously_bypass_approvals_and_sandbox: raw.dangerously_bypass_approvals_and_sandbox,
         additional_instructions: raw
             .additional_instructions
             .map(|value| resolve_literal(value, None)),
@@ -698,56 +684,7 @@ repo_map = { "tidbcloud/tidb-cse" = "./repos/custom/tidb-cse-local" }
     }
 
     #[test]
-    fn load_preserves_explicit_agent_full_access_flag() {
-        let unique = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .expect("time")
-            .as_nanos();
-        let dir = std::env::temp_dir().join(format!("bigbrother-config-{unique}"));
-        std::fs::create_dir_all(&dir).expect("temp config dir should create");
-        let config_path = dir.join("bigbrother.toml");
-        std::fs::write(
-            &config_path,
-            r#"
-[github]
-api_token = "token"
-
-[agent]
-dangerously_bypass_approvals_and_sandbox = true
-"#,
-        )
-        .expect("config fixture should write");
-
-        let resolved = AppConfig::load(&config_path).expect("config should load");
-
-        assert!(resolved.agent.dangerously_bypass_approvals_and_sandbox);
-    }
-
-    #[test]
-    fn load_defaults_agent_reasoning_effort_to_xhigh() {
-        let unique = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .expect("time")
-            .as_nanos();
-        let dir = std::env::temp_dir().join(format!("bigbrother-config-{unique}"));
-        std::fs::create_dir_all(&dir).expect("temp config dir should create");
-        let config_path = dir.join("bigbrother.toml");
-        std::fs::write(
-            &config_path,
-            r#"
-[github]
-api_token = "token"
-"#,
-        )
-        .expect("config fixture should write");
-
-        let resolved = AppConfig::load(&config_path).expect("config should load");
-
-        assert_eq!(resolved.agent.model_reasoning_effort, "xhigh");
-    }
-
-    #[test]
-    fn load_preserves_explicit_agent_reasoning_effort() {
+    fn load_ignores_legacy_agent_specific_fields() {
         let unique = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .expect("time")
@@ -763,13 +700,25 @@ api_token = "token"
 
 [agent]
 model_reasoning_effort = "high"
+dangerously_bypass_approvals_and_sandbox = true
 "#,
         )
         .expect("config fixture should write");
 
         let resolved = AppConfig::load(&config_path).expect("config should load");
 
-        assert_eq!(resolved.agent.model_reasoning_effort, "high");
+        assert_eq!(resolved.agent.runtime, AgentRuntime::Codex);
+        assert_eq!(
+            resolved.agent.args,
+            vec![
+                "-c".to_owned(),
+                "model_reasoning_effort=\"xhigh\"".to_owned(),
+                "exec".to_owned(),
+                "--model".to_owned(),
+                "gpt-5.3-codex".to_owned(),
+                "-".to_owned(),
+            ]
+        );
     }
 
     #[test]
@@ -797,6 +746,8 @@ api_token = "token"
         assert_eq!(
             resolved.agent.args,
             vec![
+                "-c".to_owned(),
+                "model_reasoning_effort=\"xhigh\"".to_owned(),
                 "exec".to_owned(),
                 "--model".to_owned(),
                 "gpt-5.3-codex".to_owned(),

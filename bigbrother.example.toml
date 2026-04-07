@@ -17,7 +17,7 @@ poll_interval_secs = 60
 max_concurrent_runs = 2
 
 [workspace]
-# Default root used to locate sibling repository checkouts like ../tikv or ../tidb-cse.
+# Default root used to locate sibling repository checkouts like ../tikv or ../tidb
 root = ".."
 # Optional explicit overrides when a repo cannot be found as ../<repo-name>.
 # repo_map = { "tidbcloud/tidb-cse" = "../tidb-cse", "tikv/tikv" = "../tikv" }
@@ -29,19 +29,12 @@ git_transport = "ssh"
 runtime = "codex"
 # Executable used to run the coding agent. Omit this to use the runtime default.
 # command = "codex"
-# Explicit Codex reasoning effort override passed via `-c model_reasoning_effort=...`.
-# BigBrother defaults this to `xhigh` even if you omit it. This override is Codex-specific and
-# ignored when `runtime = "claude"`.
-model_reasoning_effort = "xhigh"
-# When true, BigBrother launches `codex` with `--dangerously-bypass-approvals-and-sandbox` or
-# `claude` with `--dangerously-skip-permissions`. Leave this off unless the host environment is
-# already externally sandboxed and you want the agent to have full local access.
-# dangerously_bypass_approvals_and_sandbox = true
-# Arguments passed to the agent command. Omit this to use the runtime defaults.
-args = ["exec", "--model", "gpt-5.4", "-"]
+# Arguments passed to the agent command. Put backend-specific flags directly here.
+# The default Codex runtime includes the xhigh reasoning override in `args`.
+args = ["-c", "model_reasoning_effort=\"xhigh\"", "exec", "--model", "gpt-5.4", "-"]
 # For Claude Code print mode instead, switch to:
 # runtime = "claude"
-# args = ["-p", "--output-format", "text"]
+# args = ["--dangerously-skip-permissions", "-p", "--output-format", "text"]
 # Extra operator guidance appended to every generated prompt.
 additional_instructions = """
 - Prefer using `gh` when you need to inspect the latest PR review comments or CI state.
