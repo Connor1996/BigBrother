@@ -1,81 +1,43 @@
-# BigBrother
+# BigBrother: a local agent for keeping an eye on your GitHub PRs
 
-`BigBrother` is the product name for the Rust-based GitHub PR supervisor implemented in the `bigbrother` repository.
+End-to-end automation from requirement to implementation to testing to deployment is already becoming realistic in many agentic workflows. But in real TiDB and TiKV production work, many tasks still are not solved in one pass. We still need repeated back-and-forth with agents on design and implementation details, especially once review starts and the code needs another round of polishing.
 
-If you want a prose-first introduction for teammates, start with
-[`docs/bigbrother_getting_started.md`](/Users/Connor/Coding/bigbrother/docs/bigbrother_getting_started.md).
-If you want Codex to perform most of the first-time setup, use the copy-paste prompt in
-[`docs/bigbrother_agent_setup_prompt.md`](/Users/Connor/Coding/bigbrother/docs/bigbrother_agent_setup_prompt.md).
+During implementation, teams already have many ways to work with agents. You can use coding agents such as Codex or Claude Code directly, spin up subagents for parallel research and implementation, or organize work through agent-team setups such as slock.ai. BigBrother is not trying to standardize that open-ended part of the workflow.
 
-Current status:
+It is built for a different problem: the long tail after a PR is already open. At that point, the cost is often not the code change itself, but the repeated work around review comments, failing CI, merge conflicts, and simply keeping track of which PR needs attention next. That problem fits a persistent operational surface better than a pure chat interface.
 
-- the MVP now runs as a local Rust daemon plus HTTP server
-- the UI is a minimal web dashboard served directly by the backend
-- the source of truth for the ongoing roadmap is still:
-  - `docs/github_pr_supervisor_spec.md`
-  - `docs/github_pr_supervisor_tasks.md`
+The detailed roadmap and reference behavior still live in
+[`docs/github_pr_supervisor_spec.md`](/Users/Connor/Coding/bigbrother/docs/github_pr_supervisor_spec.md)
+and
+[`docs/github_pr_supervisor_tasks.md`](/Users/Connor/Coding/bigbrother/docs/github_pr_supervisor_tasks.md).
 
-The current MVP combines:
+## What It Does
 
-- a background polling daemon that watches your authored GitHub PRs
-- a lightweight review-request inbox for PRs that currently request your review
-- a configurable agent runner that can try to fix CI or reviewer feedback automatically
-- a local web dashboard served from the same Rust process
+BigBrother runs as a local Rust daemon plus web dashboard. It keeps polling the open PRs you authored and the PRs that currently request your review. When it sees a signal that needs action, it resolves a local source repository, switches into its own managed worktree under `<workspace.root>/bigbrother-worktrees`, and hands the trigger plus PR context to a local coding agent such as Codex or Claude Code. The run output, result, and latest status are recorded in the dashboard.
 
-The daemon keeps both GitHub API requests and the GitHub-fetch stage of each poll on bounded
-timeouts so a single stuck network call cannot leave the dashboard showing an indefinitely stale
-`Last poll` timestamp.
+In practice, it handles a few recurring PR workflows:
 
-The planned product direction is:
+- `Review feedback`: new review comments or issue comments can trigger an agent run that reads feedback, merges the latest base, attempts the change, pushes, and replies on the PR
+- `CI failure`: new failing checks can trigger either a code fix or a `/retest` when the failure looks flaky or not worth a speculative change
+- `Merge conflict`: conflicts are resolved inside BigBrother's managed worktree instead of your everyday checkout
+- `Review Requests`: PRs that request your review land in a separate inbox where you can trigger a read-only `Deep Review`
+- `Track / Untrack`: you can pause automatic follow-up for a PR without losing its current dashboard state
+- `needs decision`, `failed`, and `running`: the dashboard surfaces when the agent is blocked, failed, or still actively working
 
-- Rust daemon/backend
-- richer local web UI
-- optional Tauri shell later
+The UI shows the authored PR list, a `Review Requests` tab, CI and review state, daemon activity, and a dedicated run-details page with terminal output for active and completed runs.
 
-## What It Tracks
+## Quick Start
 
-For each open PR authored by you, BigBrother polls GitHub and computes a live status:
-
-- `waiting review`: nothing actionable right now, still waiting on human review
-- `waiting merge`: approved and CI passed, waiting to be merged
-- `conflict`: the PR does not currently merge cleanly with the latest base branch
-- `needs attention`: new reviewer feedback or a newly failing CI signal
-- `needs decision`: the agent determined the required change is non-trivial and needs operator approval before editing
-- `failed`: the latest automatic agent run failed and the same PR signal is still unresolved; the daemon leaves it idle until you click `Retry`
-- `untracked`: the operator intentionally froze this PR so scheduled polls keep its last snapshot but no automatic run will start
-- `running`: the local agent command is currently working on the PR
-- `draft`, `closed`, `merged`: terminal or non-actionable states
-
-The UI shows the authored PR list, a `Review Requests` tab for PRs that currently request your review, CI/review state, timestamps, top-right dashboard tabs for switching between the PR view, review inbox, and live daemon activity, and a dedicated run-details page that uses a browser-rendered terminal for both active Codex runs and saved completed-run terminal recordings, falling back to wrapped last-run text output only when no PTY terminal capture exists. Terminal recordings are kept as full PTY output rather than a short screen snapshot so completed runs can be replayed with their saved scrollback. It also keeps a visibly subdued row state when a PR is explicitly shown as `untracked`.
-
-## Requirements
+### Requirements
 
 - Rust toolchain `1.93.0` or newer
 - `git`
-- a GitHub token in `GITHUB_TOKEN` or `GH_TOKEN`
-- an agent command available on your machine
-  - set `[agent] command = "codex"` or `command = "claude"`
-  - the default command is `codex`
-  - put backend-specific flags directly in `[agent].args`
-  - the shipped example config defaults Codex to
-    `--dangerously-bypass-approvals-and-sandbox -c model_reasoning_effort="xhigh" ...`
-  - for Claude Code, configure print mode such as
-    `command = "claude"` plus `args = ["-p", "--output-format", "text"]`
-  - if you want full local access, add the backend's own flag directly to `args`, such as
-    `--dangerously-bypass-approvals-and-sandbox` for Codex or
-    `--dangerously-skip-permissions` for Claude Code
-  - you can still point `command` at a wrapper script or another executable; BigBrother only uses
-    the basename to infer Codex vs Claude-specific behavior
-  - keep `[agent].additional_instructions` empty by default; repo-wide working rules belong in the
-    versioned prompt templates, while `additional_instructions` is only for machine-local overlays
-- existing local checkouts for the repositories you want BigBrother to operate on
-  - by default it looks under `workspace.root` for a directory named after the repo, such as `../tikv` for `tikv/tikv`
-  - if auto-discovery is not enough, you can provide `workspace.repo_map` entries in the config
-  - these paths are only used to discover the source repository; BigBrother runs edits in its own managed worktrees under `<workspace.root>/bigbrother-worktrees`
-- credentials for pushing back to your PR branches
-  - SSH is the default git transport in the example config
+- `gh` installed and already authenticated
+- `codex` or `claude` installed and already authenticated
+- local checkouts of the repositories you want BigBrother to operate on
+- Git credentials that can push back to your PR branches
 
-## Quick Start
+### Steps
 
 1. Copy the example config:
 
@@ -83,45 +45,39 @@ The UI shows the authored PR list, a `Review Requests` tab for PRs that currentl
 cp bigbrother.example.toml bigbrother.toml
 ```
 
-2. Export a GitHub token:
+2. Open `bigbrother.toml` and confirm these settings:
+
+- `workspace.root`: the repositories you want BigBrother to manage should already exist locally and be discoverable from this root
+- `workspace.repo_map`: optional manual overrides for repositories that are not checked out at the default path. For example, if `tikv/tikv` is not at `<workspace.root>/tikv`, add something like `workspace.repo_map = { "tikv/tikv" = "/Users/alice/src/tikv-dev" }`
+- `[agent].command`: use `codex` or `claude` depending on the local agent you want BigBrother to run
+
+3. If you want Feishu notifications, set up local `lark-cli` first:
 
 ```bash
-export GITHUB_TOKEN=...
+npm install -g @larksuite/cli
+lark-cli config init
 ```
 
-If you keep `author = "$GITHUB_USER"` in the copied config, also export `GITHUB_USER` to your
-GitHub login. Otherwise replace `author` with your real login or remove the field so BigBrother
-can resolve the viewer login directly from GitHub. If you customize `workspace.root`, prefer an
-absolute path such as `/Users/alice/Coding`; the config loader does not currently expand `~` or
-`$HOME/Coding`.
+Then set `notifications.feishu.receive_id` to your Feishu-bound email. If you keep the template value `"$FEISHU_NOTIFY_EMAIL"`, export:
 
-3. Build and launch the local daemon and dashboard server from the project root using the optimized release binary:
+```bash
+export FEISHU_NOTIFY_EMAIL="you@example.com"
+```
+
+4. Build and start BigBrother:
 
 ```bash
 cargo build --release
-target/release/bigbrother --config bigbrother.toml
+GITHUB_TOKEN="$(gh auth token)" target/release/bigbrother --config bigbrother.toml
 ```
 
-The example config sets `workspace.root = ".."`, which means BigBrother will look for sibling
-repositories next to `bigbrother` before it tries any explicit `workspace.repo_map` overrides.
-It also means BigBrother will place its centralized managed worktrees under
-`../bigbrother-worktrees`, with one reusable detached-HEAD worktree per repository such as
-`../bigbrother-worktrees/tikv-bigbrother`.
-The shipped example config includes Codex full-access by default via
-`--dangerously-bypass-approvals-and-sandbox`, so only use it as-is on a machine you already
-trust. If you do not want unsandboxed local access, remove that flag from `[agent].args`.
-The example also includes `-c model_reasoning_effort="xhigh"`, and BigBrother still injects
-`--color always` into `codex exec` when you have not already included a color override in `args`.
+5. Open [http://127.0.0.1:8787/](http://127.0.0.1:8787/).
 
-4. Open the dashboard in your browser:
+The example config sets `workspace.root = ".."`, which makes BigBrother look for sibling repositories next to `bigbrother` before it tries any explicit `workspace.repo_map` overrides. That also means managed worktrees will live under `../bigbrother-worktrees`.
 
-```bash
-http://127.0.0.1:8787/
-```
+The shipped example config defaults Codex to full local access via `--dangerously-bypass-approvals-and-sandbox`, so only use it as-is on a machine you already trust. If you do not want unsandboxed local access, remove that flag from `[agent].args`.
 
-For long-running local use, prefer `target/release/bigbrother` over `cargo run` so the daemon
-stays on the optimized release build. The binary is already server-only in this MVP. `--headless`
-is kept as a compatibility no-op for older command lines.
+For long-running local use, prefer `target/release/bigbrother` over `cargo run` so the daemon stays on the optimized release build.
 
 ## Optional Feishu Notifications
 
