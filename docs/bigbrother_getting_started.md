@@ -89,18 +89,7 @@ BigBrother 以一个本地 daemon + web dashboard 的形态常驻运行。它会
 - 你想让 BigBrother 管理的仓库已经在本地，默认放在 `workspace.root` 下能被发现
 - 如果你想接飞书通知，可选安装并登录 `lark-cli`
 
-推荐先让 agent 帮你做第一轮 setup：
-
-1. 打开这份 prompt：
-
-[`docs/bigbrother_agent_setup_prompt.md`](/Users/Connor/Coding/bigbrother/docs/bigbrother_agent_setup_prompt.md)
-
-2. 把它交给 Codex。
-3. 它会检查环境、补 `bigbrother.toml`、按需接上飞书、启动 daemon，并确认 dashboard 可以打开。
-
-这就是现在最接近 `agent-assisted setup` 的方式。
-
-手动 setup 也很直接：
+手动 setup 很直接：
 
 1. 复制配置模板。
 
@@ -212,17 +201,6 @@ Before the first run, make sure you already have:
 - Git credentials that can push back to your PR branches
 - local checkouts of the repositories you want BigBrother to manage, discoverable from `workspace.root`
 - optional `lark-cli` installation and login if you want Feishu notifications
-
-The recommended path is to let an agent do the first setup pass:
-
-1. Open this prompt:
-
-[`docs/bigbrother_agent_setup_prompt.md`](/Users/Connor/Coding/bigbrother/docs/bigbrother_agent_setup_prompt.md)
-
-2. Hand it to Codex.
-3. It will inspect the machine, patch `bigbrother.toml`, wire Feishu if needed, start the daemon, and verify that the dashboard responds.
-
-That is the current best approximation of `agent-assisted setup`.
 
 Manual setup is straightforward:
 
