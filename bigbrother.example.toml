@@ -37,17 +37,21 @@ args = ["--dangerously-bypass-approvals-and-sandbox", "-c", "model_reasoning_eff
 # Optional local operator guidance appended to every generated prompt. Leave empty by default.
 additional_instructions = ""
 
-# Private DM mode via an enterprise self-built app bot.
+# Private DM mode via a locally configured `lark-cli` bot.
 [notifications.feishu]
-# Feishu app ID for the self-built bot application.
-# app_id = "$FEISHU_APP_ID"
-# Feishu app secret for the same bot application.
-# app_secret = "$FEISHU_APP_SECRET"
+transport = "lark_cli_bot"
 # Target user or chat identifier that receives daemon notifications.
-# receive_id = "$FEISHU_NOTIFY_EMAIL"
+receive_id = "$FEISHU_NOTIFY_EMAIL"
 # Type of `receive_id`: one of `email`, `open_id`, `user_id`, `union_id`, or `chat_id`.
-# receive_id_type = "email"
+receive_id_type = "email"
 # Short instance label included in each DM so multiple daemons are easy to distinguish.
-# label = "mbp"
-# HTTP timeout for Feishu notification delivery.
-# timeout_secs = 10
+label = "mbp"
+# Command used to invoke the locally configured Feishu CLI bot.
+lark_cli_command = "lark-cli"
+# Timeout for notification delivery, including the CLI subprocess.
+timeout_secs = 10
+
+# To use the legacy direct OpenAPI app bot instead, switch to:
+# transport = "app_bot"
+# app_id = "$FEISHU_APP_ID"
+# app_secret = "$FEISHU_APP_SECRET"
