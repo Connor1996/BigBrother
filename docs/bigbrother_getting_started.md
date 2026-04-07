@@ -27,11 +27,13 @@ It generates a structured review result and posts only the final cleaned-up revi
 
 ## Quick Start
 
-Prerequisites:
+### Requirements
 
 - Rust toolchain and `git`
 - `gh` installed and already authenticated
 - `codex` or `claude` installed and already authenticated
+
+### Steps
 
 1. Copy the config template.
 
