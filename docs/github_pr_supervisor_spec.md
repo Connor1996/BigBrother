@@ -143,6 +143,10 @@ For MVP, replace this temporarily with:
 ### 5.3 Packaging
 
 - initial delivery: browser UI served locally
+- tagged release distribution: GitHub Actions should build and publish GitHub Release archives for
+  the native Linux and macOS targets that BigBrother supports today
+- current automated release assets: `x86_64-unknown-linux-gnu`, `x86_64-apple-darwin`, and
+  `aarch64-apple-darwin` archives plus SHA-256 checksum files
 - later optional packaging: Tauri
 
 ## 6. Core User Flows

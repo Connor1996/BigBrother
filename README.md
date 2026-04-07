@@ -238,3 +238,27 @@ cargo +1.93.0 test
 ```
 
 This includes a simulated integration test that boots the app in-process with a fake GitHub provider and fake runner, verifies one PR becomes `running`, then confirms the same unchanged signal does not trigger a duplicate run on the next poll.
+
+## Releases
+
+Pushing a version tag that matches `v*` now triggers the GitHub Actions release workflow in
+[`/.github/workflows/release.yml`](/Users/Connor/Coding/bigbrother/.github/workflows/release.yml).
+The workflow runs the test suite on Linux first, then builds release archives for:
+
+- `x86_64-unknown-linux-gnu`
+- `x86_64-apple-darwin`
+- `aarch64-apple-darwin`
+
+Each release asset is uploaded to the matching GitHub Release as a `.tar.gz` archive plus a
+`.sha256` checksum file. The archive contains the `bigbrother` binary and the repository
+`README.md`.
+
+Typical release flow:
+
+```bash
+git tag -a v0.1.0 -m "v0.1.0"
+git push origin v0.1.0
+```
+
+After the tag push finishes, GitHub creates or updates the `v0.1.0` release and attaches the
+platform-specific archives automatically.
