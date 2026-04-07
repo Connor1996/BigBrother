@@ -108,32 +108,26 @@ BigBrother 以一个本地 daemon + web dashboard 的形态常驻运行。它会
 cp bigbrother.example.toml bigbrother.toml
 ```
 
-2. 通过 `gh` 导出 GitHub 凭据。
-
-```bash
-export GITHUB_TOKEN="$(gh auth token)"
-export GITHUB_USER="$(gh api user -q .login)"
-```
-
-如果你已经自己管理好了 `GITHUB_TOKEN` 或 `GH_TOKEN`，也可以继续沿用现有环境变量；这里只是把 `gh` 作为第一次 setup 最顺手的默认路径。如果你保留了 `author = "$GITHUB_USER"`，那 `GITHUB_USER` 需要是你的 GitHub login。要是不想额外带这个环境变量，也可以直接把 `author` 改成真实用户名，或者删掉，让 BigBrother 在运行时自己去 GitHub 查当前 viewer。
-
-3. 打开 `bigbrother.toml`，确认这些关键项：
+2. 打开 `bigbrother.toml`，确认这些关键项：
 
 - `workspace.root` 对不对
 - 只有在 `<workspace.root>/<repo-name>` 找不到仓库时，才加 `workspace.repo_map`
 - 除非你的机器明确用的是别的 agent，否则保留 `command = "codex"`
+- 如果模板里还保留着 `author = "$GITHUB_USER"`，就把它改成你真实的 GitHub login，或者直接删掉这一项
 - 除非你明确要让 Codex 在本机无沙箱全权限运行，否则先不要打开 `dangerously_bypass_approvals_and_sandbox`
 
-4. 如果你需要飞书通知，可选安装并登录 `lark-cli`，再补 `notifications.feishu`。
+3. 如果你需要飞书通知，可选安装并登录 `lark-cli`，再补 `notifications.feishu`。
 
-5. 编译并启动 daemon。
+4. 编译并启动 daemon。
 
 ```bash
 cargo build --release
-target/release/bigbrother --config bigbrother.toml
+GITHUB_TOKEN="$(gh auth token)" target/release/bigbrother --config bigbrother.toml
 ```
 
-6. 打开 [http://127.0.0.1:8787/](http://127.0.0.1:8787/)。
+如果你已经自己管理好了 `GITHUB_TOKEN` 或 `GH_TOKEN`，也可以继续沿用现有环境变量；这里只是把 `gh auth token` 作为第一次 setup 最顺手的默认路径。
+
+5. 打开 [http://127.0.0.1:8787/](http://127.0.0.1:8787/)。
 
 如果你的 repo 都放在 `~/Coding` 下面，把 `bigbrother` 放在这些 repo 旁边通常会最顺手，因为默认的 `workspace.root = ".."` 就能自动发现很多 sibling repo。要是目录布局不一样，就把 `workspace.root` 改成绝对路径，比如 `/Users/alice/Coding`。当前配置解析不会自动展开 `~` 或 `$HOME/Coding`。
 
@@ -243,31 +237,25 @@ If you still want to set it up manually, follow these steps:
 cp bigbrother.example.toml bigbrother.toml
 ```
 
-2. Export the GitHub credentials through `gh`.
-
-```bash
-export GITHUB_TOKEN="$(gh auth token)"
-export GITHUB_USER="$(gh api user -q .login)"
-```
-
-If you already manage `GITHUB_TOKEN` or `GH_TOKEN` yourself, you can keep using that existing environment variable setup; `gh` is just the easiest default path for first-time setup. If you keep `author = "$GITHUB_USER"` in the config, `GITHUB_USER` needs to be set to your GitHub login. If you do not want that extra environment variable, replace the `author` field with your real login or remove it entirely and let BigBrother resolve the viewer login at runtime.
-
-3. Open `bigbrother.toml` and confirm the important settings:
+2. Open `bigbrother.toml` and confirm the important settings:
 
 - confirm `workspace.root`
 - add `workspace.repo_map` only for repositories that are not located at `<workspace.root>/<repo-name>`
 - keep `command = "codex"` unless your machine clearly uses another agent command
+- if the template still contains `author = "$GITHUB_USER"`, replace it with your real GitHub login or remove the field entirely
 - leave `dangerously_bypass_approvals_and_sandbox` off unless you explicitly want unsandboxed local access on this host
 
-4. If you want Feishu notifications, optionally install and log into `lark-cli`, then fill in `notifications.feishu`.
+3. If you want Feishu notifications, optionally install and log into `lark-cli`, then fill in `notifications.feishu`.
 
-5. Build and start the daemon.
+4. Build and start the daemon.
 
 ```bash
 cargo build --release
-target/release/bigbrother --config bigbrother.toml
+GITHUB_TOKEN="$(gh auth token)" target/release/bigbrother --config bigbrother.toml
 ```
 
-6. Open [http://127.0.0.1:8787/](http://127.0.0.1:8787/).
+If you already manage `GITHUB_TOKEN` or `GH_TOKEN` yourself, you can keep using that existing environment variable setup; `gh auth token` is just the easiest default path for a first run.
+
+5. Open [http://127.0.0.1:8787/](http://127.0.0.1:8787/).
 
 If your repositories already live under `~/Coding`, putting `bigbrother` next to them is usually the smoothest layout, because the default `workspace.root = ".."` can then discover many sibling repositories automatically. If your layout is different, set `workspace.root` to an absolute path such as `/Users/alice/Coding`. The current config loader does not expand `~` or `$HOME/Coding`.
