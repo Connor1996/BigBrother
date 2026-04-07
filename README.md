@@ -57,8 +57,8 @@ The UI shows the authored PR list, a `Review Requests` tab for PRs that currentl
   - choose the built-in backend with `[agent] runtime = "codex"` or `runtime = "claude"`
   - the default runtime is `codex`
   - put backend-specific flags directly in `[agent].args`
-  - for Codex, the default args already include
-    `-c model_reasoning_effort="xhigh"`
+  - the shipped example config defaults Codex to
+    `--dangerously-bypass-approvals-and-sandbox -c model_reasoning_effort="xhigh" ...`
   - for Claude Code, configure print mode such as
     `runtime = "claude"` plus `args = ["-p", "--output-format", "text"]`
   - if you want full local access, add the backend's own flag directly to `args`, such as
@@ -106,13 +106,11 @@ repositories next to `bigbrother` before it tries any explicit `workspace.repo_m
 It also means BigBrother will place its centralized managed worktrees under
 `../bigbrother-worktrees`, with one reusable detached-HEAD worktree per repository such as
 `../bigbrother-worktrees/tikv-bigbrother`.
-If you add a backend-specific full-access flag to `args`, such as
-`--dangerously-bypass-approvals-and-sandbox` for Codex or `--dangerously-skip-permissions` for
-Claude Code, the agent will run with unsandboxed local access, so only use that on a machine you
-already trust.
-By default, the Codex runtime's example args include `-c model_reasoning_effort="xhigh"`, and
-BigBrother still injects `--color always` into `codex exec` when you have not already included a
-color override in `args`.
+The shipped example config includes Codex full-access by default via
+`--dangerously-bypass-approvals-and-sandbox`, so only use it as-is on a machine you already
+trust. If you do not want unsandboxed local access, remove that flag from `[agent].args`.
+The example also includes `-c model_reasoning_effort="xhigh"`, and BigBrother still injects
+`--color always` into `codex exec` when you have not already included a color override in `args`.
 
 4. Open the dashboard in your browser:
 

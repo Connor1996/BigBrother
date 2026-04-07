@@ -30,10 +30,8 @@ runtime = "codex"
 # Executable used to run the coding agent. Omit this to use the runtime default.
 # command = "codex"
 # Arguments passed to the agent command. Put backend-specific flags directly here.
-# The default Codex runtime includes the xhigh reasoning override in `args`.
-args = ["-c", "model_reasoning_effort=\"xhigh\"", "exec", "--model", "gpt-5.4", "-"]
-# For Codex full-access mode instead, prepend:
-# args = ["--dangerously-bypass-approvals-and-sandbox", "-c", "model_reasoning_effort=\"xhigh\"", "exec", "--model", "gpt-5.4", "-"]
+# This example defaults Codex to full local access on a trusted development machine.
+args = ["--dangerously-bypass-approvals-and-sandbox", "-c", "model_reasoning_effort=\"xhigh\"", "exec", "--model", "gpt-5.4", "-"]
 # For Claude Code print mode instead, switch to:
 # runtime = "claude"
 # args = ["--dangerously-skip-permissions", "-p", "--output-format", "text"]
