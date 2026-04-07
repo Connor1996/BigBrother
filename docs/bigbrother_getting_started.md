@@ -44,7 +44,7 @@ cp bigbrother.example.toml bigbrother.toml
 2. Open `bigbrother.toml` and confirm these settings:
 
 - `workspace.root`: the repositories you want BigBrother to manage should already exist locally and be discoverable from this root
-- `workspace.repo_map`: add entries only when a repository cannot be found at `<workspace.root>/<repo-name>`
+- `workspace.repo_map`: optional manual overrides for repositories that are not checked out at the default path. For example, if `tikv/tikv` is not at `<workspace.root>/tikv`, add something like `workspace.repo_map = { "tikv/tikv" = "/Users/alice/src/tikv-dev" }`
 
 3. If you want Feishu notifications, set up local `lark-cli` first:
 
