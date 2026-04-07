@@ -35,39 +35,33 @@ Common workflows:
 
 ### Requirements
 
-- Rust toolchain `1.93.0` or newer
-- `git`
+- Rust toolchain and `git`
 - `gh` installed and already authenticated
 - `codex` or `claude` installed and already authenticated
-- local checkouts of the repositories you want BigBrother to operate on
-- Git credentials that can push back to your PR branches
 
 ### Steps
 
-1. Copy the example config:
+1. Copy the config template.
 
 ```bash
 cp bigbrother.example.toml bigbrother.toml
 ```
 
-2. Open `bigbrother.toml` and confirm:
+2. Open `bigbrother.toml` and confirm these settings:
 
-- `workspace.root` points at the local root where your repositories already live
-- `workspace.repo_map` is set only for repositories that are not at
-  `<workspace.root>/<repo-name>`
-- `[agent].command` uses the local agent you want BigBrother to run
-- `[agent].args` matches the permissions and model settings you want on this machine
+- `workspace.root`: the repositories you want BigBrother to manage should already exist locally and be discoverable from this root
+- `workspace.repo_map`: optional manual overrides for repositories that are not checked out at the default path. For example, if `tikv/tikv` is not at `<workspace.root>/tikv`, add something like `workspace.repo_map = { "tikv/tikv" = "/Users/alice/src/tikv-dev" }`
 
-3. Optional: if you want Feishu notifications, set up local `lark-cli` and export your target
-   email when using the example config:
+3. If you want Feishu notifications, set up local `lark-cli` first:
 
 ```bash
 npm install -g @larksuite/cli
 lark-cli config init
-export FEISHU_NOTIFY_EMAIL="you@example.com"
 ```
 
-4. Build and start BigBrother:
+BigBrother sends `lark_cli_bot` notifications through local `lark-cli`, and `config init` is required for that flow. Then set `notifications.feishu.receive_id` to your Feishu-bound email.
+
+4. Start BigBrother:
 
 ```bash
 cargo build --release
@@ -75,8 +69,6 @@ GITHUB_TOKEN="$(gh auth token)" target/release/bigbrother --config bigbrother.to
 ```
 
 5. Open [http://127.0.0.1:8787/](http://127.0.0.1:8787/).
-
-For a fuller setup walkthrough, see [`docs/bigbrother_getting_started.md`](docs/bigbrother_getting_started.md).
 
 ## How It Works
 
@@ -89,25 +81,3 @@ For a fuller setup walkthrough, see [`docs/bigbrother_getting_started.md`](docs/
 4. Record terminal output and outcome in the dashboard. If the agent emits
    `BIGBROTHER_NEEDS_DECISION:`, BigBrother pauses automatic follow-up for that PR until you step
    in.
-
-## More Docs
-
-- [`docs/bigbrother_getting_started.md`](docs/bigbrother_getting_started.md): fuller onboarding and
-  screenshots
-- [`docs/github_pr_supervisor_spec.md`](docs/github_pr_supervisor_spec.md): detailed runtime
-  behavior and operator-facing semantics
-- [`docs/github_pr_supervisor_tasks.md`](docs/github_pr_supervisor_tasks.md): task breakdown and
-  roadmap notes
-- [`prompts/README.md`](prompts/README.md): prompt templates and placeholders
-
-## Validation
-
-```bash
-cargo +1.93.0 test
-```
-
-## Releases
-
-Pushing a tag that matches `v*` triggers
-[`release.yml`](.github/workflows/release.yml), which runs tests, builds the release archives, and
-uploads them to the matching GitHub Release.
