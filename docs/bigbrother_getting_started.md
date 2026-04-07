@@ -80,7 +80,7 @@ BigBrother 以一个本地 daemon + web dashboard 的形态常驻运行。它会
 
 ## 怎么开始
 
-第一次上手之前，先确认这些前置要求已经满足：
+第一次上手前，先确认这些东西已经有：
 
 - 机器上已经有可用的 Rust toolchain 和 `git`
 - 已经安装并登录 `gh`
@@ -89,18 +89,18 @@ BigBrother 以一个本地 daemon + web dashboard 的形态常驻运行。它会
 - 你想让 BigBrother 管理的仓库已经在本地，默认放在 `workspace.root` 下能被发现
 - 如果你想接飞书通知，可选安装并登录 `lark-cli`
 
-推荐路径还是先让 agent 帮你做第一轮 setup：
+推荐先让 agent 帮你做第一轮 setup：
 
 1. 打开这份 prompt：
 
 [`docs/bigbrother_agent_setup_prompt.md`](/Users/Connor/Coding/bigbrother/docs/bigbrother_agent_setup_prompt.md)
 
 2. 把它交给 Codex。
-3. Codex 会去检查本机环境、确认 `gh` 和 `codex` 是否可用、修 `bigbrother.toml`、避免保留没展开的占位符、在你选择启用并且本机已登录 `lark-cli` 时接上飞书、启动 daemon，并确认 dashboard 能否正常响应。
+3. 它会检查环境、补 `bigbrother.toml`、按需接上飞书、启动 daemon，并确认 dashboard 可以打开。
 
-这就是当前版本最接近 “agent-assisted setup” 的方式。现在还没有真正内建的 `doctor`、`init` 或 `setup --agent` 命令，所以最顺的首次上手方式就是先让 agent 帮你把第一轮 setup 走完。
+这就是现在最接近 `agent-assisted setup` 的方式。
 
-如果你还是想手动来，可以按下面的步骤做：
+手动 setup 也很直接：
 
 1. 复制配置模板。
 
@@ -108,28 +108,23 @@ BigBrother 以一个本地 daemon + web dashboard 的形态常驻运行。它会
 cp bigbrother.example.toml bigbrother.toml
 ```
 
-2. 打开 `bigbrother.toml`，确认这些关键项：
+2. 打开 `bigbrother.toml`，确认这两项：
 
 - `workspace.root` 对不对
 - 只有在 `<workspace.root>/<repo-name>` 找不到仓库时，才加 `workspace.repo_map`
-- 除非你的机器明确用的是别的 agent，否则保留 `command = "codex"`
-- 如果模板里还保留着 `author = "$GITHUB_USER"`，就把它改成你真实的 GitHub login，或者直接删掉这一项
-- 除非你明确要让 Codex 在本机无沙箱全权限运行，否则先不要打开 `dangerously_bypass_approvals_and_sandbox`
 
 3. 如果你需要飞书通知，可选安装并登录 `lark-cli`，再补 `notifications.feishu`。
 
-4. 编译并启动 daemon。
+4. 启动：
 
 ```bash
 cargo build --release
 GITHUB_TOKEN="$(gh auth token)" target/release/bigbrother --config bigbrother.toml
 ```
 
-如果你已经自己管理好了 `GITHUB_TOKEN` 或 `GH_TOKEN`，也可以继续沿用现有环境变量；这里只是把 `gh auth token` 作为第一次 setup 最顺手的默认路径。
+如果你已经自己管理好了 `GITHUB_TOKEN` 或 `GH_TOKEN`，也可以继续沿用现有环境变量。
 
 5. 打开 [http://127.0.0.1:8787/](http://127.0.0.1:8787/)。
-
-如果你的 repo 都放在 `~/Coding` 下面，把 `bigbrother` 放在这些 repo 旁边通常会最顺手，因为默认的 `workspace.root = ".."` 就能自动发现很多 sibling repo。要是目录布局不一样，就把 `workspace.root` 改成绝对路径，比如 `/Users/alice/Coding`。当前配置解析不会自动展开 `~` 或 `$HOME/Coding`。
 
 ---
 
@@ -209,7 +204,7 @@ This screenshot supports the idea that BigBrother is useful not only for authore
 
 ## How to get started
 
-Before the first run, make sure these prerequisites are already in place:
+Before the first run, make sure you already have:
 
 - a working Rust toolchain and `git`
 - `gh` is installed and already authenticated
@@ -218,18 +213,18 @@ Before the first run, make sure these prerequisites are already in place:
 - local checkouts of the repositories you want BigBrother to manage, discoverable from `workspace.root`
 - optional `lark-cli` installation and login if you want Feishu notifications
 
-The recommended path is still to let an agent do the first setup pass:
+The recommended path is to let an agent do the first setup pass:
 
 1. Open this prompt:
 
 [`docs/bigbrother_agent_setup_prompt.md`](/Users/Connor/Coding/bigbrother/docs/bigbrother_agent_setup_prompt.md)
 
 2. Hand it to Codex.
-3. Codex will inspect the machine, confirm that `gh` and `codex` are available, patch `bigbrother.toml`, avoid unresolved placeholders, wire Feishu only if you want it and `lark-cli` is already logged in, launch the daemon, and verify that the dashboard responds.
+3. It will inspect the machine, patch `bigbrother.toml`, wire Feishu if needed, start the daemon, and verify that the dashboard responds.
 
-That is the current best approximation of agent-assisted setup. There is not yet a built-in `doctor`, `init`, or `setup --agent` command, so the smoothest first-run path today is to let the agent help you bootstrap the environment.
+That is the current best approximation of `agent-assisted setup`.
 
-If you still want to set it up manually, follow these steps:
+Manual setup is straightforward:
 
 1. Copy the config template.
 
@@ -254,8 +249,8 @@ cargo build --release
 GITHUB_TOKEN="$(gh auth token)" target/release/bigbrother --config bigbrother.toml
 ```
 
-If you already manage `GITHUB_TOKEN` or `GH_TOKEN` yourself, you can keep using that existing environment variable setup; `gh auth token` is just the easiest default path for a first run.
+If you already manage `GITHUB_TOKEN` or `GH_TOKEN` yourself, you can keep using that existing environment variable setup.
 
 5. Open [http://127.0.0.1:8787/](http://127.0.0.1:8787/).
 
-If your repositories already live under `~/Coding`, putting `bigbrother` next to them is usually the smoothest layout, because the default `workspace.root = ".."` can then discover many sibling repositories automatically. If your layout is different, set `workspace.root` to an absolute path such as `/Users/alice/Coding`. The current config loader does not expand `~` or `$HOME/Coding`.
+If your repositories already live under `~/Coding`, putting `bigbrother` next to them is usually the simplest layout. Otherwise, set `workspace.root` to an absolute path such as `/Users/alice/Coding`. The current config loader does not expand `~` or `$HOME/Coding`.
