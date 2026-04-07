@@ -80,7 +80,7 @@ BigBrother 以一个本地 daemon + web dashboard 的形态常驻运行。它会
 
 ## 怎么开始
 
-第一次上手前，先确认这些东西已经有：
+前置要求：
 
 - 机器上已经有可用的 Rust toolchain 和 `git`
 - 已经安装并登录 `gh`
@@ -193,7 +193,7 @@ This screenshot supports the idea that BigBrother is useful not only for authore
 
 ## How to get started
 
-Before the first run, make sure you already have:
+Prerequisites:
 
 - a working Rust toolchain and `git`
 - `gh` is installed and already authenticated
