@@ -1,18 +1,7 @@
+- Use the `$deep-review` skill and follow its workflow exactly.
 - Repository root: the current working directory.
 - Target output folder: `{{target_dir}}`.
 - Output filename: `{{file_name}}`.
 - Write the final deep review markdown to `{{artifact_path}}`.
 - The final PR comment will be generated from that file, so make the file itself the complete review artifact.
-- Use this built-in output structure:
-  - `### Deep Review`
-  - `#### Problem Summary`
-  - `#### Solution Walkthrough`
-  - `#### Findings (ordered by severity)`
-  - `#### Costs and Negative Impacts`
-  - `#### Engineering Rules Check`
-  - `#### Questions and Assumptions`
-  - `#### Suggested Tests / Validation`
-- In `Solution Walkthrough`, explain the non-obvious logic and behavior changes in plain language.
-- In `Findings`, include file/line references for each issue or explicitly say `No findings.` if nothing actionable is wrong.
-- In `Costs and Negative Impacts`, cover correctness, security, compatibility, robustness, cognitive load, CPU, memory, and log volume.
 - After writing the file, you may print a short confirmation, but do not paste the entire review into stdout.

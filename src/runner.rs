@@ -1313,7 +1313,7 @@ mod tests {
     }
 
     #[test]
-    fn deep_review_prompt_instructions_use_built_in_artifact_workflow_without_merge_guidance() {
+    fn deep_review_prompt_instructions_use_skill_artifact_without_merge_guidance() {
         let artifact = DeepReviewArtifact {
             path: PathBuf::from("/tmp/review-report.md"),
             target_dir: PathBuf::from("/tmp"),
@@ -1334,8 +1334,7 @@ mod tests {
         )
         .expect("deep review instructions should exist");
 
-        assert!(instructions.contains("Use this built-in output structure"));
-        assert!(instructions.contains("#### Findings (ordered by severity)"));
+        assert!(instructions.contains("$deep-review"));
         assert!(instructions.contains("review-report.md"));
         assert!(!instructions.contains("merge the latest base branch"));
     }

@@ -5,14 +5,17 @@ BigBrother now loads its agent prompts from the fixed Markdown files in this fol
 These files are the built-in defaults:
 
 - `actionable.md`: main prompt for CI failures, merge conflicts, and review-feedback runs
-- `deep_review.md`: main prompt for manual deep review runs, including the built-in review workflow
+- `deep_review.md`: main prompt for manual deep review runs
 - `ci_failure_rules.md`: CI-only rule block inserted into `actionable.md`
 - `workspace_ready.md`: extra operator guidance when BigBrother prepared a clean checkout
 - `resumed_conflict.md`: extra operator guidance when BigBrother resumes an unresolved conflict workspace
-- `deep_review_artifact.md`: extra operator guidance that tells the agent where to write the deep review artifact and which markdown structure to use
+- `deep_review_artifact.md`: extra operator guidance that tells the agent where to write the deep review artifact
 
 BigBrother reads these templates from the repository's `prompts/` directory at runtime. To
 customize prompts on a machine, edit these repo files directly.
+
+BigBrother also vendors the `$deep-review` skill at `.codex/skills/deep-review/SKILL.md` so manual
+deep reviews do not depend on an operator-installed external skill.
 
 Available placeholders:
 
