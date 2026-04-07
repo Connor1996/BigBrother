@@ -3,95 +3,42 @@
 
 ## 中文
 
-现在的 vibe coding 已经越来越接近这样一种体验：从需求到实现、测试、部署，很多事情都可以一路自动往前推。但 BigBrother 不是想替代这段实现流程；它默认你在需求、设计、实现这些环节里，还是会继续和 Codex、Claude Code、subagents、slock.ai 这类 agent 反复来回，把方案和代码一点点打磨出来。
+在 Harness engineering 的当下，从需求到实现、测试、部署，端到端自动化已经完全可行。但在 TiDB/TiKV 的实际生产开发中发现，有些事情不是一轮就能做对的，我们还是需要和 agent 来回讨论设计以及在 Review 阶段反复修改实现，才能把东西打磨到足够好。
 
-在真正的生产开发里，这段实现工作流通常还是很难完全自动化。很多事情不是一轮就能做对的，往往要经过多轮讨论设计、修改实现、再看结果，才能落到一个足够稳的版本。也正因为这样，BigBrother 并不打算把这段开放式、探索式协作硬收口。
+在实现阶段大家已经有很多和 agent 协作的方式可选：可以直接用 Codex、Claude Code 这样的 coding agent，可以拉起 subagents 去并行做研究、评审和实现，也可以用 slock.ai 这类 agent teams 形态去组织多人类、多 agent 的协作。种类繁多，各有各适合的实践。也正因为这样，BigBrother 并不是想把实现阶段这段开放式、探索式的工作流统一收口。
 
-它想接住的是 PR 提出来之后那条更确定、也更容易耗人的长尾流程：反复确认 review、CI、mergeability、comment、failed run，以及“下一个到底该处理哪个 PR”。这类问题更适合一个持续可见的操作界面，而不是单纯的 chat 线程，所以它也不是 OpenClaw 那种界面形态最擅长承接的部分。
+它想解决的是另一类问题：PR 提出之后，通常还需要反复处理 review comment、修复 CI 等后续事项。这个流程虽然周期较长，但路径相对明确。对 coding agent 来说，难点往往不在于执行这些动作本身，而在于长期挂起并持续追踪这些长尾问题。OpenClaw 的 cron job 确实可以承担追踪工作，但有时 review 过程中仍然需要人工介入做决策；而这类协作既要求交互足够灵活，也更适合放在一个持续可见的操作界面中承载，而不是仅仅依赖单一的 chat 用户界面。
 
 ## 它能做什么
 
-BigBrother 现在主要做这些事情：
+![alt text](img_v3_0210g_df8c0026-a7fe-42b8-93af-fdb2174d5c3g.jpg)
 
 
-BigBrother 以一个本地 daemon + web dashboard 的形态常驻运行。它会持续轮询你 authored 的 open PR，以及当前 request 你 review 的 PR；一旦发现有需要处理的信号，就先定位本地 source repo，再在 `<workspace.root>/bigbrother-worktrees/<repo-name>-bigbrother` 里创建或复用自己的 managed worktree，把最新的 PR head 和 base branch sync 进去，用 detached HEAD 准备好执行环境，然后才把当前触发原因和 PR 上下文交给 agent。整个 run 的 terminal 输出、结果和最后状态都会回到 dashboard 里；如果配了飞书，关键 completion、failure 和 escalation 也会发出来。
+BigBrother 以一个本地 daemon + web dashboard 的形态常驻运行。它会持续轮询你 github 上的 open PR，以及当前 request 你 review 的 PR；一旦发现有需要处理的信号，就使用自己的 managed worktree，把当前触发原因和 PR 上下文交给本地 codex/claude-code cli 来执行。整个 run 的 terminal 输出、结果和最后状态都会记录到 dashboard 里；如果配了飞书，关键信息也会通过飞书 cli 的 bot 来通知。
 
 具体到日常场景，它的行为大致是这样的：
 
-- `Review feedback`：当你 authored 的 PR 出现新的 review、inline comment 或普通 comment，而且这些反馈还没被处理过时，BigBrother 会把它当成一个新的 actionable signal。它会拉起一次 agent run 去读反馈、合并最新 base、尝试改动并 push；如果 agent 认为这不是该自动拍板的改动，就会把 PR 升成 `needs decision`。
+- `Review feedback`：当你 authored 的 PR 出现新的 review、inline comment 或普通 comment，而且这些反馈还没被处理过时，BigBrother 会把它当成一个新的 actionable signal。它会拉起一次 agent run 去读反馈、合并最新 base、尝试改动并 push，并回复 comment；如果 agent 认为这不是该自动拍板的改动，就会把 PR 升成 `needs decision`。当你介入完成后点击`Addressed` 再继续跟进。
+![alt text](img_v3_0210h_f55fc9d4-0bbd-4d1e-b46a-c7a2adcef6ag.jpg)
+![alt text](image-1.png)
 - `CI failure`：当新的 failing check 或 status 出现时，BigBrother 会把它当成另一类触发信号。它可以让 agent 直接修代码，也可以在判断更像 flaky 或不值得 speculative fix 时选择发 `/retest`，而不是硬改代码。
+![alt text](e6e045dc-529d-409f-a05e-2edb25319ff5.jpeg)
 - `Merge conflict`：当 PR 跟最新 base branch 冲突时，BigBrother 会在自己的 managed worktree 里让 agent 先做合并和冲突解决，而不是碰你的日常工作区。如果同一个冲突状态后面再次重试，它还可以从同一个 worktree 继续接着处理。
-- `Review requests`：对当前 request 你 review 的 PR，BigBrother 不会直接帮你改代码；它会把它们放进 `Review Requests` inbox，并允许你手动触发只读的 `Deep Review`。
-- `Deep Review`：Deep Review 跑的是只读审查流程。它会生成结构化 review 结果，并在成功后只把最终整理好的 review artifact comment 回 PR，而不是把原始 terminal 噪音直接贴上去。
-- `Track / Untrack`：如果你暂时不想让 BigBrother 继续跟某个 PR，可以先 `Untrack`。这样它会把当前状态留在 dashboard 上，但先停止自动跟进和自动 run；等你准备好了，再 `Track` 回来，它就会重新进入正常轮询和处理流程。
-- `Failed` 和 `needs decision`：如果 run 失败，PR 会进入 `failed`，后续 scheduled poll 不会无休止重试，要等你点 `Retry`。如果 agent 明确判断这是 non-trivial change，它会进入 `needs decision`，自动 run 会先冻结，等待你在 dashboard 里拍板或点 `Addressed` 继续。
+- `Review Requests`：对当前 request 你 review 的 PR，BigBrother 不会直接帮你改代码；它会把它们放进 `Review Requests` inbox，并允许你手动触发只读的 `Deep Review`。
+它会生成结构化 review 结果，并在成功后只把最终整理好的 review artifact comment 回 PR。
+![alt text](image.png)
+- `Track / Untrack`：如果你暂时不想继续跟某个 PR，可以先 `Untrack`。这样它会把当前状态留在 dashboard 上，但先停止自动跟进和自动 run；等你准备好了，再 `Track` 回来，它就会重新进入正常轮询和处理流程。
 
-平时你看到的 `waiting review`、`waiting merge`、`conflict`、`failed`、`needs decision`、`running`，本质上就是 BigBrother 把这些不同阶段的 PR 长尾动作摊平成一个持续可见的操作面板。
-
-## 建议贴图位置
-
-### 贴图 1：主页 dashboard
-
-建议放一张首页截图，最好同时带上：
-
-- authored PR 列表
-- `Review Requests` 和 `Activity` tab
-- 几个不同状态的 PR，比如 `waiting review`、`failed`、`needs decision`
-
-这里最适合说明的点是：BigBrother 把“我现在到底该看哪个 PR”这件事变成一个可以一眼扫过的问题。
-
-> Screenshot placeholder: Home dashboard with PR list, Review Requests, Activity tabs, and mixed PR states.
-
-### 贴图 2：PR details 里的 terminal 输出
-
-建议放一张 details 页面截图，重点展示：
-
-- terminal 输出
-- 最近一次 run 的结果
-- 这是一个可以直接看到 agent 做了什么、跑到哪里、为什么停下来的页面
-
-这张图最适合承接 “不是只看状态，还能往下看执行细节”。
-
-> Screenshot placeholder: PR details page with saved or live terminal output.
-
-### 贴图 3：agent 自己判断后去 `/retest`
-
-建议放一张能同时说明“它不是无脑改代码”的截图。理想情况是：
-
-- CI fail 了
-- agent 看完之后判断这是 flaky 或不值得直接改代码
-- 最终自动发出 `/retest` comment
-
-这张图适合说明 BigBrother 不是所有问题都直接改代码，它会先判断什么动作最合理。
-
-> Screenshot placeholder: PR timeline or comment thread showing automatic `/retest` after agent inspection.
-
-### 贴图 4：Deep Review 和自动回复 comment
-
-建议放一张 review-request PR 的截图，展示：
-
-- `Deep Review` 是怎么触发的
-- 它最后会把整理好的 review 结果贴回 PR comment
-- comment 不是原始 terminal 噪音，而是整理过的 review 结果
-
-这张图最适合说明 BigBrother 不只是盯 authored PR，也能帮助你处理 review-request PR。
-
-> Screenshot placeholder: Deep Review flow with resulting PR comment posted automatically.
-
-## 怎么开始
+## QuickStart
 
 前置要求：
 
-- 机器上已经有可用的 Rust toolchain 和 `git`
+- Rust toolchain 和 `git`
 - 已经安装并登录 `gh`
-- 本机能直接调用 `codex` 命令
-- Git 凭据可以 push 回你自己的 PR branch
-- 你想让 BigBrother 管理的仓库已经在本地，默认放在 `workspace.root` 下能被发现
+- 已经安装并登录 `codex` 或者 `claude`
 - 如果你想接飞书通知，可选安装并登录 `lark-cli`
 
-手动 setup 很直接：
-
-1. 复制配置模板。
+1. 复制配置模板
 
 ```bash
 cp bigbrother.example.toml bigbrother.toml
@@ -99,10 +46,10 @@ cp bigbrother.example.toml bigbrother.toml
 
 2. 打开 `bigbrother.toml`，确认这两项：
 
-- `workspace.root` 对不对
-- 只有在 `<workspace.root>/<repo-name>` 找不到仓库时，才加 `workspace.repo_map`
+- `workspace.root` 你想让 BigBrother 管理的仓库已经在本地，默认放在 `workspace.root` 下能被发现
+- `<workspace.root>/<repo-name>` 找不到仓库时，才加 `workspace.repo_map`
 
-3. 如果你需要飞书通知，可选安装并登录 `lark-cli`，再补 `notifications.feishu`。
+3. 如果你需要飞书通知，安装并登录 `lark-cli`，再补 `notifications.feishu`；将 `receive_id` 设为你的飞书绑定邮箱。如果沿用模板里的 `"$FEISHU_NOTIFY_EMAIL"`，就把环境变量 `FEISHU_NOTIFY_EMAIL` 设成对应邮箱。
 
 4. 启动：
 
@@ -111,19 +58,17 @@ cargo build --release
 GITHUB_TOKEN="$(gh auth token)" target/release/bigbrother --config bigbrother.toml
 ```
 
-如果你已经自己管理好了 `GITHUB_TOKEN` 或 `GH_TOKEN`，也可以继续沿用现有环境变量。
-
 5. 打开 [http://127.0.0.1:8787/](http://127.0.0.1:8787/)。
 
 ---
 
 ## English
 
-Vibe coding is getting closer and closer to an experience where a lot of the path from requirement to implementation to testing to deployment can move forward automatically. BigBrother is not trying to replace that implementation loop. It assumes that during requirements, design, and implementation, people will still keep iterating with tools such as Codex, Claude Code, subagents, or agent-team setups like slock.ai until the design and code are actually good enough.
+In what people now call vibe coding, it is already becoming realistic to automate the whole path from requirement to implementation to testing to deployment. And during implementation, developers already have many ways to work with agents: coding agents such as Codex and Claude Code, subagent patterns for parallel research, review, and implementation, and agent-team setups such as slock.ai.
 
-In real production software work, that implementation loop is still hard to automate cleanly from end to end. Many tasks are not solved in one pass; they need multiple design discussions, several implementation revisions, and repeated back-and-forth with an agent before the result is solid. That is why BigBrother is not trying to force the open-ended, exploratory phase into one standardized workflow.
+But in real production-grade software work, that workflow is still much harder to automate end to end. In practice, many tasks still need repeated back-and-forth with an agent, multiple design discussions, and several implementation passes before the result is actually good enough. That is exactly why BigBrother is not trying to standardize the open-ended, exploratory implementation phase.
 
-It is built for the more predictable long tail that starts after a PR is already open: checking review state, CI, mergeability, comments, failed runs, and simply knowing which PR needs attention next. That problem is better served by a persistent operational surface than by a chat thread, which is also why it is not really the part of the workflow that an OpenClaw-style interface handles best.
+It is built for a different part of the problem: the long tail that starts after a PR is already open. At that point, the expensive part is often not the code change itself. It is the repeated checking around review state, CI, mergeability, comments, failed runs, and which PR actually needs attention next. That problem is better served by a persistent operational surface than by a chat thread, which is also why it is not really the part of the workflow that an OpenClaw-style interface handles best.
 
 ## What it does
 
@@ -136,7 +81,6 @@ In day-to-day use, its behavior is roughly this:
 - `Merge conflict`: when the PR no longer merges cleanly with the latest base branch, BigBrother asks the agent to merge and resolve conflicts inside its managed worktree instead of touching your everyday checkout. If you retry the same unresolved conflict later, it can resume from that same workspace.
 - `Review requests`: for PRs that currently request your review, BigBrother does not try to edit code on your behalf. Instead, it keeps them in the `Review Requests` inbox and lets you manually trigger a read-only `Deep Review`.
 - `Deep Review`: Deep Review is a read-only review pass. It produces a structured review result and, on success, posts only the final cleaned-up review artifact back to the PR instead of dumping raw terminal output into a comment.
-- `Track / Untrack`: if you do not want BigBrother actively handling a PR for a while, you can `Untrack` it. The current dashboard snapshot stays visible, but automatic follow-up and new runs stop; when you `Track` it again, it goes back into the normal polling and handling flow.
 - `Failed` and `needs decision`: if a run fails, the PR moves to `failed`, and scheduled polls do not keep retrying forever; it waits for you to click `Retry`. If the agent explicitly decides the change is non-trivial, the PR moves to `needs decision`, automatic handling freezes, and the dashboard waits for you to make the call or mark it `Addressed`.
 
 The statuses you see in practice, such as `waiting review`, `waiting merge`, `conflict`, `failed`, `needs decision`, and `running`, are basically BigBrother flattening all of those long-tail PR situations into one persistent operational surface.
@@ -218,7 +162,7 @@ cp bigbrother.example.toml bigbrother.toml
 - if the template still contains `author = "$GITHUB_USER"`, replace it with your real GitHub login or remove the field entirely
 - leave `dangerously_bypass_approvals_and_sandbox` off unless you explicitly want unsandboxed local access on this host
 
-3. If you want Feishu notifications, optionally install and log into `lark-cli`, then fill in `notifications.feishu`.
+3. If you want Feishu notifications, optionally install and log into `lark-cli`, then fill in `notifications.feishu`. Set `receive_id` to the email address bound to your Feishu account. If you keep the template value `"$FEISHU_NOTIFY_EMAIL"`, set the `FEISHU_NOTIFY_EMAIL` environment variable to that email address.
 
 4. Build and start the daemon.
 
