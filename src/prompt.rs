@@ -229,7 +229,8 @@ mod tests {
         assert!(prompt.contains("You are performing a deep code review"));
         assert!(prompt.contains("do not edit files, commit, push, or leave GitHub comments"));
         assert!(prompt.contains("Prefer using `gh` when you need to inspect"));
-        assert!(prompt.contains("Use the `$deep-review` skill workflow"));
+        assert!(prompt.contains("Start by understanding the problem and intent"));
+        assert!(prompt.contains("Evaluate and document negative impacts and residual risks"));
         assert!(prompt.contains("If you are blocked by missing auth"));
         assert!(prompt.contains("If you find no actionable issues, say `No findings.`"));
         assert!(!prompt.contains("merge the latest base branch into the PR branch yourself"));

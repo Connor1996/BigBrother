@@ -217,7 +217,7 @@ If a `needs decision` run came from review feedback and you address that feedbac
 re-check. That prevents the daemon from re-running immediately on the same unchanged review
 activity, while still allowing newer reviewer activity to become actionable later.
 
-Manual deep reviews use the `$deep-review` skill in read-only mode: they write the final review markdown under `target/bigbrother-deep-review`, and the backend posts only that final review artifact back to the PR as a comment when the run succeeds.
+Manual deep reviews use the repository's built-in read-only deep review workflow: they write the final review markdown under `target/bigbrother-deep-review`, and the backend posts only that final review artifact back to the PR as a comment when the run succeeds.
 
 ## Current Assumptions
 

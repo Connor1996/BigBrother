@@ -684,7 +684,7 @@ Current prototype-compatible action API:
   When `paused` is `true`, scheduled polls should freeze that PR's visible state and the dashboard should render it as `untracked`.
 - `POST /api/review-requests/deep-review` with `{ "key": "<repo>#<number>" }`
   This starts a manual read-only deep review run for a PR that currently requests the operator's review,
-  uses the `$deep-review` skill to write a final markdown review artifact, persists that final report,
+  uses the repository's built-in deep review workflow to write a final markdown review artifact, persists that final report,
   and posts only the final review report back to the PR as an issue comment.
 
 Potential richer follow-up actions:
