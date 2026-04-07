@@ -23,6 +23,7 @@ BigBrother 以一个本地 daemon + web dashboard 的形态常驻运行。它会
 - `Merge conflict`：当 PR 跟最新 base branch 冲突时，BigBrother 会在自己的 managed worktree 里让 agent 先做合并和冲突解决，而不是碰你的日常工作区。如果同一个冲突状态后面再次重试，它还可以从同一个 worktree 继续接着处理。
 - `Review requests`：对当前 request 你 review 的 PR，BigBrother 不会直接帮你改代码；它会把它们放进 `Review Requests` inbox，并允许你手动触发只读的 `Deep Review`。
 - `Deep Review`：Deep Review 跑的是只读审查流程。它会生成结构化 review 结果，并在成功后只把最终整理好的 review artifact comment 回 PR，而不是把原始 terminal 噪音直接贴上去。
+- `Track / Untrack`：如果你暂时不想让 BigBrother 继续跟某个 PR，可以先 `Untrack`。这样它会把当前状态留在 dashboard 上，但先停止自动跟进和自动 run；等你准备好了，再 `Track` 回来，它就会重新进入正常轮询和处理流程。
 - `Failed` 和 `needs decision`：如果 run 失败，PR 会进入 `failed`，后续 scheduled poll 不会无休止重试，要等你点 `Retry`。如果 agent 明确判断这是 non-trivial change，它会进入 `needs decision`，自动 run 会先冻结，等待你在 dashboard 里拍板或点 `Addressed` 继续。
 
 平时你看到的 `waiting review`、`waiting merge`、`conflict`、`failed`、`needs decision`、`running`，本质上就是 BigBrother 把这些不同阶段的 PR 长尾动作摊平成一个持续可见的操作面板。
@@ -148,6 +149,7 @@ In day-to-day use, its behavior is roughly this:
 - `Merge conflict`: when the PR no longer merges cleanly with the latest base branch, BigBrother asks the agent to merge and resolve conflicts inside its managed worktree instead of touching your everyday checkout. If you retry the same unresolved conflict later, it can resume from that same workspace.
 - `Review requests`: for PRs that currently request your review, BigBrother does not try to edit code on your behalf. Instead, it keeps them in the `Review Requests` inbox and lets you manually trigger a read-only `Deep Review`.
 - `Deep Review`: Deep Review is a read-only review pass. It produces a structured review result and, on success, posts only the final cleaned-up review artifact back to the PR instead of dumping raw terminal output into a comment.
+- `Track / Untrack`: if you do not want BigBrother actively handling a PR for a while, you can `Untrack` it. The current dashboard snapshot stays visible, but automatic follow-up and new runs stop; when you `Track` it again, it goes back into the normal polling and handling flow.
 - `Failed` and `needs decision`: if a run fails, the PR moves to `failed`, and scheduled polls do not keep retrying forever; it waits for you to click `Retry`. If the agent explicitly decides the change is non-trivial, the PR moves to `needs decision`, automatic handling freezes, and the dashboard waits for you to make the call or mark it `Addressed`.
 
 The statuses you see in practice, such as `waiting review`, `waiting merge`, `conflict`, `failed`, `needs decision`, and `running`, are basically BigBrother flattening all of those long-tail PR situations into one persistent operational surface.
