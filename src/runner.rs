@@ -12,7 +12,9 @@ use portable_pty::{native_pty_system, CommandBuilder, PtySize};
 use tokio::{process::Command, sync::mpsc::UnboundedSender};
 
 use crate::{
-    config::{AgentConfig, AgentPromptTemplates, GitTransport, ResolvedWorkspaceConfig},
+    config::{
+        AgentConfig, AgentPromptTemplates, AgentRuntime, GitTransport, ResolvedWorkspaceConfig,
+    },
     model::{AttentionReason, PullRequest, NEEDS_DECISION_SUMMARY},
     prompt::{build_prompt, render_template},
     service::AgentRunner,
@@ -30,13 +32,6 @@ const SOURCE_REMOTE_NAME: &str = "origin";
 const PR_REMOTE_NAME: &str = "bigbrother-pr";
 const MANAGED_PR_HEAD_REF: &str = "refs/bigbrother/pr-head";
 const MANAGED_BASE_REF: &str = "refs/bigbrother/base";
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum AgentRuntime {
-    Codex,
-    Claude,
-    Other,
-}
 
 #[derive(Debug, Clone)]
 pub struct RunRequest {
@@ -930,22 +925,14 @@ fn build_agent_command_argv(agent: &AgentConfig, prompt: Option<&str>) -> Vec<St
 }
 
 fn detect_agent_runtime(agent: &AgentConfig) -> AgentRuntime {
-    Path::new(&agent.command)
-        .file_name()
-        .and_then(|value| value.to_str())
-        .map(|value| match value {
-            "codex" => AgentRuntime::Codex,
-            "claude" => AgentRuntime::Claude,
-            _ => AgentRuntime::Other,
-        })
-        .unwrap_or(AgentRuntime::Other)
+    agent.runtime
 }
 
 fn dangerous_permission_flag(runtime: AgentRuntime) -> Option<&'static str> {
     match runtime {
         AgentRuntime::Codex => Some("--dangerously-bypass-approvals-and-sandbox"),
         AgentRuntime::Claude => Some("--dangerously-skip-permissions"),
-        AgentRuntime::Other => None,
+        AgentRuntime::Custom => None,
     }
 }
 
@@ -965,7 +952,7 @@ fn should_append_prompt_argument(runtime: AgentRuntime, args: &[String]) -> bool
     match runtime {
         AgentRuntime::Codex => args.iter().any(|value| value == "exec"),
         AgentRuntime::Claude => args.iter().any(|value| value == "-p" || value == "--print"),
-        AgentRuntime::Other => false,
+        AgentRuntime::Custom => false,
     }
 }
 
@@ -1416,6 +1403,7 @@ mod tests {
     #[test]
     fn build_agent_command_argv_injects_xhigh_reasoning_for_codex_exec() {
         let agent = AgentConfig {
+            runtime: AgentRuntime::Codex,
             command: "codex".to_owned(),
             args: vec![
                 "exec".to_owned(),
@@ -1448,6 +1436,7 @@ mod tests {
     #[test]
     fn build_agent_command_argv_skips_codex_only_reasoning_override_for_other_agents() {
         let agent = AgentConfig {
+            runtime: AgentRuntime::Custom,
             command: "other-agent".to_owned(),
             args: vec!["run".to_owned()],
             model_reasoning_effort: "xhigh".to_owned(),
@@ -1465,6 +1454,7 @@ mod tests {
     #[test]
     fn build_agent_command_argv_uses_claude_print_mode_prompt_and_permission_flag() {
         let agent = AgentConfig {
+            runtime: AgentRuntime::Claude,
             command: "claude".to_owned(),
             args: vec![
                 "-p".to_owned(),
@@ -1493,6 +1483,7 @@ mod tests {
     #[test]
     fn should_pass_prompt_as_argument_for_claude_only_in_print_mode() {
         let print_agent = AgentConfig {
+            runtime: AgentRuntime::Claude,
             command: "claude".to_owned(),
             args: vec!["-p".to_owned()],
             model_reasoning_effort: "xhigh".to_owned(),
@@ -1501,6 +1492,7 @@ mod tests {
             prompts: AgentPromptTemplates::default(),
         };
         let interactive_agent = AgentConfig {
+            runtime: AgentRuntime::Claude,
             command: "claude".to_owned(),
             args: vec!["--model".to_owned(), "sonnet".to_owned()],
             model_reasoning_effort: "xhigh".to_owned(),
@@ -1516,6 +1508,7 @@ mod tests {
     #[test]
     fn build_agent_command_argv_preserves_existing_codex_color_flag() {
         let agent = AgentConfig {
+            runtime: AgentRuntime::Codex,
             command: "codex".to_owned(),
             args: vec![
                 "exec".to_owned(),

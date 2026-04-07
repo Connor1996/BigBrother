@@ -25,20 +25,22 @@ root = ".."
 git_transport = "ssh"
 
 [agent]
-# Executable used to run the coding agent.
-command = "codex"
+# Agent backend. Supported built-ins are `codex` and `claude`. Defaults to `codex`.
+runtime = "codex"
+# Executable used to run the coding agent. Omit this to use the runtime default.
+# command = "codex"
 # Explicit Codex reasoning effort override passed via `-c model_reasoning_effort=...`.
 # BigBrother defaults this to `xhigh` even if you omit it. This override is Codex-specific and
-# ignored when `command = "claude"`.
+# ignored when `runtime = "claude"`.
 model_reasoning_effort = "xhigh"
 # When true, BigBrother launches `codex` with `--dangerously-bypass-approvals-and-sandbox` or
 # `claude` with `--dangerously-skip-permissions`. Leave this off unless the host environment is
 # already externally sandboxed and you want the agent to have full local access.
 # dangerously_bypass_approvals_and_sandbox = true
-# Arguments passed to the agent command. The trailing `-` tells Codex to read the prompt from stdin.
+# Arguments passed to the agent command. Omit this to use the runtime defaults.
 args = ["exec", "--model", "gpt-5.4", "-"]
 # For Claude Code print mode instead, switch to:
-# command = "claude"
+# runtime = "claude"
 # args = ["-p", "--output-format", "text"]
 # Extra operator guidance appended to every generated prompt.
 additional_instructions = """

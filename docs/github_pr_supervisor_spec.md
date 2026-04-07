@@ -470,15 +470,16 @@ Each run includes:
 
 Agent runtime defaults:
 
-- when `agent.command` resolves to `codex`, the daemon must explicitly pass a
+- when `[agent].runtime = "codex"` or the configured command is inferred to be Codex-like, the
+  daemon must explicitly pass a
   `-c model_reasoning_effort="..."` override instead of relying on ambient host config
 - `codex exec` runs should force `--color always` and preserve PTY-style output so the detail view can replay ANSI-colored terminal recordings
 - for `codex exec`, the daemon should pass the assembled prompt as the initial prompt argument instead of piping it through stdin whenever possible, so the PTY session remains closer to a native terminal run
 - the default BigBrother reasoning effort for `codex exec` is `xhigh`
 - operators may override that reasoning effort through the structured `[agent]` config rather than
   burying it in free-form `args`
-- when `agent.command` resolves to `claude`, the supported non-interactive path is Claude Code
-  print mode (`-p` / `--print`)
+- when `[agent].runtime = "claude"` or the configured command is inferred to be Claude Code, the
+  supported non-interactive path is Claude Code print mode (`-p` / `--print`)
 - for `claude -p`, the daemon should pass the assembled prompt as the print-mode argument instead
   of piping it through stdin
 - the structured `dangerously_bypass_approvals_and_sandbox` setting should map to the

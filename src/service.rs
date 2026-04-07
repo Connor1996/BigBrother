@@ -1921,6 +1921,7 @@ mod tests {
                 git_transport: GitTransport::Https,
             },
             agent: AgentConfig {
+                runtime: crate::config::AgentRuntime::Codex,
                 command: "codex".to_owned(),
                 args: vec![],
                 model_reasoning_effort: "xhigh".to_owned(),
